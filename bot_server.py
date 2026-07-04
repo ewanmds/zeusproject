@@ -235,11 +235,33 @@ class BotManager:
                 )
             token_cfg = grid_mod.TOKENS[token_key]
 
+            # Resolve current mid price for sizing
+            mid = float(token_cfg.get("api_mid", 0.0))
+            if mid <= 0:
+                try:
+                    mids = grid_mod._fetch_all_mids()
+                    mid = float(mids.get(token_cfg["symbol"], 0.0))
+                except Exception:
+                    pass
+            if mid <= 0:
+                mid = 7500.0 if "SP500" in token_cfg["symbol"] or "US500" in token_cfg["symbol"] else 1.0
+
+            # Calculate ORDER_SIZE dynamically based on order_size_usd
+            sz_decimals = token_cfg.get("sz_decimals")
+            if sz_decimals is None:
+                min_size = token_cfg.get("min_size", 0.001)
+                sz_decimals = max(0, -math.floor(math.log10(min_size)))
+            else:
+                min_size = 10.0 ** (-sz_decimals) if sz_decimals > 0 else 1.0
+
+            raw_size = config.order_size_usd / mid
+            order_size = max(min_size, round(raw_size, sz_decimals))
+
             # Set module-level globals
             grid_mod.SYMBOL = token_cfg["symbol"]
             grid_mod.TICK_SIZE = token_cfg["tick_size"]
-            grid_mod.MIN_SIZE = token_cfg["min_size"]
-            grid_mod.ORDER_SIZE = token_cfg["order_size"]
+            grid_mod.MIN_SIZE = min_size
+            grid_mod.ORDER_SIZE = order_size
 
             # Spread & offset
             grid_mod.BASE_SPREAD_BPS = config.spread_bps
@@ -259,13 +281,11 @@ class BotManager:
                 0, -math.floor(math.log10(grid_mod.MIN_SIZE))
             )
 
-            # MAX_INVENTORY_ORDERS (approximate)
-            if hasattr(grid_mod, "MAX_INVENTORY_ORDERS"):
-                if grid_mod.TARGET_ORDER_NOTIONAL_USD > 0:
-                    grid_mod.MAX_INVENTORY_ORDERS = max(
-                        1,
-                        int(config.max_position_usd / grid_mod.TARGET_ORDER_NOTIONAL_USD),
-                    )
+            # MAX_INVENTORY_ORDERS (exact division)
+            grid_mod.MAX_INVENTORY_ORDERS = max(
+                1,
+                int(config.max_position_usd / config.order_size_usd),
+            )
 
             # Store config for status reporting
             self.grid_config = config.model_dump()
