@@ -93,13 +93,12 @@ TOKENS = {
         "order_size": 0.013,
     },
     "US500": {
-        # Alias trading pour le contrat HIP-3 SP500. Profil plus serre:
-        # suit le BBO/spread courant quand il couvre le floor fees+buffer.
-        "symbol": "xyz:SP500",
-        "tick_size": 0.1,
+        # Alias trading pour le contrat US500USD sur mkts dex
+        "symbol": "mkts:US500",
+        "tick_size": 0.01,
         "min_size": 0.001,
-        "order_size": 0.002,
-        "max_leverage": 50,
+        "order_size": 0.02,
+        "max_leverage": 25,
         "base_spread_bps": 0.05,
         "atr_spread_mult": 0.08,
         "grid_reset_bps": 0.25,
@@ -109,6 +108,12 @@ TOKENS = {
         "min_quote_action_sec": 0.25,
         "join_book_spread_when_safe": True,
         "requote_on_bbo_change": True,
+    },
+    "US500USD": {
+        "symbol": "mkts:US500",
+        "tick_size": 0.01,
+        "min_size": 0.001,
+        "order_size": 0.02,
     },
     "XYZ100": {
         "symbol": "xyz:XYZ100",
@@ -630,11 +635,12 @@ class GridMarketMaker:
     def __init__(self):
         self.lock = threading.Lock()
         self.wallet = eth_account.Account.from_key(AGENT_PRIVATE_KEY)
+        self.dex = SYMBOL.split(":", 1)[0] if ":" in SYMBOL else PERP_DEX
         self.fixed_spot_meta = build_fixed_spot_meta(BASE_URL)
-        self.info = Info(BASE_URL, skip_ws=True, spot_meta=self.fixed_spot_meta, perp_dexs=[PERP_DEX])
+        self.info = Info(BASE_URL, skip_ws=True, spot_meta=self.fixed_spot_meta, perp_dexs=["xyz", "mkts"])
         self.exchange = Exchange(
             self.wallet, base_url=BASE_URL, account_address=ACCOUNT_ADDRESS,
-            spot_meta=self.fixed_spot_meta, perp_dexs=[PERP_DEX],
+            spot_meta=self.fixed_spot_meta, perp_dexs=["xyz", "mkts"],
         )
 
         # Live market state (from WS)
@@ -833,7 +839,7 @@ class GridMarketMaker:
     # ----------------------------------------------------------- websocket IO
     def _start_ws(self):
         self.console.print("[bold magenta]⚡ Connecting WebSocket feed...[/]")
-        self.ws_info = Info(BASE_URL, skip_ws=False, spot_meta=self.fixed_spot_meta, perp_dexs=[PERP_DEX])
+        self.ws_info = Info(BASE_URL, skip_ws=False, spot_meta=self.fixed_spot_meta, perp_dexs=["xyz", "mkts"])
         # Lightweight top-of-book feed: smaller/faster than full L2 and enough
         # for this one-level touch market maker.
         self.ws_info.subscribe({"type": "bbo", "coin": SYMBOL}, self._on_bbo)
@@ -1063,7 +1069,7 @@ class GridMarketMaker:
         """Authoritative position/PnL/equity via REST (WS can lag)."""
         try:
             request_started = time.time()
-            st = self.info.user_state(ACCOUNT_ADDRESS, dex=PERP_DEX)
+            st = self.info.user_state(ACCOUNT_ADDRESS, dex=self.dex)
             try:
                 spot_state = self.info.spot_user_state(ACCOUNT_ADDRESS)
                 spot_usdc = sum(
@@ -1108,7 +1114,7 @@ class GridMarketMaker:
         if time.time() - last_quote_ts < ORDER_RECONCILE_GRACE_SEC:
             return   # just requoted: the REST snapshot may not include it yet
         try:
-            oo = self.info.open_orders(ACCOUNT_ADDRESS, dex=PERP_DEX)
+            oo = self.info.open_orders(ACCOUNT_ADDRESS, dex=self.dex)
         except Exception:
             return
         buys: List[int] = []
@@ -1147,7 +1153,7 @@ class GridMarketMaker:
         hold phantoms (missed WS fill event) — only the REST snapshot is
         authoritative. Used by the feed watchdog before reconnecting."""
         try:
-            oo = self.info.open_orders(ACCOUNT_ADDRESS, dex=PERP_DEX)
+            oo = self.info.open_orders(ACCOUNT_ADDRESS, dex=self.dex)
             reqs = [{"coin": SYMBOL, "oid": int(o["oid"])}
                     for o in oo if self._coin_matches(o.get("coin"))]
             if reqs:
@@ -2098,21 +2104,31 @@ def _dynamic_token_config(item: Dict[str, Any], mids: Dict[str, Any]) -> Optiona
 
 def _fetch_hip3_meta() -> List[Dict[str, Any]]:
     import requests
-    raw = requests.post(BASE_URL + "/info", json={"type": "meta", "dex": PERP_DEX}, timeout=12).json()
-    universe = raw.get("universe", []) if isinstance(raw, dict) else []
-    return [
-        item for item in universe
-        if isinstance(item, dict) and item.get("name") and not item.get("isDelisted", False)
-    ]
+    res = []
+    for d in [PERP_DEX, "mkts"]:
+        try:
+            raw = requests.post(BASE_URL + "/info", json={"type": "meta", "dex": d}, timeout=12).json()
+            universe = raw.get("universe", []) if isinstance(raw, dict) else []
+            res.extend([
+                item for item in universe
+                if isinstance(item, dict) and item.get("name") and not item.get("isDelisted", False)
+            ])
+        except Exception:
+            pass
+    return res
 
 
 def _fetch_all_mids() -> Dict[str, Any]:
     import requests
-    try:
-        raw = requests.post(BASE_URL + "/info", json={"type": "allMids", "dex": PERP_DEX}, timeout=12).json()
-        return raw if isinstance(raw, dict) else {}
-    except Exception:
-        return {}
+    res = {}
+    for d in [PERP_DEX, "mkts"]:
+        try:
+            raw = requests.post(BASE_URL + "/info", json={"type": "allMids", "dex": d}, timeout=12).json()
+            if isinstance(raw, dict):
+                res.update(raw)
+        except Exception:
+            pass
+    return res
 
 
 def _fetch_candles(symbol: str) -> List[Dict[str, float]]:
