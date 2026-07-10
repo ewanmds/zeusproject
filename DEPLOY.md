@@ -9,39 +9,47 @@ Vercel (frontend) -> HTTPS Caddy -> FastAPI localhost:8080 -> Hyperliquid
 Le port `8080` reste local au VPS. Caddy gere le certificat HTTPS et le
 WebSocket `/ws`.
 
-## 1. Creer le VPS Oracle
+## 1. Creer le VPS AWS EC2
 
-Dans OCI, creer une instance Always Free Linux avec une IP publique. Pour la
-VCN/security list, autoriser seulement:
+Dans la console EC2, lancer une instance Linux Free Tier eligible. Amazon Linux
+2023 est le choix le plus simple ici; son utilisateur SSH par defaut est
+`ec2-user`. Activer une IP publique et, si le domaine doit rester stable,
+associer une Elastic IP.
+
+Creer un Security Group avec seulement:
 
 - TCP 22 depuis ton IP pour SSH;
 - TCP 80 et 443 depuis Internet pour Caddy;
 - ne pas ouvrir TCP 8080.
 
-Les instances Oracle Linux utilisent en general l'utilisateur `opc`. Avec
-Ubuntu, remplace `opc` par `ubuntu` dans les commandes et dans
-`deploy/zeus-bot.service`.
+Attention: la duree et les types d'instances gratuits AWS dependent de la date
+de creation du compte et des credits Free Tier. Verifier l'eligibilite dans la
+console avant de lancer l'instance.
 
 ## 2. Installer le bot
 
 ```bash
+sudo dnf update -y
 sudo dnf install -y git python3 python3-pip
-git clone https://github.com/ewanmds/zeusproject.git /home/opc/zeusproject
-cd /home/opc/zeusproject
+git clone https://github.com/ewanmds/zeusproject.git /home/ec2-user/zeusproject
+cd /home/ec2-user/zeusproject
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Sur Ubuntu, remplace la premiere commande par:
+Si tu choisis Ubuntu au lieu d'Amazon Linux 2023:
 
 ```bash
 sudo apt update
 sudo apt install -y git python3-venv python3-pip
 ```
 
-Creer ensuite `/home/opc/zeusproject/.env` directement sur le VPS. Ne jamais
+Dans ce cas, remplace `ec2-user` par `ubuntu` dans les chemins et dans
+`deploy/zeus-bot.service`.
+
+Creer ensuite `/home/ec2-user/zeusproject/.env` directement sur le VPS. Ne jamais
 committer ce fichier:
 
 ```dotenv
@@ -60,13 +68,13 @@ BOT_PORT=8080
 ```
 
 ```bash
-chmod 600 /home/opc/zeusproject/.env
+chmod 600 /home/ec2-user/zeusproject/.env
 ```
 
 ## 3. Demarrer automatiquement le backend
 
-Le fichier `deploy/zeus-bot.service` suppose Oracle Linux et l'utilisateur
-`opc`.
+Le fichier `deploy/zeus-bot.service` suppose Amazon Linux 2023 et
+l'utilisateur `ec2-user`.
 
 ```bash
 sudo cp deploy/zeus-bot.service /etc/systemd/system/zeus-bot.service
@@ -88,7 +96,15 @@ Faire pointer un sous-domaine, par exemple `api.ton-domaine.com`, vers l'IP
 publique du VPS. Caddy demande automatiquement le certificat si les ports 80
 et 443 sont accessibles.
 
-Installer Caddy depuis son depot officiel, puis:
+Installer Caddy depuis le depot officiel Fedora/RedHat, puis:
+
+```bash
+sudo dnf install -y dnf-plugins-core
+sudo dnf copr enable @caddy/caddy -y
+sudo dnf install -y caddy
+```
+
+Puis:
 
 ```bash
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
@@ -128,7 +144,7 @@ VPN ou une authentification devant le frontend.
 ## 6. Mise a jour
 
 ```bash
-cd /home/opc/zeusproject
+cd /home/ec2-user/zeusproject
 git pull --ff-only origin main
 source .venv/bin/activate
 python -m pip install -r requirements.txt

@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=opc
-WorkingDirectory=/home/opc/zeusproject
-EnvironmentFile=/home/opc/zeusproject/.env
-ExecStart=/home/opc/zeusproject/.venv/bin/python /home/opc/zeusproject/bot_server.py
+User=ec2-user
+WorkingDirectory=/home/ec2-user/zeusproject
+EnvironmentFile=/home/ec2-user/zeusproject/.env
+ExecStart=/home/ec2-user/zeusproject/.venv/bin/python /home/ec2-user/zeusproject/bot_server.py
 Restart=always
 RestartSec=5
 KillSignal=SIGINT
