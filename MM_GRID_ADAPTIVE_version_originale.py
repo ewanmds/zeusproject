@@ -1,34 +1,34 @@
 """
 ================================================================================
- GRID MARKET MAKER - ADAPTIVE GRID EDITION  (Hyperliquid HIP-3)
+GRID MARKET MAKER - ADAPTIVE GRID EDITION  (Hyperliquid HIP-3)
 ================================================================================
 A clean, from-scratch grid market maker that implements ONE idea from the
 Tread.fi write-up "How to Match a Market-Making Bot to Market Conditions":
 
-  A grid market maker is SHORT VOLATILITY. It earns the spread when price
-  wiggles around a level. In this build, trend detection is active: trend or
-  breakout regimes cut opening quotes and force reduce-only protection.
+A grid market maker is SHORT VOLATILITY. It earns the spread when price
+wiggles around a level. In this build, trend detection is active: trend or
+breakout regimes cut opening quotes and force reduce-only protection.
 
 So the whole bot is a layered defense, in order of priority:
 
-  1. REGIME FILTER (primary defense). Score the market each cycle:
-       - Kaufman Efficiency Ratio: net move / total path. ~0 chop, ~1 trend.
-       - Volume profile: a tight value area = compression (chop), a stretched
-         one = expansion (trend).
-       - Value-area breakout: price leaving VAH/VAL raises the trend score.
-     GRID quotes only in chop. In trend/cooldown, flat means no quotes; with
-     inventory, only reduce-only exits can rest.
+1. REGIME FILTER (primary defense). Score the market each cycle:
+    - Kaufman Efficiency Ratio: net move / total path. ~0 chop, ~1 trend.
+    - Volume profile: a tight value area = compression (chop), a stretched
+        one = expansion (trend).
+    - Value-area breakout: price leaving VAH/VAL raises the trend score.
+    GRID quotes only in chop. In trend/cooldown, flat means no quotes; with
+    inventory, only reduce-only exits can rest.
 
-  2. INVENTORY LIMIT (backstop). Cap how one-sided the book may get. When net
-     exposure hits the cap, stop quoting the side that makes it worse.
+2. INVENTORY LIMIT (backstop). Cap how one-sided the book may get. When net
+    exposure hits the cap, stop quoting the side that makes it worse.
 
-  3. STOP LOSS / TAKE PROFIT (hard floor). Flatten the whole position if it is
-     down stop_loss_pct or up take_profit_pct of margin.
+3. STOP LOSS / TAKE PROFIT (hard floor). Flatten the whole position if it is
+    down stop_loss_pct or up take_profit_pct of margin.
 
-  4. ATR-ADAPTIVE SPREAD / RESET. Spread and reset distance widen when recent
-     volatility rises, while keeping a hard fee floor.
+4. ATR-ADAPTIVE SPREAD / RESET. Spread and reset distance widen when recent
+    volatility rises, while keeping a hard fee floor.
 
-  5. Judge by NET-of-fees PnL, never volume. Volume is a cost, not a win.
+5. Judge by NET-of-fees PnL, never volume. Volume is a cost, not a win.
 
 Nothing else. No RSI/EMA/BB/VWAP/microstructure/markout. Just the article.
 ================================================================================
@@ -90,7 +90,7 @@ TOKENS = {
         "symbol": "xyz:SP500",
         "tick_size": 0.1,
         "min_size": 0.001,
-        "order_size": 0.013,
+        "order_size": 0.026,   # ~$195/ordre à SP500 ~7500 (doublé depuis 0.013)
     },
     "US500": {
         # Alias trading pour le contrat US500USD sur mkts dex
@@ -99,15 +99,6 @@ TOKENS = {
         "min_size": 0.001,
         "order_size": 0.02,
         "max_leverage": 25,
-        "base_spread_bps": 0.05,
-        "atr_spread_mult": 0.08,
-        "grid_reset_bps": 0.25,
-        "max_grid_reset_bps": 0.60,
-        "atr_reset_mult": 0.12,
-        "inventory_skew_bps": 0.10,
-        "min_quote_action_sec": 0.25,
-        "join_book_spread_when_safe": True,
-        "requote_on_bbo_change": True,
     },
     "US500USD": {
         "symbol": "mkts:US500",
@@ -120,12 +111,6 @@ TOKENS = {
         "tick_size": 1.0,
         "min_size": 0.0001,
         "order_size": 0.008,
-    },
-    "SKHX": {
-        "symbol": "xyz:SKHX",
-        "tick_size": 0.1,
-        "min_size": 0.0001,
-        "order_size": 0.014,
     },
     "SPCX": {
         "symbol": "xyz:SPCX",
@@ -222,15 +207,22 @@ MIN_SIZE   = TOKENS["SP500"]["min_size"]   # exchange min size
 NUM_LEVELS        = 1            # rungs per side
 ORDER_SIZE        = 0.010        # size per rung (contracts) — ~$14.6, clears the $10 min
 BASE_SPREAD_BPS   = 00  # classic fixed half-spread per side, in bps (widened for positive edge)
+BBO_OFFSET_BPS    = 0.0  # frontend mode: quote this many bps away from the live BBO
 LEVEL_STEP_BPS    = 1.0             # extra spacing between rungs, in bps (only used if NUM_LEVELS>1)
 GRID_RESET_BPS    = 2.0          # minimum cancel/replace distance from anchor (wider = less churn)
 MAX_GRID_RESET_BPS = 2.0         # volatility-scaled reset is capped here
 ATR_RESET_MULT    = 0.45         # reset distance = max(GRID_RESET_BPS, ATR * this)
 GRID_QUOTE_MODE = os.getenv("MM_GRID_QUOTE_MODE", "bbo").strip().lower()
-if GRID_QUOTE_MODE not in {"adaptive", "safe_bbo", "bbo", "book_center"}:
+if GRID_QUOTE_MODE not in {"adaptive", "safe_bbo", "bbo", "bbo_offset", "book_center"}:
     GRID_QUOTE_MODE = "safe_bbo"
 JOIN_BOOK_SPREAD_WHEN_SAFE = GRID_QUOTE_MODE == "safe_bbo"  # join BBO only if spread covers edge
-REQUOTE_ON_BBO_CHANGE = GRID_QUOTE_MODE in {"safe_bbo", "bbo", "book_center"}
+
+# Demi-spread FIXE en ticks depuis le mid (demande utilisateur SP500: 7 ticks).
+# > 0 => remplace le calcul floor/ATR/regime ET désactive le join BBO: les
+# ordres restent à N ticks du centre (mid - skew d'inventaire), clampés pour ne
+# jamais croiser. 7 ticks à SP500 ~7500 = 0.93 bps par côté, > frais AR 0.576.
+# 0 => comportement d'origine. Override: env MM_HALF_TICKS.
+FIXED_HALF_SPREAD_TICKS = float(os.getenv("MM_HALF_TICKS", "7"))
 
 # --- Fees (for the hard spread floor) ---
 MAKER_FEE_BPS     = 0.28         # maker fee per side, in bps (28.8 $/M)
@@ -243,7 +235,7 @@ TARGET_ORDER_NOTIONAL_USD = max(
 MARGIN_SAFETY_FRACTION = 0.85    # never budget the final 15% of theoretical capacity
 
 # --- Inventory limit (backstop) ---
-MAX_INVENTORY_ORDERS = 2          # max signed position = 2 x ORDER_SIZE
+MAX_INVENTORY_ORDERS = 1          # max signed position = 1 x ORDER_SIZE
 
 # --- Inventory skew (Avellaneda-Stoikov lite) ---
 INVENTORY_SKEW_BPS = 0.3          # bps of center displacement per unit of normalised inventory
@@ -292,20 +284,18 @@ MARKET_SCAN_MAX_MARKETS = max(0, int(float(os.getenv("MM_MARKET_SCAN_MAX_MARKETS
 MARKET_SCAN_WORKERS = max(1, min(16, int(float(os.getenv("MM_MARKET_SCAN_WORKERS", "8")))))
 MARKET_SCAN_MIN_VOLUME_USD = max(0.0, float(os.getenv("MM_MARKET_SCAN_MIN_VOLUME_USD", "100000")))
 
-# --- Blackout séance NYSE (heure de Paris) ---
-# Le grid MM est SHORT VOLA : pendant la séance US le SP500 trende/bouge fort
-# (toxique pour la grille). On NE QUOTE PAS pendant les heures NYSE, on MM le
-# reste du temps (off-hours plus calmes/range). Blackout = pas d'ordre entre
-# BLACKOUT_START et BLACKOUT_END en heure de Paris (DST gérée via zoneinfo),
-# uniquement les jours d'ouverture NYSE (lun-ven). NYSE = 15h30-22h00 Paris ;
-# la fenêtre ci-dessous ajoute un petit tampon autour.
-BLACKOUT_ENABLED = False         # désactivé : le bot quote aussi pendant la séance NYSE
+# --- Fenetre flat forcee (heure de Paris) ---
+# Pendant cette fenetre on interdit toute exposition active: pas de quotes et
+# aucune position ouverte. Si une position existe, le bot annule les ordres puis
+# envoie un IOC reduce-only pour revenir flat.
+BLACKOUT_ENABLED = True
 BLACKOUT_TZ      = "Europe/Paris"
-BLACKOUT_START_H = 15             # 15h00 Paris (début du blackout)
-BLACKOUT_START_M = 0
-BLACKOUT_END_H   = 22             # 22h30 Paris (fin du blackout)
-BLACKOUT_END_M   = 30
-BLACKOUT_DAYS    = (0, 1, 2, 3, 4)  # jours NYSE concernés : lundi(0) -> vendredi(4)
+BLACKOUT_START_H = 15
+BLACKOUT_START_M = 25
+BLACKOUT_END_H   = 16
+BLACKOUT_END_M   = 45
+BLACKOUT_DAYS    = (0, 1, 2, 3, 4)  # lundi(0) -> vendredi(4)
+BLACKOUT_FLATTEN_RETRY_SEC = 2.0
 # Construit l'objet ZoneInfo UNE seule fois (le lookup de la base tz est coûteux
 # et _in_blackout() tourne dans la hot loop + à chaque refresh dashboard).
 _BLACKOUT_ZI = None
@@ -665,8 +655,6 @@ class GridMarketMaker:
         self.buy_oids: List[int] = []
         self.sell_oids: List[int] = []
         self.anchor_mid: Optional[float] = None    # mid at last grid build (reset threshold)
-        self.anchor_bid: Optional[float] = None    # exact BBO last successfully quoted
-        self.anchor_ask: Optional[float] = None
         self.last_intent: Optional[tuple] = None   # coarse quote "intent" (sticky quotes)
 
         # PnL / stats (judge by NET pnl)
@@ -687,14 +675,17 @@ class GridMarketMaker:
         self.running = True
         self.risk_pause_until = 0.0
         self.regime_pause_until = 0.0
+        self.margin_reject_pause_until = 0.0
         self.loop_ms = 0.0          # last cycle duration (reactivity gauge)
-        self.requote_ms = 0.0       # last cancel->place sequence duration
+        self.order_action_ms = 0.0  # last signed order action duration
         self.wake = threading.Event()  # set by WS callbacks -> instant cycle
         self.last_ws_restart = 0.0     # last WS rebuild (watchdog cooldown)
-        self.last_quote_ts = 0.0       # last requote (guards REST oid reconciliation)
+        self.last_quote_ts = 0.0       # last order action (guards REST oid reconciliation)
         self.last_quote_action_ts = 0.0  # action-rate coalescer (place/modify only)
         self.last_partial_retry_ts = 0.0  # avoid hammering a repeatedly rejected missing leg
         self.last_regime_update_ts = 0.0
+        self.blackout_was_active = False
+        self.last_blackout_flatten_ts = 0.0
         self.last_action = "init"
         self.last_order_error = ""
         self.last_order_error_ts = 0.0
@@ -774,7 +765,7 @@ class GridMarketMaker:
                 ("match" in text or "cross" in text or "maker" in text))
 
     def _safe_post_only_price(self, px: float, is_buy: bool,
-                              extra_guard_ticks: int = 0) -> float:
+                            extra_guard_ticks: int = 0) -> float:
         """Clamp an ALO price to the freshest opposing BBO, on a valid tick."""
         with self.lock:
             best_bid, best_ask = self.best_bid, self.best_ask
@@ -822,19 +813,22 @@ class GridMarketMaker:
         return min(MAX_GRID_RESET_BPS, max(GRID_RESET_BPS, atr_reset))
 
     def _in_blackout(self) -> bool:
-        """True si on est dans le blackout NYSE (lun-ven, 15h00-22h30 Paris).
-        Pendant le blackout le bot ne quote pas (séance US = trend/vola toxique
-        pour la grille short-vola). En dehors (off-hours + week-end) on MM."""
+        """True during the Paris-time flat window configured above."""
         if not BLACKOUT_ENABLED:
             return False
         now = datetime.now(_BLACKOUT_ZI) if _BLACKOUT_ZI else datetime.now()
         if now.weekday() not in BLACKOUT_DAYS:   # 0=lundi ... 6=dimanche
-            return False                          # NYSE fermé (week-end) -> on MM
+            return False
         start = now.replace(hour=BLACKOUT_START_H, minute=BLACKOUT_START_M,
                             second=0, microsecond=0)
         end = now.replace(hour=BLACKOUT_END_H, minute=BLACKOUT_END_M,
-                          second=0, microsecond=0)
+                        second=0, microsecond=0)
         return start <= now <= end
+
+    @staticmethod
+    def _blackout_label() -> str:
+        return (f"lun-ven {BLACKOUT_START_H:02d}h{BLACKOUT_START_M:02d}-"
+                f"{BLACKOUT_END_H:02d}h{BLACKOUT_END_M:02d} Paris")
 
     # ----------------------------------------------------------- websocket IO
     def _start_ws(self):
@@ -956,7 +950,7 @@ class GridMarketMaker:
             pass
 
     def _on_order_updates(self, data):
-        """Remove filled/cancelled/rejected OIDs immediately and requote."""
+        """Remove filled/cancelled/rejected OIDs immediately and wake the loop."""
         try:
             payload = data.get("data", [])
             updates = payload if isinstance(payload, list) else payload.get("orders", [])
@@ -1034,6 +1028,7 @@ class GridMarketMaker:
                 for fill in payload.get("fills", []):
                     if not self._coin_matches(fill.get("coin")):
                         continue
+                    self.margin_reject_pause_until = 0.0
                     tid = str(fill.get("tid"))
                     if tid in self.processed_fills:
                         continue
@@ -1112,7 +1107,7 @@ class GridMarketMaker:
         with self.lock:
             last_quote_ts = self.last_quote_ts
         if time.time() - last_quote_ts < ORDER_RECONCILE_GRACE_SEC:
-            return   # just requoted: the REST snapshot may not include it yet
+            return   # just acted on orders: the REST snapshot may not include it yet
         try:
             oo = self.info.open_orders(ACCOUNT_ADDRESS, dex=self.dex)
         except Exception:
@@ -1144,8 +1139,13 @@ class GridMarketMaker:
                 self.last_order_error_ts = time.time()
                 self.last_action = self.last_order_error
             return False
+        action_ts = time.time()
         with self.lock:
             self.buy_oids, self.sell_oids = [], []
+            self.anchor_mid = None
+            self.last_intent = None
+            self.last_quote_ts = action_ts
+            self.last_partial_retry_ts = 0.0
         return True
 
     def cancel_all_rest(self):
@@ -1160,19 +1160,24 @@ class GridMarketMaker:
                 self.exchange.bulk_cancel(reqs)
         except Exception:
             pass
+        action_ts = time.time()
         with self.lock:
             self.buy_oids, self.sell_oids = [], []
+            self.anchor_mid = None
+            self.last_intent = None
+            self.last_quote_ts = action_ts
+            self.last_partial_retry_ts = 0.0
 
     def place(self, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]],
-              bid_ro: List[bool], ask_ro: List[bool]) -> bool:
+            bid_ro: List[bool], ask_ro: List[bool]) -> bool:
         """Place ALO quotes, repricing only legs rejected for crossing."""
         reqs = []
         for (p, s), ro in zip(bids, bid_ro):
             reqs.append({"coin": SYMBOL, "is_buy": True, "sz": s, "limit_px": p,
-                         "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": ro})
+                        "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": ro})
         for (p, s), ro in zip(asks, ask_ro):
             reqs.append({"coin": SYMBOL, "is_buy": False, "sz": s, "limit_px": p,
-                         "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": ro})
+                        "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": ro})
         if not reqs:
             return True
 
@@ -1232,6 +1237,9 @@ class GridMarketMaker:
                 self.last_order_error = errors[-1][:160]
                 self.last_order_error_ts = time.time()
                 self.last_action = f"{prefix}: {self.last_order_error[:60]}"
+                # If we get a margin limit error, pause opening orders to stop spamming
+                if any("margin" in err.lower() for err in errors):
+                    self.margin_reject_pause_until = time.time() + 60.0
         elif all_placed:
             with self.lock:
                 self.last_order_error = ""
@@ -1322,6 +1330,10 @@ class GridMarketMaker:
             regime_mult = min(regime_mult, 2.0)
             half_spread *= regime_mult
 
+        # Mode fixe: N ticks du centre, point final (voir config MM_HALF_TICKS).
+        if FIXED_HALF_SPREAD_TICKS > 0:
+            half_spread = FIXED_HALF_SPREAD_TICKS * TICK_SIZE
+
         self.cur_half_spread = half_spread
         step = max(TICK_SIZE, self.mid * LEVEL_STEP_BPS / 10000.0)
 
@@ -1347,10 +1359,20 @@ class GridMarketMaker:
         ask_base = self._round_px_up(max(center + ask_half, self.best_bid + TICK_SIZE))
 
         book_spread = self.best_ask - self.best_bid if book_has_bbo else 0.0
-        force_bbo = GRID_QUOTE_MODE == "bbo" and book_has_bbo
+        fixed_mode = FIXED_HALF_SPREAD_TICKS > 0
+        if GRID_QUOTE_MODE == "bbo_offset" and book_has_bbo and not fixed_mode:
+            ref_px = max(book_mid, self.mid, TICK_SIZE)
+            offset_px = ref_px * max(0.0, BBO_OFFSET_BPS) / 10000.0
+            bid_base = self._round_px_down(max(TICK_SIZE, self.best_bid - offset_px))
+            ask_base = self._round_px_up(max(self.best_ask + offset_px, bid_base + TICK_SIZE))
+            self.cur_half_spread = max(TICK_SIZE, (ask_base - bid_base) / 2.0)
+
+        # En mode fixe, aucun join BBO: l'ordre reste à N ticks du centre.
+        force_bbo = GRID_QUOTE_MODE == "bbo" and book_has_bbo and not fixed_mode
         join_book_safe = (
             JOIN_BOOK_SPREAD_WHEN_SAFE
             and book_has_bbo
+            and not fixed_mode
             and book_spread >= 2.0 * half_spread
         )
         join_book = force_bbo or join_book_safe
@@ -1370,7 +1392,10 @@ class GridMarketMaker:
         remaining_capacity_usd = max(0.0, gross_capacity_usd - used_notional_usd)
         opening_sides = 2 if abs(self.position) <= eps else 1
         opening_capacity_each = remaining_capacity_usd / opening_sides
-        opening_size = min(ORDER_SIZE, opening_capacity_each / max(self.mid, TICK_SIZE))
+        # Disable margin-based scaling so order sizes are exactly as configured by the user (ORDER_SIZE)
+        opening_size = ORDER_SIZE
+        if time.time() < self.margin_reject_pause_until:
+            opening_size = 0.0
         size_step = 10 ** (-SIZE_DECIMALS)
         opening_size = math.floor((opening_size + 1e-12) / size_step) * size_step
         opening_size = round(opening_size, SIZE_DECIMALS)
@@ -1424,13 +1449,19 @@ class GridMarketMaker:
                 tag += f" | join ask BBO {book_spread:.{PRICE_DECIMALS}f}/{needed_spread:.{PRICE_DECIMALS}f}"
             else:
                 tag += f" | BBO tight {book_spread:.{PRICE_DECIMALS}f}<{needed_spread:.{PRICE_DECIMALS}f}"
+        elif GRID_QUOTE_MODE == "bbo_offset" and book_has_bbo:
+            bid_gap_bps = max(0.0, (self.best_bid - bid_base) / max(book_mid, 1e-9) * 10000.0)
+            ask_gap_bps = max(0.0, (ask_base - self.best_ask) / max(book_mid, 1e-9) * 10000.0)
+            tag += f" | BBO offset bid {bid_gap_bps:.2f}bps / ask {ask_gap_bps:.2f}bps"
         elif GRID_QUOTE_MODE == "book_center" and book_has_bbo:
             tag += f" | book center {book_mid:.{PRICE_DECIMALS}f}"
         if not bids:
             tag += " | inv-cap: max (no buys)"
         if not asks:
             tag += " | inv-cap: max (no sells)"
-        if opening_size <= 0 and abs(self.position) > eps:
+        if time.time() < self.margin_reject_pause_until:
+            tag += f" | MARGIN PAUSE {self.margin_reject_pause_until - time.time():.0f}s"
+        elif opening_size <= 0 and abs(self.position) > eps:
             tag += " | margin full: reduce-only"
         if self.regime.ready:
             tag = f"score={self.regime.trend_score:.2f} | " + tag
@@ -1474,8 +1505,6 @@ class GridMarketMaker:
             last_ws_restart = self.last_ws_restart
             ws_ready = self.ws_ready
             mid = self.mid
-            best_bid = self.best_bid
-            best_ask = self.best_ask
             position = self.position
             margin_used = self.margin_used
             unrealized_pnl = self.unrealized_pnl
@@ -1484,8 +1513,6 @@ class GridMarketMaker:
             buy_oids = list(self.buy_oids)
             sell_oids = list(self.sell_oids)
             anchor_mid = self.anchor_mid
-            anchor_bid = self.anchor_bid
-            anchor_ask = self.anchor_ask
             last_intent = self.last_intent
 
         if (last_tick_ts > 0 and now - last_tick_ts > WS_STALE_SEC
@@ -1497,8 +1524,8 @@ class GridMarketMaker:
             if rest_ok:
                 # No BBO change means the market is simply quiet: preserve both
                 # the live order and its queue priority.  If REST saw a move that
-                # WS missed, rebuild only the feed; the next cycle atomically
-                # modifies the still-resting quote to the new BBO.
+                # WS missed, rebuild only the feed; normal reset/intent checks
+                # decide whether the still-resting quote needs a rebuild.
                 with self.lock:
                     self.last_action = (
                         "quiet book verified via REST - KEEP quotes"
@@ -1521,9 +1548,6 @@ class GridMarketMaker:
             with self.lock:
                 self.last_action = f"feed unavailable {stale_age:.0f}s -> safety cancel"
             self.cancel_all_rest()
-            with self.lock:
-                self.anchor_mid = None
-                self.last_intent = None
             self._restart_ws()
             return
 
@@ -1534,6 +1558,40 @@ class GridMarketMaker:
 
         # No REST here: position/PnL are kept fresh by the WS feed, and the
         # background thread reconciles via REST every POSITION_SYNC_SEC.
+
+        # ---- LAYER 0b: Paris flat window (lun-ven, 15h25-16h45) ----
+        # During the configured window the bot must be flat: no resting quotes
+        # and no active position. On entry, clean the exchange book via REST in
+        # case local oid tracking lags behind websocket updates.
+        in_blackout = self._in_blackout()
+        if in_blackout:
+            entered_blackout = not self.blackout_was_active
+            self.blackout_was_active = True
+            if entered_blackout:
+                self.cancel_all_rest()
+                self.sync_position()
+                with self.lock:
+                    position = self.position
+                    buy_oids = list(self.buy_oids)
+                    sell_oids = list(self.sell_oids)
+
+            if abs(position) > MIN_SIZE * 0.5:
+                if entered_blackout or now - self.last_blackout_flatten_ts >= BLACKOUT_FLATTEN_RETRY_SEC:
+                    self.last_blackout_flatten_ts = now
+                    self.flatten(f"blackout flat {self._blackout_label()}")
+                else:
+                    wait = max(0.0, BLACKOUT_FLATTEN_RETRY_SEC - (now - self.last_blackout_flatten_ts))
+                    with self.lock:
+                        self.last_action = f"blackout flat retry in {wait:.1f}s"
+                return
+
+            if buy_oids or sell_oids:
+                if not self.cancel_all():
+                    return
+            with self.lock:
+                self.last_action = f"blackout flat active ({self._blackout_label()})"
+            return
+        self.blackout_was_active = False
 
         # ---- LAYER 3: stop loss / take profit (hard floor) ----
         if abs(position) > MIN_SIZE * 0.5 and margin_used > 0:
@@ -1554,20 +1612,6 @@ class GridMarketMaker:
                 return
             with self.lock:
                 self.last_action = f"risk pause {risk_pause_until - now:.0f}s"
-            return
-
-        # ---- LAYER 0b: blackout séance NYSE (lun-ven, 15h00-22h30 Paris) ----
-        # Pendant les heures NYSE on ne MM pas : on annule tout et on attend la
-        # fermeture (les protections SL/TP ci-dessus restent actives).
-        if self._in_blackout():
-            if buy_oids or sell_oids:
-                if not self.cancel_all():
-                    return
-                with self.lock:
-                    self.anchor_mid = None
-                    self.last_intent = None
-            with self.lock:
-                self.last_action = "blackout NYSE (lun-ven 15h00-22h30 Paris) — pause"
             return
 
         # ---- update the regime from live candles ----
@@ -1601,10 +1645,10 @@ class GridMarketMaker:
                 and self.regime.ready and self.regime.is_trend
                 and abs(position) > MIN_SIZE * 0.5):
             against = ((self.regime.trend_dir < 0 and position > 0) or
-                       (self.regime.trend_dir > 0 and position < 0))
+                    (self.regime.trend_dir > 0 and position < 0))
             if against:
                 self.flatten(f"trend against position (dir {self.regime.trend_dir:+d}, "
-                             f"score {self.regime.trend_score:.2f})")
+                            f"score {self.regime.trend_score:.2f})")
                 with self.lock:
                     self.risk_pause_until = now + RISK_PAUSE_SEC
                 return
@@ -1623,10 +1667,6 @@ class GridMarketMaker:
                 if not self.cancel_all():
                     return
             with self.lock:
-                self.anchor_mid = None
-                self.anchor_bid = None
-                self.anchor_ask = None
-                self.last_intent = None
                 remaining = max(0.0, regime_pause_until - now)
                 reason = "TREND" if self.regime.is_trend else "COOLDOWN"
                 self.last_action = (
@@ -1649,23 +1689,13 @@ class GridMarketMaker:
             if resting:
                 if not self.cancel_all():
                     return
-                with self.lock:
-                    self.last_quote_ts = time.time()
-                    self.anchor_mid = None
             with self.lock:
                 self.last_intent = intent
             return
 
         drift_bps = (abs(mid - anchor_mid) / max(anchor_mid, 1e-9) * 10000.0
-                     if anchor_mid else 1e9)
+                    if anchor_mid else 1e9)
         reset_bps = self._adaptive_grid_reset_bps()
-        bbo_changed = (
-            REQUOTE_ON_BBO_CHANGE
-            and resting
-            and anchor_bid is not None
-            and anchor_ask is not None
-            and (best_bid != anchor_bid or best_ask != anchor_ask)
-        )
         shape_exact = buy_count == len(bids) and sell_count == len(asks)
         missing_only = (
             resting
@@ -1674,7 +1704,6 @@ class GridMarketMaker:
             and (buy_count < len(bids) or sell_count < len(asks))
             and (last_intent is None or intent == last_intent)
             and (anchor_mid is None or drift_bps < reset_bps)
-            and not bbo_changed
         )
         need_rebuild = (
             not resting
@@ -1682,7 +1711,6 @@ class GridMarketMaker:
             or intent != last_intent
             or not shape_exact
             or drift_bps >= reset_bps
-            or bbo_changed
         )
         if not need_rebuild:
             return
@@ -1711,7 +1739,7 @@ class GridMarketMaker:
             )
 
             with self.lock:
-                self.requote_ms = (time.time() - t0) * 1000.0
+                self.order_action_ms = (time.time() - t0) * 1000.0
                 self.last_quote_ts = time.time()
                 self.last_partial_retry_ts = self.last_quote_ts
                 complete = (
@@ -1720,16 +1748,12 @@ class GridMarketMaker:
                 )
                 if quote_ok and complete:
                     self.anchor_mid = mid
-                    self.anchor_bid = best_bid
-                    self.anchor_ask = best_ask
                     self.last_intent = intent
                     self.last_partial_retry_ts = 0.0
                 else:
                     # Preserve the queue priority of the leg that successfully
                     # rests; only the missing leg will be retried later.
                     self.anchor_mid = None
-                    self.anchor_bid = None
-                    self.anchor_ask = None
                     self.last_intent = intent
                     self.last_action = (
                         f"partial grid: keep {len(self.buy_oids)}B/{len(self.sell_oids)}A resting, "
@@ -1747,7 +1771,7 @@ class GridMarketMaker:
         quote_ok = self.place(bids, asks, bid_ro, ask_ro)
 
         with self.lock:
-            self.requote_ms = (time.time() - t0) * 1000.0
+            self.order_action_ms = (time.time() - t0) * 1000.0
             self.last_quote_ts = time.time()
             complete = (
                 len(self.buy_oids) == len(bids)
@@ -1755,14 +1779,10 @@ class GridMarketMaker:
             )
             if quote_ok and complete:
                 self.anchor_mid = mid
-                self.anchor_bid = best_bid
-                self.anchor_ask = best_ask
                 self.last_intent = intent
                 self.last_partial_retry_ts = 0.0
             else:
                 self.anchor_mid = None
-                self.anchor_bid = None
-                self.anchor_ask = None
                 self.last_intent = None
                 self.last_partial_retry_ts = time.time()
 
@@ -1792,7 +1812,7 @@ class GridMarketMaker:
             last_order_error = self.last_order_error
             last_order_error_ts = self.last_order_error_ts
             loop_ms = self.loop_ms
-            requote_ms = self.requote_ms
+            order_action_ms = self.order_action_ms
             last_tick_ts = self.last_tick_ts
 
         logo_content = r"""[bold cyan]
@@ -1832,13 +1852,13 @@ class GridMarketMaker:
         fills_min = fills_count / elapsed_m
         spread_bps = (cur_half_spread * 2.0 / mid * 10000.0) if mid > 0 else 0.0
         drift_bps = (abs(mid - anchor_mid) / max(anchor_mid, 1e-9) * 10000.0
-                     if anchor_mid else 0.0)
+                    if anchor_mid else 0.0)
         reset_bps = self._adaptive_grid_reset_bps()
         drift_color = "red" if drift_bps >= reset_bps else "yellow" if drift_bps >= reset_bps * 0.5 else "green"
         table.caption = (f"\n⏱️  Vol/H: [bold yellow]${vol_h:.0f}[/bold yellow] | "
-                         f"Fills/min: [cyan]{fills_min:.1f}[/cyan] | "
-                         f"Spread: [magenta]{spread_bps:.1f}bps[/magenta] | "
-                         f"Drift: [{drift_color}]{drift_bps:.1f}/{reset_bps:.1f}bps[/]")
+                        f"Fills/min: [cyan]{fills_min:.1f}[/cyan] | "
+                        f"Spread: [magenta]{spread_bps:.1f}bps[/magenta] | "
+                        f"Drift: [{drift_color}]{drift_bps:.1f}/{reset_bps:.1f}bps[/]")
 
         # ---- Status table (key/value) ----
         st = Table(box=None, show_header=False, padding=(0, 1))
@@ -1858,10 +1878,11 @@ class GridMarketMaker:
         used_notional_usd = abs(position) * mid
         remaining_capacity_usd = max(0.0, gross_capacity_usd - used_notional_usd)
         opening_sides = 2 if abs(position) <= MIN_SIZE * 0.5 else 1
-        max_opening_size = remaining_capacity_usd / opening_sides / max(mid, TICK_SIZE)
+        # Disable margin-based scaling in display
+        max_opening_size = ORDER_SIZE
         size_step = 10 ** (-SIZE_DECIMALS)
         max_opening_size = math.floor((max_opening_size + 1e-12) / size_step) * size_step
-        max_opening_size = max(0.0, round(min(ORDER_SIZE, max_opening_size), SIZE_DECIMALS))
+        max_opening_size = max(0.0, round(max_opening_size, SIZE_DECIMALS))
         if max_opening_size < MIN_SIZE or max_opening_size * mid < MIN_ORDER_NOTIONAL_USD:
             max_opening_size = 0.0
         target_capacity_usd = used_notional_usd + ORDER_SIZE * mid * opening_sides
@@ -1877,10 +1898,10 @@ class GridMarketMaker:
             else:
                 reg = "[green]● ADAPTIVE[/]"
             va = (f"VA[{self.regime.val:.0f}-{self.regime.vah:.0f}] POC {self.regime.poc:.0f}"
-                  if self.regime.val and self.regime.vah else "VA[--]")
+                if self.regime.val and self.regime.vah else "VA[--]")
             reg_txt = (f"{reg} score {self.regime.trend_score:.2f} | ER {self.regime.efficiency_ratio:.2f} | "
-                       f"VPexp {self.regime.vp_expansion:.2f} | ATR {self.regime.atr:.1f} | {va} | "
-                       f"dir {self.regime.trend_dir:+d}")
+                    f"VPexp {self.regime.vp_expansion:.2f} | ATR {self.regime.atr:.1f} | {va} | "
+                    f"dir {self.regime.trend_dir:+d}")
 
         if self.regime.ready:
             cooldown_left = max(0.0, regime_pause_until - time.time())
@@ -1893,51 +1914,53 @@ class GridMarketMaker:
             else:
                 reg = "[green]ADAPTIVE DIAGNOSTIC[/]"
             va = (f"VA[{self.regime.val:.0f}-{self.regime.vah:.0f}] POC {self.regime.poc:.0f}"
-                  if self.regime.val and self.regime.vah else "VA[--]")
+                if self.regime.val and self.regime.vah else "VA[--]")
             reg_txt = (f"{reg} score {self.regime.trend_score:.2f} | ER {self.regime.efficiency_ratio:.2f} | "
-                       f"VPexp {self.regime.vp_expansion:.2f} | BRK {self.regime.breakout_score:.2f} | "
-                       f"ATR {self.regime.atr:.1f} | {va} | "
-                       f"dir {self.regime.trend_dir:+d}")
+                    f"VPexp {self.regime.vp_expansion:.2f} | BRK {self.regime.breakout_score:.2f} | "
+                    f"ATR {self.regime.atr:.1f} | {va} | "
+                    f"dir {self.regime.trend_dir:+d}")
 
         pos_color = "green" if position > 0 else "red" if position < 0 else "white"
         st.add_row("Runtime", f"{runtime_str} (started {launch_time})")
         st.add_row("PAIR", f"[cyan]{SYMBOL}[/]  |  Mid [white]{mid:.0f}[/] (bid {best_bid:.0f} / ask {best_ask:.0f})")
         st.add_row("Leverage", f"[yellow]{LEVERAGE}x[/]  |  Mode [white]ADAPTIVE regime-gated[/]  |  "
-                               f"Quote [white]{GRID_QUOTE_MODE}[/]")
+                            f"Quote [white]{GRID_QUOTE_MODE}[/]")
         st.add_row("Sizing", f"target {size_fmt.format(ORDER_SIZE)} | cap/side {size_fmt.format(max_opening_size)} | "
-                             f"need equity ${equity_for_target:.2f}")
+                            f"need equity ${equity_for_target:.2f}")
         st.add_row("Orders", f"[green]{buy_oids_len}B[/] / [red]{sell_oids_len}A[/]")
         st.add_row("Position", f"[{pos_color}]{position:+.4f}[/] (${notional:+.1f} / cap ${inventory_cap_usd:.1f}) | "
-                               f"uPnL ${unrealized_pnl:+.3f} ({roe:+.1f}% ROE)")
+                            f"uPnL ${unrealized_pnl:+.3f} ({roe:+.1f}% ROE)")
         st.add_row("Regime", reg_txt)
         st.add_row("Fills", f"{fills_count} trades | Best NET: ${best_net_pnl:+.3f}")
         st.add_row("PnL", f"gross ${session_pnl:+.3f}  -  fees ${total_fees:.3f}  =  "
-                          f"[{net_color}]NET ${net:+.3f}[/]")
-        configured_half_spread = max(
-            TICK_SIZE,
-            mid * BASE_SPREAD_BPS / 10000.0,
-            mid * (MAKER_FEE_BPS + ADVERSE_BUFFER_BPS) / 10000.0,
-            self.regime.atr_half_spread(),
-        )
-        active_full_spread_bps = (configured_half_spread * 2.0
-                                  / max(mid, 1e-9) * 10000.0)
+                        f"[{net_color}]NET ${net:+.3f}[/]")
+        if GRID_QUOTE_MODE == "bbo_offset":
+            configured_half_spread = mid * max(0.0, BBO_OFFSET_BPS) / 10000.0
+            spread_label = f"BBO gap target {BBO_OFFSET_BPS:.2f}bps/side"
+        else:
+            configured_half_spread = max(
+                TICK_SIZE,
+                mid * BASE_SPREAD_BPS / 10000.0,
+                mid * (MAKER_FEE_BPS + ADVERSE_BUFFER_BPS) / 10000.0,
+                self.regime.atr_half_spread(),
+            )
+            active_full_spread_bps = (configured_half_spread * 2.0
+                                    / max(mid, 1e-9) * 10000.0)
+            spread_label = f"Spread target adaptive {active_full_spread_bps:.2f}bps full"
         st.add_row("Risk", f"SL {STOP_LOSS_ROE_PCT:.0f}% / TP {TAKE_PROFIT_ROE_PCT:.0f}% | "
-                           f"Spread target adaptive "
-                           f"{active_full_spread_bps:.2f}bps full | "
-                           f"Equity ${equity:.2f}")
+                        f"{spread_label} | "
+                        f"Equity ${equity:.2f}")
         if BLACKOUT_ENABLED:
             blocked = self._in_blackout()
-            sess_txt = ("[red]● BLACKOUT NYSE (pause)[/]" if blocked
-                        else "[green]● MM actif (off-hours)[/]")
-            st.add_row("Séance", f"{sess_txt}  (pas d'ordre lun-ven "
-                                 f"{BLACKOUT_START_H:02d}h{BLACKOUT_START_M:02d}"
-                                 f"-{BLACKOUT_END_H:02d}h{BLACKOUT_END_M:02d} Paris)")
+            sess_txt = ("[red]● FENETRE FLAT[/]" if blocked
+                        else "[green]● MM actif[/]")
+            st.add_row("Séance", f"{sess_txt}  (zero position/ordre {self._blackout_label()})")
         loop_color = "green" if loop_ms < 200 else "yellow" if loop_ms < 600 else "red"
-        rq_color = "green" if requote_ms < 400 else "yellow" if requote_ms < 1000 else "red"
+        action_color = "green" if order_action_ms < 400 else "yellow" if order_action_ms < 1000 else "red"
         feed_age = (time.time() - last_tick_ts) if last_tick_ts > 0 else -1.0
         feed_txt = ("[dim]--[/]" if feed_age < 0 else
                     f"[{'green' if feed_age < 3 else 'yellow' if feed_age < WS_STALE_SEC else 'red'}]{feed_age:.0f}s[/]")
-        st.add_row("Cycle", f"[{loop_color}]{loop_ms:.0f}ms[/] | requote (cancel+place) [{rq_color}]{requote_ms:.0f}ms[/] | "
+        st.add_row("Cycle", f"[{loop_color}]{loop_ms:.0f}ms[/] | order action [{action_color}]{order_action_ms:.0f}ms[/] | "
                             f"feed age {feed_txt} | heartbeat {LOOP_INTERVAL_SEC*1000:.0f}ms")
         status_text = last_action
         if last_order_error and time.time() - last_order_error_ts < 60.0:
@@ -1974,48 +1997,69 @@ class GridMarketMaker:
             if now - last_position_sync < ORDER_SYNC_SEC:
                 try:
                     self.exchange.session.post(BASE_URL + "/info",
-                                               json={"type": "meta"}, timeout=5)
+                                            json={"type": "meta"}, timeout=5)
                 except Exception:
                     pass
             time.sleep(ORDER_SYNC_SEC)
 
     # -------------------------------------------------------------------- run
+    def _trading_loop(self, live=None):
+        """Boucle de trading. `live` = dashboard Rich (console directe) ou
+        None (headless: lancé par bot_server, l'affichage est le web)."""
+        last_render = 0.0
+        while self.running:
+            # Event-driven: a WS tick/fill wakes us instantly; otherwise
+            # fall through after LOOP_INTERVAL_SEC as a heartbeat.
+            self.wake.wait(timeout=LOOP_INTERVAL_SEC)
+            self.wake.clear()
+            t0 = time.time()
+            try:
+                self.loop_once()
+            except Exception as exc:
+                self.last_action = f"loop error: {str(exc)[:50]}"
+            self.loop_ms = (time.time() - t0) * 1000.0
+            # Render at 2 Hz max; quote/order events still run at full speed.
+            if live is not None and time.time() - last_render >= 0.5:
+                live.update(self.dashboard())
+                last_render = time.time()
+            # Throttle back-to-back cycles (busy book) to spare rate limits.
+            spare = MIN_CYCLE_SEC - (time.time() - t0)
+            if spare > 0:
+                time.sleep(spare)
+
     def run(self):
-        print("⏳ Waiting for first book update...")
+        # Headless quand lancé par le serveur web (thread non principal):
+        # deux dashboards Rich dans le même terminal se battent pour le
+        # curseur -> clignotement. Le dashboard web remplace l'affichage.
+        headless = threading.current_thread() is not threading.main_thread()
+        if not headless:
+            print("⏳ Waiting for first book update...")
         while self.running and not self.ws_ready:
             self._refresh_bbo_from_rest()
             if not self.ws_ready:
                 time.sleep(0.5)
         threading.Thread(target=self._sync_thread, daemon=True).start()
-        # Rendering is deliberately slower than the quote engine; Rich should
-        # never compete with signing/WS callbacks on the hot path.
-        with Live(self.dashboard(), console=self.console, refresh_per_second=2, screen=False) as live:
-            last_render = 0.0
-            while self.running:
-                # Event-driven: a WS tick/fill wakes us instantly; otherwise
-                # fall through after LOOP_INTERVAL_SEC as a heartbeat.
-                self.wake.wait(timeout=LOOP_INTERVAL_SEC)
-                self.wake.clear()
-                t0 = time.time()
-                try:
-                    self.loop_once()
-                except Exception as exc:
-                    self.last_action = f"loop error: {str(exc)[:50]}"
-                self.loop_ms = (time.time() - t0) * 1000.0
-                # Render at 2 Hz max; quote/order events still run at full speed.
-                if time.time() - last_render >= 0.5:
-                    live.update(self.dashboard())
-                    last_render = time.time()
-                # Throttle back-to-back cycles (busy book) to spare rate limits.
-                spare = MIN_CYCLE_SEC - (time.time() - t0)
-                if spare > 0:
-                    time.sleep(spare)
-        # graceful exit
-        print("\n🛑 Stopping — cancelling all orders...")
+
+        if headless:
+            self._trading_loop(live=None)
+        else:
+            # Rendering is deliberately slower than the quote engine; Rich should
+            # never compete with signing/WS callbacks on the hot path.
+            with Live(self.dashboard(), console=self.console, refresh_per_second=2, screen=False) as live:
+                self._trading_loop(live=live)
+
+        # graceful exit — stop = flat: annule tout PUIS ferme la position au market.
+        if not headless:
+            print("\n🛑 Stopping — cancelling all orders + closing position...")
         self.cancel_all()
+        try:
+            self.flatten("stop")            # IOC reduce-only, ne fait rien si flat
+        except Exception:
+            pass
         net = self.session_pnl - self.total_fees
-        print(f"Session: {self.fills_count} fills | volume ${self.total_volume:,.0f} | "
-              f"gross ${self.session_pnl:+.3f} | fees ${self.total_fees:.3f} | NET ${net:+.3f}")
+        if not headless:
+            print(f"Session: {self.fills_count} fills | volume ${self.total_volume:,.0f} | "
+                f"gross ${self.session_pnl:+.3f} | fees ${self.total_fees:.3f} | NET ${net:+.3f}")
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -2205,7 +2249,7 @@ def _score_grid_market(item: Dict[str, Any], mids: Dict[str, Any]) -> Dict[str, 
         range_bps = ((hi - lo) / ref_mid * 10000.0) if ref_mid > 0 else None
         atr_bps = (engine.atr / ref_mid * 10000.0) if ref_mid > 0 and engine.atr > 0 else None
         va_bps = ((engine.vah - engine.val) / ref_mid * 10000.0
-                  if ref_mid > 0 and engine.vah is not None and engine.val is not None else None)
+                if ref_mid > 0 and engine.vah is not None and engine.val is not None else None)
 
         compression = 1.0 - engine.vp_expansion
         chop = 1.0 - engine.trend_score
@@ -2481,7 +2525,10 @@ if __name__ == "__main__":
     print("=" * 70)
     print(f" GRID MARKET MAKER - ADAPTIVE GRID  (regime filter {'active' if TREND_FILTER_ENABLED else 'disabled'})")
     margin_mode = "cross" if IS_CROSS else "isolated"
-    spread_mode = f"{GRID_QUOTE_MODE} max({BASE_SPREAD_BPS}bps, fee floor, ATR)"
+    if GRID_QUOTE_MODE == "bbo_offset":
+        spread_mode = f"BBO offset {BBO_OFFSET_BPS}bps/side"
+    else:
+        spread_mode = f"{GRID_QUOTE_MODE} max({BASE_SPREAD_BPS}bps, fee floor, ATR)"
     print(f" {SYMBOL} | {LEVERAGE}x {margin_mode} | mode {mode_name} | grid {NUM_LEVELS}x{ORDER_SIZE} | "
           f"spread {spread_mode} | cap {MAX_INVENTORY_ORDERS} orders/side")
     print(f" tick {TICK_SIZE} | min_size {MIN_SIZE} | order_notional_target ${TARGET_ORDER_NOTIONAL_USD:.2f}")

@@ -61,7 +61,7 @@ except Exception as exc:  # pragma: no cover - startup guard
 DEFAULT_KEYWORDS = "WORLD,CUP,2026,CHAMPION,WINNER"
 DEFAULT_MAX_SPREAD_PCT = 0.020  # percent. 0.020% = 2 bps.
 DEFAULT_WORLDCUP_COUNTRIES = (
-    "France,Argentina,Spain,England,Portugal,Germany,Brazil,Netherlands,USA,Norway,Morocco"
+    "France,Argentina,Spain,England,Portugal,Brazil,USA,Norway,Morocco"
 )
 WORLDCUP_DESCRIPTION_NEEDLE = "officially declared the 2026 FIFA World Cup champion"
 OUTCOME_ASSET_OFFSET = 100_000_000
@@ -222,10 +222,16 @@ class BotConfig:
     worldcup: bool
     countries: List[str]
     outcome_side: str
+    exec_mode: str = "taker"   # "taker" = IOC croise le spread | "maker" = limit post-only
+    maker_offset_pct: float = 0.0  # % derrière le touch, même convention que max_spread_pct (0.02 = 0.02%)
 
     @property
     def max_spread_bps(self) -> float:
         return self.max_spread_pct * 100.0
+
+    @property
+    def is_maker(self) -> bool:
+        return self.exec_mode == "maker"
 
 
 @dataclass
@@ -390,11 +396,49 @@ class HyperliquidSpreadBot:
                 info.name_to_coin[coin] = coin
                 info.asset_to_sz_decimals[asset_id] = 0
 
+    def liquidate_all_positions(self) -> None:
+        """Vend au market (IOC) tout l'inventaire de tokens NO restant.
+        Appelé au stop: le bot ne doit rien laisser en position derrière lui."""
+        if not self.cfg.live or self.exchange is None:
+            return
+        self.sync_account()
+        slip = max(0.0, self.cfg.market_slippage_bps) / 10_000.0
+        with self.lock:
+            states = list(self.states.values())
+        for st in states:
+            sell_size = float(math.floor(max(0.0, st.position)))
+            if sell_size < 1.0:
+                continue
+            ref = st.bid if st.bid > 0 else (st.mid if st.mid > 0 else 0.0)
+            if ref <= 0:
+                st.last_action = "liquidate: pas de bid, position conservée"
+                continue
+            px = round_outcome_sell_px(ref * (1.0 - max(slip, 0.002)))
+            try:
+                self.exchange.order(
+                    name=st.spec.symbol,
+                    is_buy=False,
+                    sz=sell_size,
+                    limit_px=round_px_wire(px),
+                    order_type={"limit": {"tif": "Ioc"}},
+                    reduce_only=False,
+                )
+                st.last_action = f"liquidate: SELL {sell_size:g} @ {px:g}"
+            except Exception as exc:
+                st.last_error = str(exc)[:120]
+                st.last_action = "liquidate error"
+
     def shutdown(self, *_: Any) -> None:
         self.running = False
         self.wake.set()
         if self.cfg.live:
             self.cancel_all("shutdown")
+            # Stop = flat: on ferme tout l'inventaire au market, pas seulement
+            # les ordres. Best effort (book vide -> la position reste, loggé).
+            try:
+                self.liquidate_all_positions()
+            except Exception:
+                pass
         try:
             if self.ws_info is not None:
                 self.ws_info.disconnect_websocket()
@@ -544,9 +588,10 @@ class HyperliquidSpreadBot:
 
         if missing:
             available = ", ".join(sorted(country_by_slug.keys())[:80])
-            raise SystemExit(
+            self.console.print(
                 "Some World Cup countries were not found in outcomeMeta: "
-                f"{', '.join(missing)}\nAvailable slugs: {available}"
+                f"{', '.join(missing)}\nAvailable slugs: {available}",
+                style="yellow",
             )
         if not specs:
             raise SystemExit("No HIP-4 World Cup outcome markets selected.")
@@ -913,7 +958,10 @@ class HyperliquidSpreadBot:
             return "waiting bbo"
         if time.time() - st.last_book_ts > self.cfg.stale_sec:
             return f"stale feed {fmt_age(st.last_book_ts)}"
-        if not closing_inventory and st.spread_bps >= self.cfg.max_spread_bps:
+        # Le gate de spread protège le TAKER (croiser un spread large coûte cher).
+        # En maker on ne croise jamais: un spread large est au contraire le
+        # moment où la quote passive capture le plus.
+        if not self.cfg.is_maker and not closing_inventory and st.spread_bps >= self.cfg.max_spread_bps:
             return f"spread {st.spread_bps:.3f}bps >= {self.cfg.max_spread_bps:.3f}bps"
         return None
 
@@ -931,24 +979,34 @@ class HyperliquidSpreadBot:
         cap = abs(self.cfg.max_position_usd)
         slip = max(0.0, self.cfg.market_slippage_bps) / 10_000.0
         has_no_inventory = st.position >= 1.0
+        maker = self.cfg.is_maker
+        # Maker: limit post-only placé maker_offset_pct (%) DERRIÈRE le touch
+        # (0 = colle au BBO). Ne croise jamais, 0 slippage, frais maker.
+        # Taker: IOC qui croise avec un peu de slip.
+        tif = "Alo" if maker else "Ioc"
+        mode_tag = "maker" if maker else "market"
+        maker_off = max(0.0, self.cfg.maker_offset_pct) / 100.0
 
         if has_no_inventory:
             max_sell_size = math.floor(st.position)
-            sell_value = max_sell_size * st.bid
             sell_size = float(max_sell_size)
             if sell_size <= 0:
                 return None, "sell size=0"
-            px = round_outcome_sell_px(st.bid * (1.0 - slip))
+            if maker:
+                # ceil: N bps au-dessus du best ask, jamais à travers
+                px = round_outcome_buy_px(st.ask * (1.0 + maker_off))
+            else:
+                px = round_outcome_sell_px(st.bid * (1.0 - slip))
             return (
                 {
                     "coin": st.spec.symbol,
                     "is_buy": False,
                     "sz": sell_size,
                     "limit_px": round_px_wire(px),
-                    "order_type": {"limit": {"tif": "Ioc"}},
+                    "order_type": {"limit": {"tif": tif}},
                     "reduce_only": False,
                 },
-                f"SELL NO market {sell_size:g} value ${sell_size * px:.2f}"
+                f"SELL NO {mode_tag} {sell_size:g} value ${sell_size * px:.2f}"
                 + (" wide-exit" if st.spread_bps >= self.cfg.max_spread_bps else ""),
             )
 
@@ -958,7 +1016,11 @@ class HyperliquidSpreadBot:
         max_buy_usd = max(0.0, min(target_usd, cap - max(0.0, pos_usd)))
         if max_buy_usd < self.cfg.min_order_usd:
             return None, f"cap leaves {max_buy_usd:.2f}<${self.cfg.min_order_usd:.2f}"
-        px = round_outcome_buy_px(st.ask * (1.0 + slip))
+        if maker:
+            # floor: N bps sous le best bid, jamais à travers
+            px = round_outcome_sell_px(st.bid * (1.0 - maker_off))
+        else:
+            px = round_outcome_buy_px(st.ask * (1.0 + slip))
         buy_size = float(math.ceil(self.cfg.min_order_usd / max(px, 1e-9)))
         target_size = float(math.floor(max_buy_usd / max(px, 1e-9)))
         buy_size = max(buy_size, target_size)
@@ -972,10 +1034,10 @@ class HyperliquidSpreadBot:
                 "is_buy": True,
                 "sz": buy_size,
                 "limit_px": round_px_wire(px),
-                "order_type": {"limit": {"tif": "Ioc"}},
+                "order_type": {"limit": {"tif": tif}},
                 "reduce_only": False,
             },
-            f"BUY NO market {buy_size:g} value ${buy_size * px:.2f}",
+            f"BUY NO {mode_tag} {buy_size:g} value ${buy_size * px:.2f}",
         )
 
     # ------------------------------------------------------------ order logic
@@ -1053,15 +1115,34 @@ class HyperliquidSpreadBot:
             st.last_action = reason
             return
 
+        # Mode maker: gérer l'ordre limite déjà au repos AVANT d'en envoyer un
+        # autre (sinon on empile des limits). Si la quote en place est déjà au
+        # prix cible -> on la garde (priorité de queue). Sinon cancel, et on
+        # re-place au prochain cycle une fois le cancel acquitté.
+        if self.cfg.is_maker:
+            same_oid = st.bid_oid if req["is_buy"] else st.ask_oid
+            same_quoted = st.quoted_bid if req["is_buy"] else st.quoted_ask
+            other_oid = st.ask_oid if req["is_buy"] else st.bid_oid
+            target_px = float(req["limit_px"])
+            if same_oid and other_oid is None and abs(float(same_quoted) - target_px) < 1e-9:
+                side_txt = "BID" if req["is_buy"] else "ASK"
+                st.last_action = f"maker resting {side_txt} @ {target_px:g}"
+                return
+            if same_oid or other_oid:
+                self.cancel_all("maker requote", [st.spec.symbol])
+                st.last_action = "maker requote (cancel d'abord)"
+                return
+
         if not self.cfg.live:
             px = safe_float(req.get("limit_px"))
             sz = safe_float(req.get("sz"))
+            dry_tag = "DRY MAKER" if self.cfg.is_maker else "DRY"
             if req["is_buy"]:
                 st.position = round_size(st.position + sz, st.spec.sz_decimals)
-                st.last_action = f"DRY BUY NO {sz:g} @ {px:g}"
+                st.last_action = f"{dry_tag} BUY NO {sz:g} @ {px:g}"
             else:
                 st.position = round_size(max(0.0, st.position - sz), st.spec.sz_decimals)
-                st.last_action = f"DRY SELL NO {sz:g} @ {px:g}"
+                st.last_action = f"{dry_tag} SELL NO {sz:g} @ {px:g}"
             st.last_order_ts = now
             self.stats.volume_usd += px * sz
             return
@@ -1142,33 +1223,128 @@ class HyperliquidSpreadBot:
             st.last_action = f"accepted 0/{len(reqs)} orders"
 
     # --------------------------------------------------------------- runtime
+    @staticmethod
+    def _ask_float(label: str, current: float, minimum: float = 0.0) -> float:
+        while True:
+            raw = input(f"{label} [Enter={current:g}] : ").strip().replace(",", ".")
+            if not raw:
+                return current
+            try:
+                value = float(raw)
+                if value < minimum:
+                    print(f"  Nombre >= {minimum:g} attendu.")
+                    continue
+                return value
+            except ValueError:
+                print("  Nombre attendu.")
+
+    def _launch_prompt(self) -> None:
+        """Au clavier: choisir le marché, le %% de spread et la taille.
+        Taker: le %% = gate d'entrée (max-spread-pct). Maker: le %% = offset
+        derrière le touch. Enter partout = garder les défauts CLI/.env."""
+        # JAMAIS en mode embarqué (dashboard): le bot tourne alors dans un
+        # thread de bot_server et input() bloquerait le thread indéfiniment
+        # (statut RUNNING mais aucun ordre). Menu = console directe uniquement.
+        if threading.current_thread() is not threading.main_thread():
+            return
+        try:
+            if not sys.stdin.isatty():
+                return
+        except Exception:
+            return
+        mode_txt = "MAKER post-only" if self.cfg.is_maker else "TAKER IOC"
+        print(f"\n--- Mode {mode_txt}: marché, spread, taille ---")
+        for i, spec in enumerate(self.specs, 1):
+            print(f"  [{i}] {spec.display_name or spec.symbol}")
+        while True:
+            choice = input(f"Marché ? [1-{len(self.specs)} / nom (ex: france) / Enter=tous] : ").strip().lower()
+            if not choice:
+                break
+            picked = None
+            try:
+                idx = int(choice)
+                if 1 <= idx <= len(self.specs):
+                    picked = self.specs[idx - 1]
+            except ValueError:
+                matches = [s for s in self.specs
+                           if choice in (s.display_name or "").lower() or choice in s.symbol.lower()]
+                if len(matches) == 1:
+                    picked = matches[0]
+                elif len(matches) > 1:
+                    print(f"  Ambigu ({len(matches)} marchés) — précise.")
+                    continue
+            if picked is None:
+                print("  Introuvable — numéro, nom partiel, ou Enter pour tous.")
+                continue
+            self.specs = [picked]
+            with self.lock:
+                self.states = {picked.symbol: MarketState(picked)}
+            print(f"  -> {picked.display_name or picked.symbol} uniquement")
+            break
+
+        if self.cfg.is_maker:
+            self.cfg.maker_offset_pct = self._ask_float(
+                "Spread maker en % derrière le touch (ex 0.02 = 0.02%)",
+                self.cfg.maker_offset_pct, minimum=0.0)
+        else:
+            self.cfg.max_spread_pct = self._ask_float(
+                "Spread max en % pour entrer (gate taker, ex 0.02 = 0.02%)",
+                self.cfg.max_spread_pct, minimum=0.0)
+
+        value = self._ask_float("Taille d'ordre en $ (minimum exchange 10)",
+                                self.cfg.order_usd, minimum=10.0)
+        self.cfg.order_usd = value
+        # le sizing exige buy_value >= min_order_usd: l'aligner sur la taille
+        # choisie sinon une taille < 45 (défaut) serait silencieusement bloquée
+        self.cfg.min_order_usd = max(10.0, min(self.cfg.min_order_usd, value))
+
+        pct_txt = (f"offset {self.cfg.maker_offset_pct:g}%" if self.cfg.is_maker
+                   else f"spread< {self.cfg.max_spread_pct:g}%")
+        print(f"{mode_txt} | {pct_txt} | ordre ${self.cfg.order_usd:g} | "
+              f"{len(self.specs)} marché(s)\n")
+
+    def _trading_loop(self, refresh: float, live=None) -> None:
+        """Boucle de trading. `live` = dashboard Rich (console directe) ou
+        None (headless: lancé par bot_server, l'affichage est le web)."""
+        last_sync = 0.0
+        while self.running:
+            if time.time() - last_sync > self.cfg.account_sync_sec:
+                self.sync_account()
+                last_sync = time.time()
+
+            self.restart_ws_if_needed()
+            self.refresh_rest_bbos()
+            with self.lock:
+                states = list(self.states.values())
+            for st in states:
+                self.place_or_requote(st)
+
+            if live is not None:
+                live.update(self.render())
+            self.wake.wait(refresh)
+            self.wake.clear()
+
     def run(self) -> None:
-        self.console.print(self.scan_table())
+        # Headless quand lancé par bot_server (thread non principal): pas de
+        # dashboard Rich dans le terminal (deux Live simultanés = clignotement),
+        # les stats passent par le dashboard web.
+        headless = threading.current_thread() is not threading.main_thread()
+        if not headless:
+            self.console.print(self.scan_table())
         if self.cfg.scan_only:
             return
+        self._launch_prompt()
 
         self.sync_account()
         self.start_ws()
         self.refresh_rest_bbos(force=True)
         refresh = max(0.05, 1.0 / max(self.cfg.refresh_hz, 0.1))
 
-        with Live(self.render(), console=self.console, screen=True, refresh_per_second=self.cfg.refresh_hz) as live:
-            last_sync = 0.0
-            while self.running:
-                if time.time() - last_sync > self.cfg.account_sync_sec:
-                    self.sync_account()
-                    last_sync = time.time()
-
-                self.restart_ws_if_needed()
-                self.refresh_rest_bbos()
-                with self.lock:
-                    states = list(self.states.values())
-                for st in states:
-                    self.place_or_requote(st)
-
-                live.update(self.render())
-                self.wake.wait(refresh)
-                self.wake.clear()
+        if headless:
+            self._trading_loop(refresh, live=None)
+        else:
+            with Live(self.render(), console=self.console, screen=True, refresh_per_second=self.cfg.refresh_hz) as live:
+                self._trading_loop(refresh, live=live)
 
         self.shutdown()
 
@@ -1233,9 +1409,12 @@ class HyperliquidSpreadBot:
             self.lock.release()
 
         mode = "[bold red]LIVE[/]" if cfg.live else "[bold yellow]DRY-RUN[/]"
+        exec_txt = (f"[bold green]MAKER post-only +{cfg.maker_offset_pct:g}%[/]"
+                    if cfg.is_maker else "[bold magenta]TAKER IOC[/]")
+        spread_txt = ("spread gate off (maker)" if cfg.is_maker
+                      else f"spread< {cfg.max_spread_pct:.3f}% ({cfg.max_spread_bps:.3f}bps)")
         title = Text.from_markup(
-            f"Hyperliquid HIP Spread Bot  {mode}  "
-            f"spread< {cfg.max_spread_pct:.3f}% ({cfg.max_spread_bps:.3f}bps)"
+            f"Hyperliquid HIP Spread Bot  {mode}  {exec_txt}  {spread_txt}"
         )
 
         runtime = int(time.time() - stats.start_ts)
@@ -1336,6 +1515,13 @@ def build_config(argv: Optional[List[str]] = None) -> BotConfig:
     parser.add_argument("--rest-workers", type=int, default=int(os.getenv("HL_REST_WORKERS", "24")))
     parser.add_argument("--rest-max-per-sweep", type=int, default=int(os.getenv("HL_REST_MAX_PER_SWEEP", "2")))
     parser.add_argument("--rest-429-backoff-sec", type=float, default=float(os.getenv("HL_REST_429_BACKOFF_SEC", "2.5")))
+    parser.add_argument("--exec", dest="exec_mode", choices=("taker", "maker"),
+                        default=os.getenv("HL_EXEC_MODE", "taker"),
+                        help="taker = IOC qui croise le spread (défaut) | maker = limit post-only (0 slippage, frais maker)")
+    parser.add_argument("--maker-offset-pct", type=float,
+                        default=float(os.getenv("HL_MAKER_OFFSET_PCT", "0")),
+                        help="mode maker: %% derrière le touch, même convention que --max-spread-pct "
+                             "(ex 0.02 = 0.02%% = 2 bps; 0 = colle au BBO). Aussi choisissable au lancement.")
     parser.add_argument("--market-slippage-bps", type=float, default=float(os.getenv("HL_MARKET_SLIPPAGE_BPS", "5")))
     parser.add_argument("--market-cycle-cooldown", type=float, default=float(os.getenv("HL_MARKET_CYCLE_COOLDOWN", "0.12")))
     parser.add_argument("--account-sync-sec", type=float, default=float(os.getenv("HL_ACCOUNT_SYNC_SEC", "2")))
@@ -1398,6 +1584,8 @@ def build_config(argv: Optional[List[str]] = None) -> BotConfig:
         worldcup=worldcup,
         countries=parse_csv(args.countries),
         outcome_side=args.outcome_side,
+        exec_mode=str(args.exec_mode).strip().lower(),
+        maker_offset_pct=max(0.0, args.maker_offset_pct),
     )
 
 

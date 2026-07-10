@@ -311,6 +311,102 @@
         trigger.setAttribute("aria-expanded", "false");
     }
 
+    /* --------- WorldCup market picker (même composant que le token picker) --------- */
+    const WC_MARKETS = [
+        { key: "ALL", label: "Tous les marchés", logo: "WC", subtitle: "panier HIP-4 · outcome NO" },
+        { key: "France", label: "France", logo: "FR", subtitle: "2026 champion · NO" },
+        { key: "Argentina", label: "Argentina", logo: "AR", subtitle: "2026 champion · NO" },
+        { key: "Spain", label: "Spain", logo: "ES", subtitle: "2026 champion · NO" },
+        { key: "England", label: "England", logo: "EN", subtitle: "2026 champion · NO" },
+        { key: "Portugal", label: "Portugal", logo: "PT", subtitle: "2026 champion · NO" },
+        { key: "Germany", label: "Germany", logo: "DE", subtitle: "2026 champion · NO" },
+        { key: "Brazil", label: "Brazil", logo: "BR", subtitle: "2026 champion · NO" },
+        { key: "Netherlands", label: "Netherlands", logo: "NL", subtitle: "2026 champion · NO" },
+        { key: "USA", label: "USA", logo: "US", subtitle: "2026 champion · NO" },
+        { key: "Norway", label: "Norway", logo: "NO", subtitle: "2026 champion · NO" },
+        { key: "Morocco", label: "Morocco", logo: "MA", subtitle: "2026 champion · NO" },
+    ];
+    let selectedWcMarket = WC_MARKETS[0];
+
+    function setSelectedWcMarket(market) {
+        selectedWcMarket = market;
+        const hidden = $("#wc-market");
+        if (hidden) hidden.value = market.key;
+        setText("wc-market-logo", market.logo);
+        setText("wc-market-name", market.label);
+        setText("wc-market-symbol", market.subtitle);
+        renderWcMarketOptions($("#wc-market-search")?.value || "");
+    }
+
+    function renderWcMarketOptions(filter = "") {
+        const container = $("#wc-market-options");
+        if (!container) return;
+        const needle = filter.trim().toLowerCase();
+        const shown = WC_MARKETS.filter((market) => {
+            if (!needle) return true;
+            return `${market.key} ${market.label}`.toLowerCase().includes(needle);
+        });
+
+        if (shown.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "empty-option";
+            empty.textContent = "Aucun marché trouvé";
+            container.replaceChildren(empty);
+            return;
+        }
+
+        container.replaceChildren(
+            ...shown.map((market, index) => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "token-option";
+                button.setAttribute("role", "option");
+                button.tabIndex = index === 0 ? 0 : -1;
+                button.setAttribute("aria-selected", market.key === selectedWcMarket.key ? "true" : "false");
+                button.dataset.market = market.key;
+
+                const logo = document.createElement("span");
+                logo.className = "token-logo";
+                logo.textContent = market.logo;
+
+                const meta = document.createElement("span");
+                meta.className = "token-meta";
+
+                const name = document.createElement("strong");
+                name.textContent = market.label;
+
+                const subtitle = document.createElement("span");
+                subtitle.textContent = market.subtitle;
+
+                meta.append(name, subtitle);
+                button.append(logo, meta);
+                button.addEventListener("click", () => {
+                    setSelectedWcMarket(market);
+                    closeWcMarketPicker();
+                });
+                return button;
+            })
+        );
+    }
+
+    function openWcMarketPicker() {
+        const picker = $("#wc-market-picker");
+        const trigger = $("#wc-market-trigger");
+        if (!picker || !trigger) return;
+        picker.classList.add("open");
+        trigger.setAttribute("aria-expanded", "true");
+        renderWcMarketOptions($("#wc-market-search")?.value || "");
+        requestAnimationFrame(() => $("#wc-market-search")?.focus());
+    }
+
+    function closeWcMarketPicker() {
+        const picker = $("#wc-market-picker");
+        const trigger = $("#wc-market-trigger");
+        if (!picker || !trigger) return;
+        picker.classList.remove("open");
+        trigger.setAttribute("aria-expanded", "false");
+    }
+
     async function loadGridTokens() {
         setText("grid-token-count", "Loading");
         try {
@@ -402,6 +498,13 @@
         setText("grid-mid-price", formatPrice(data.mid_price));
         setText("grid-spread-display", formatBPS(data.spread_bps));
         setText("grid-position", formatUSD(data.position_usd));
+        setText("grid-passive-capture", formatUSD(data.net_passive_capture));
+        setText("grid-adverse-lost", formatUSD(data.net_adverse_lost));
+
+        const adverseCard = $("#grid-adverse-halt-card");
+        if (adverseCard) {
+            adverseCard.style.display = data.adverse_halt ? "flex" : "none";
+        }
 
         const pnl = $("#grid-pnl");
         if (pnl) {
@@ -447,15 +550,10 @@
 
     async function startGridBot() {
         const token = $("#grid-token")?.value || selectedGridToken.key || "SP500";
-        const spread_bps = Number.parseFloat($("#grid-spread")?.value) || 0;
-        const offset_bps = Number.parseFloat($("#grid-offset")?.value) || 0;
         const order_size_usd = Number.parseFloat($("#grid-order-size")?.value) || 15;
-        const max_position_usd = Number.parseFloat($("#grid-max-pos")?.value) || 500;
-        const num_levels = 1;
 
         if (!validateMin("grid", [
             { selector: "#grid-order-size", min: 10, fallback: order_size_usd, message: "Order USD must be at least 10." },
-            { selector: "#grid-max-pos", min: 10, fallback: max_position_usd, message: "Max Pos USD must be at least 10." },
         ])) {
             showToast("error", "Check Grid settings", "Correct the highlighted field before starting.");
             return;
@@ -464,17 +562,11 @@
         setBusy("grid-start-btn", true);
 
         try {
+            // Max position hardcodée côté bot: 1 x order (MAX_INVENTORY_ORDERS = 1).
             await fetchJson(`${API_BASE}/api/grid/start`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    token,
-                    spread_bps,
-                    offset_bps,
-                    order_size_usd,
-                    num_levels,
-                    max_position_usd,
-                }),
+                body: JSON.stringify({ token, order_size_usd }),
             });
             gridRunning = true;
             setText("grid-run-token", token);
@@ -504,9 +596,11 @@
     }
 
     async function startWorldcupBot() {
-        const order_size_usd = Number.parseFloat($("#wc-order-size")?.value) || 45;
-        const max_spread_bps = Number.parseFloat($("#wc-spread")?.value) || 2.0;
+        const order_size_usd = Number.parseFloat($("#wc-order-size")?.value) || 50;
+        // En %, même convention que --max-spread-pct (0.02 = 0.02% = 2 bps)
+        const max_spread_pct = Number.parseFloat($("#wc-spread")?.value) || 0.02;
         const max_position_usd = Number.parseFloat($("#wc-max-pos")?.value) || 250;
+        const market = $("#wc-market")?.value || "ALL";
 
         if (!validateMin("wc", [
             { selector: "#wc-order-size", min: 10, fallback: order_size_usd, message: "Order USD must be at least 10." },
@@ -522,11 +616,12 @@
             await fetchJson(`${API_BASE}/api/worldcup/start`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ order_size_usd, max_spread_bps, max_position_usd }),
+                body: JSON.stringify({ order_size_usd, max_spread_pct, max_position_usd, market }),
             });
             wcRunning = true;
             updateWcButtons();
-            showToast("success", "WorldCup bot started", "WorldCup strategy is now running.");
+            const marketTxt = market === "ALL" ? "tous les marchés" : market;
+            showToast("success", "WorldCup bot started", `${marketTxt} · spread < ${max_spread_pct}%`);
         } catch (error) {
             console.error("WorldCup start failed:", error);
             showToast("error", "WorldCup start failed", error.message);
@@ -577,7 +672,29 @@
         document.addEventListener("click", (event) => {
             const picker = $("#grid-token-picker");
             if (picker && !picker.contains(event.target)) closeTokenPicker();
+            const wcPicker = $("#wc-market-picker");
+            if (wcPicker && !wcPicker.contains(event.target)) closeWcMarketPicker();
         });
+
+        $("#wc-market-trigger")?.addEventListener("click", () => {
+            const picker = $("#wc-market-picker");
+            if (picker?.classList.contains("open")) closeWcMarketPicker();
+            else openWcMarketPicker();
+        });
+
+        $("#wc-market-search")?.addEventListener("input", (event) => {
+            renderWcMarketOptions(event.target.value);
+        });
+
+        $("#wc-market-search")?.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") closeWcMarketPicker();
+            if (event.key === "ArrowDown") {
+                event.preventDefault();
+                $("#wc-market-options .token-option")?.focus();
+            }
+        });
+
+        setSelectedWcMarket(selectedWcMarket);
 
         $("#grid-start-btn")?.addEventListener("click", startGridBot);
         $("#grid-stop-btn")?.addEventListener("click", stopGridBot);

@@ -14,6 +14,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
+
 import json
 import time
 import math
@@ -68,20 +69,30 @@ load_dotenv(Path(__file__).parent / ".env")
 # Pydantic request models
 # ---------------------------------------------------------------------------
 class GridStartRequest(BaseModel):
+    """Formulaire minimal: le marché et le notional par ordre. La stratégie
+    (spread 5 ticks du mid, reset 2 bps, cap 1 ordre) vit dans le bot."""
     token: str = "SP500"
-    spread_bps: float = 0
-    offset_bps: float = 0
-    order_size_usd: float = 15
-    # Kept for backward compatibility with older clients. The live strategy is
-    # intentionally locked to GRID_NUM_LEVELS by BotManager.start_grid().
+    order_size_usd: float = 100
+    # Champ legacy tolere: le Grid reste cape a 1 ordre max.
+    max_position_usd: Optional[float] = None
+    # Champs legacy tolérés (vieux onglets) — ignorés.
+    spread_ticks: Optional[float] = None
+    offset_ticks: Optional[float] = None
+    spread_bps: Optional[float] = None
+    offset_bps: Optional[float] = None
+    grid_reset_bps: Optional[float] = None
     num_levels: int = 1
-    max_position_usd: float = 500
 
 
 class WorldcupStartRequest(BaseModel):
-    order_size_usd: float = 45
+    order_size_usd: float = 50
+    # En %, même convention que --max-spread-pct (0.02 = 0.02% = 2 bps).
+    max_spread_pct: Optional[float] = None
+    # Legacy (vieux onglets): interprété en bps si max_spread_pct absent.
     max_spread_bps: float = 2.0
     max_position_usd: float = 250
+    # "ALL" = tous les marchés découverts, sinon un pays (ex "France").
+    market: str = "ALL"
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +120,12 @@ def _json_float(value: Any, ndigits: int = 2, default: float = 0.0) -> float:
 def _safe_import(module_name: str):
     """Import a module by name, returning None on failure."""
     try:
+        import sys
+        import importlib
+        if module_name in sys.modules:
+            # Force reload the module from disk to apply new edits/constants
+            logger.info("Forcing reload of module: %s", module_name)
+            return importlib.reload(sys.modules[module_name])
         return __import__(module_name)
     except Exception as exc:
         logger.error("Failed to import %s: %s", module_name, exc)
@@ -263,10 +280,9 @@ class BotManager:
             grid_mod.MIN_SIZE = min_size
             grid_mod.ORDER_SIZE = order_size
 
-            # Spread & offset
-            grid_mod.BASE_SPREAD_BPS = config.spread_bps
-            grid_mod.LEVEL_STEP_BPS = config.offset_bps if config.offset_bps > 0 else 1.0
-
+            # La stratégie N'EST PAS pilotée par l'UI: la version originale
+            # quote à FIXED_HALF_SPREAD_TICKS (5 ticks) du mid avec son reset
+            # 2 bps — mêmes réglages qu'un lancement console.
             grid_mod.NUM_LEVELS = GRID_NUM_LEVELS
 
             # IS_CROSS / LEVERAGE from token config if available
@@ -276,18 +292,14 @@ class BotManager:
             # Derived precision
             grid_mod.PRICE_DECIMALS = max(
                 0, -math.floor(math.log10(grid_mod.TICK_SIZE))
-            )
+            ) if grid_mod.TICK_SIZE < 1 else 0
             grid_mod.SIZE_DECIMALS = max(
                 0, -math.floor(math.log10(grid_mod.MIN_SIZE))
-            )
+            ) if grid_mod.MIN_SIZE < 1 else 0
 
-            # MAX_INVENTORY_ORDERS (exact division)
-            grid_mod.MAX_INVENTORY_ORDERS = max(
-                1,
-                int(config.max_position_usd / config.order_size_usd),
-            )
+            # Cap d'inventaire force: position max autorisee = 1 ordre.
+            grid_mod.MAX_INVENTORY_ORDERS = 1
 
-            # Store config for status reporting
             self.grid_config = config.model_dump()
             self.grid_config["num_levels"] = GRID_NUM_LEVELS
 
@@ -336,6 +348,9 @@ class BotManager:
             "mid_price": 0.0,
             "spread_bps": 0.0,
             "position_usd": 0.0,
+            "net_passive_capture": 0.0,
+            "net_adverse_lost": 0.0,
+            "adverse_halt": False,
             "config": self.grid_config,
         }
         if not self.grid_running or self.grid_bot is None:
@@ -373,6 +388,9 @@ class BotManager:
                     "mid_price": _json_float(bot.mid, 4),
                     "spread_bps": _json_float(spread_bps, 2),
                     "position_usd": _json_float(position_usd, 2),
+                    "net_passive_capture": _json_float(getattr(bot, 'net_passive_capture', 0.0), 4),
+                    "net_adverse_lost": _json_float(getattr(bot, 'net_adverse_lost', 0.0), 4),
+                    "adverse_halt": getattr(bot, 'adverse_halt', False),
                     "config": self.grid_config,
                 }
                 self._grid_stats_cache = result
@@ -415,7 +433,11 @@ class BotManager:
                 order_usd=config.order_size_usd,
                 min_order_usd=config.order_size_usd,
                 close_min_order_usd=0,
-                max_spread_pct=config.max_spread_bps / 100.0,
+                max_spread_pct=(
+                    config.max_spread_pct
+                    if config.max_spread_pct is not None
+                    else config.max_spread_bps / 100.0
+                ),
                 max_position_usd=config.max_position_usd,
                 min_action_interval_sec=0.03,
                 stale_sec=1.2,
@@ -439,11 +461,15 @@ class BotManager:
                 ),
                 scan_only=False,
                 worldcup=True,
-                countries=[
-                    "France", "Argentina", "Spain", "England", "Portugal",
-                    "Germany", "Brazil", "Netherlands", "USA", "Norway",
-                    "Morocco",
-                ],
+                countries=(
+                    [
+                        "France", "Argentina", "Spain", "England", "Portugal",
+                        "Germany", "Brazil", "Netherlands", "USA", "Norway",
+                        "Morocco",
+                    ]
+                    if str(config.market).strip().upper() in ("", "ALL")
+                    else [str(config.market).strip()]
+                ),
                 outcome_side="no",
             )
 
@@ -557,11 +583,16 @@ manager = BotManager()
 frontend_dir = Path(__file__).parent / "frontend"
 
 
+# no-store: le navigateur gardait d'anciennes versions de app.js/index.html en
+# cache, ce qui rendait les nouveaux composants (picker marché...) invisibles.
+_NO_CACHE = {"Cache-Control": "no-store, must-revalidate"}
+
+
 @app.get("/")
 async def serve_frontend():
     index = frontend_dir / "index.html"
     if index.exists():
-        return FileResponse(str(index))
+        return FileResponse(str(index), headers=_NO_CACHE)
     return JSONResponse(
         status_code=404,
         content={"detail": "frontend/index.html not found"},
@@ -572,7 +603,7 @@ async def serve_frontend():
 async def serve_css():
     css_file = frontend_dir / "index.css"
     if css_file.exists():
-        return FileResponse(str(css_file), media_type="text/css")
+        return FileResponse(str(css_file), media_type="text/css", headers=_NO_CACHE)
     return JSONResponse(status_code=404, content={"detail": "index.css not found"})
 
 
@@ -580,7 +611,7 @@ async def serve_css():
 async def serve_js():
     js_file = frontend_dir / "app.js"
     if js_file.exists():
-        return FileResponse(str(js_file), media_type="application/javascript")
+        return FileResponse(str(js_file), media_type="application/javascript", headers=_NO_CACHE)
     return JSONResponse(status_code=404, content={"detail": "app.js not found"})
 
 
@@ -650,6 +681,26 @@ async def stop_grid():
             content={"status": "error", "message": str(e)},
         )
 
+@app.post("/api/grid/restart")
+async def restart_grid():
+    try:
+        if not manager.grid_config:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "No previous configuration to restart"},
+            )
+        req = GridStartRequest(**manager.grid_config)
+        manager.stop_grid()
+        time.sleep(1) # Ensure connection closed properly
+        manager.start_grid(req)
+        return {"status": "ok", "message": "Grid bot restarted"}
+    except Exception as e:
+        logger.exception("Failed to restart Grid bot")
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": str(e)},
+        )
+
 
 @app.get("/api/grid/status")
 async def grid_status():
@@ -707,7 +758,8 @@ async def websocket_endpoint(websocket: WebSocket):
             )
             await websocket.send_json(grid_stats)
             await websocket.send_json(wc_stats)
-            await asyncio.sleep(2)
+            # 1 s: le chrono du dashboard doit avancer seconde par seconde
+            await asyncio.sleep(1)
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
     except Exception:
