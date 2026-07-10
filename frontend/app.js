@@ -2,11 +2,24 @@
     "use strict";
 
     const isFile = window.location.protocol === "file:";
-    const apiHost = isFile ? "localhost:8080" : window.location.host;
-    const apiProtocol = isFile ? "http:" : window.location.protocol;
-    const wsProtocol = apiProtocol === "https:" ? "wss:" : "ws:";
-    const API_BASE = `${apiProtocol}//${apiHost}`;
-    const WS_URL = `${wsProtocol}//${apiHost}/ws`;
+    const configuredApiBase = String(
+        window.ZEUS_CONFIG?.apiBase || window.ZEUS_API_BASE || ""
+    ).trim();
+    const configuredWsUrl = String(
+        window.ZEUS_CONFIG?.wsUrl || window.ZEUS_WS_URL || ""
+    ).trim();
+    const configuredApiToken = String(
+        window.ZEUS_CONFIG?.apiToken || window.ZEUS_API_TOKEN || ""
+    ).trim();
+    const localApiBase = isFile ? "http://localhost:8080" : window.location.origin;
+    const API_BASE = (configuredApiBase || localApiBase).replace(/\/+$/, "");
+    const WS_URL = (() => {
+        if (configuredWsUrl) return configuredWsUrl;
+        const url = new URL(`${API_BASE}/ws`);
+        url.protocol = new URL(API_BASE).protocol === "https:" ? "wss:" : "ws:";
+        if (configuredApiToken) url.searchParams.set("token", configuredApiToken);
+        return url.toString();
+    })();
 
     let ws = null;
     let reconnectTimer = null;
@@ -180,8 +193,10 @@
         });
     }
 
-    async function fetchJson(url, options) {
-        const resp = await fetch(url, options);
+    async function fetchJson(url, options = {}) {
+        const headers = new Headers(options.headers || {});
+        if (configuredApiToken) headers.set("X-API-Token", configuredApiToken);
+        const resp = await fetch(url, { ...options, headers });
         let data = {};
         try {
             data = await resp.json();

@@ -22,10 +22,11 @@ import threading
 import asyncio
 import logging
 import signal
+import secrets
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,6 +65,28 @@ def load_dotenv(path: Path) -> None:
 
 # Load .env at import time so bot modules can see the env vars
 load_dotenv(Path(__file__).parent / ".env")
+
+BOT_API_TOKEN = os.getenv("BOT_API_TOKEN", "").strip()
+BOT_CORS_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv("BOT_CORS_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+
+
+def _require_api_token(request: Request) -> None:
+    """Protect control/status HTTP endpoints when BOT_API_TOKEN is configured."""
+    if not BOT_API_TOKEN:
+        return
+
+    provided = request.headers.get("x-api-token", "").strip()
+    if not provided:
+        authorization = request.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            provided = authorization[7:].strip()
+
+    if not provided or not secrets.compare_digest(provided, BOT_API_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid API token")
 
 # ---------------------------------------------------------------------------
 # Pydantic request models
@@ -569,8 +592,8 @@ app = FastAPI(title="Trading Bot Dashboard")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=BOT_CORS_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -615,6 +638,14 @@ async def serve_js():
     return JSONResponse(status_code=404, content={"detail": "app.js not found"})
 
 
+@app.get("/config.js")
+async def serve_config():
+    config_file = frontend_dir / "config.js"
+    if config_file.exists():
+        return FileResponse(str(config_file), media_type="application/javascript", headers=_NO_CACHE)
+    return JSONResponse(status_code=404, content={"detail": "config.js not found"})
+
+
 # Mount static directory for any other assets (images, fonts, etc.)
 if frontend_dir.exists():
     app.mount(
@@ -626,8 +657,13 @@ if frontend_dir.exists():
 # ---------------------------------------------------------------------------
 # REST API — Grid Bot
 # ---------------------------------------------------------------------------
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "zeus-bot"}
+
+
 @app.get("/api/grid/tokens")
-async def get_grid_tokens():
+async def get_grid_tokens(_: None = Depends(_require_api_token)):
     """Return available HIP-3 token metadata for the Grid bot picker."""
     try:
         import MM_GRID_ADAPTIVE_version_originale as grid_mod
@@ -657,7 +693,7 @@ async def get_grid_tokens():
 
 
 @app.post("/api/grid/start")
-async def start_grid(req: GridStartRequest):
+async def start_grid(req: GridStartRequest, _: None = Depends(_require_api_token)):
     try:
         manager.start_grid(req)
         return {"status": "ok", "message": f"Grid bot started on {req.token}"}
@@ -670,7 +706,7 @@ async def start_grid(req: GridStartRequest):
 
 
 @app.post("/api/grid/stop")
-async def stop_grid():
+async def stop_grid(_: None = Depends(_require_api_token)):
     try:
         manager.stop_grid()
         return {"status": "ok", "message": "Grid bot stopped"}
@@ -682,7 +718,7 @@ async def stop_grid():
         )
 
 @app.post("/api/grid/restart")
-async def restart_grid():
+async def restart_grid(_: None = Depends(_require_api_token)):
     try:
         if not manager.grid_config:
             return JSONResponse(
@@ -703,7 +739,7 @@ async def restart_grid():
 
 
 @app.get("/api/grid/status")
-async def grid_status():
+async def grid_status(_: None = Depends(_require_api_token)):
     return manager.get_grid_stats()
 
 
@@ -711,7 +747,7 @@ async def grid_status():
 # REST API — WorldCup Bot
 # ---------------------------------------------------------------------------
 @app.post("/api/worldcup/start")
-async def start_worldcup(req: WorldcupStartRequest):
+async def start_worldcup(req: WorldcupStartRequest, _: None = Depends(_require_api_token)):
     try:
         manager.start_worldcup(req)
         return {"status": "ok", "message": "WorldCup bot started"}
@@ -724,7 +760,7 @@ async def start_worldcup(req: WorldcupStartRequest):
 
 
 @app.post("/api/worldcup/stop")
-async def stop_worldcup():
+async def stop_worldcup(_: None = Depends(_require_api_token)):
     try:
         manager.stop_worldcup()
         return {"status": "ok", "message": "WorldCup bot stopped"}
@@ -737,7 +773,7 @@ async def stop_worldcup():
 
 
 @app.get("/api/worldcup/status")
-async def worldcup_status():
+async def worldcup_status(_: None = Depends(_require_api_token)):
     return manager.get_worldcup_stats()
 
 
@@ -746,6 +782,11 @@ async def worldcup_status():
 # ---------------------------------------------------------------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    if BOT_API_TOKEN:
+        provided = websocket.query_params.get("token", "").strip()
+        if not provided or not secrets.compare_digest(provided, BOT_API_TOKEN):
+            await websocket.close(code=1008, reason="Invalid API token")
+            return
     await websocket.accept()
     manager.ws_clients.add(websocket)
     logger.info("WebSocket client connected (%d total)", len(manager.ws_clients))
@@ -780,4 +821,9 @@ if __name__ == "__main__":
     print("=" * 60)
     print()
 
-    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
+    uvicorn.run(
+        app,
+        host=os.getenv("BOT_HOST", "0.0.0.0"),
+        port=int(os.getenv("BOT_PORT", "8080")),
+        log_level="info",
+    )
