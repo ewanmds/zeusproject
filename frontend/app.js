@@ -8,18 +8,24 @@
     const configuredWsUrl = String(
         window.ZEUS_CONFIG?.wsUrl || window.ZEUS_WS_URL || ""
     ).trim();
-    const configuredApiToken = String(
+    // Code d'accès: fourni par config.js (build Vercel) OU saisi sur la page
+    // d'accueil et mémorisé dans localStorage (pas besoin de le retaper).
+    const TOKEN_STORAGE_KEY = "zeus_access_code";
+    let apiToken = String(
         window.ZEUS_CONFIG?.apiToken || window.ZEUS_API_TOKEN || ""
     ).trim();
+    if (!apiToken) {
+        try { apiToken = (localStorage.getItem(TOKEN_STORAGE_KEY) || "").trim(); } catch { /* private mode */ }
+    }
     const localApiBase = isFile ? "http://localhost:8080" : window.location.origin;
     const API_BASE = (configuredApiBase || localApiBase).replace(/\/+$/, "");
-    const WS_URL = (() => {
+    function buildWsUrl() {
         if (configuredWsUrl) return configuredWsUrl;
         const url = new URL(`${API_BASE}/ws`);
         url.protocol = new URL(API_BASE).protocol === "https:" ? "wss:" : "ws:";
-        if (configuredApiToken) url.searchParams.set("token", configuredApiToken);
+        if (apiToken) url.searchParams.set("token", apiToken);
         return url.toString();
-    })();
+    }
 
     let ws = null;
     let reconnectTimer = null;
@@ -167,9 +173,11 @@
     }
 
     function updateGridButtons() {
+        // Multi-bot: Start reste toujours actif (déployer un autre token);
+        // Stop (global) n'est actif que si au moins un bot tourne.
         const startBtn = $("#grid-start-btn");
         const stopBtn = $("#grid-stop-btn");
-        if (startBtn) startBtn.disabled = gridRunning;
+        if (startBtn) startBtn.disabled = false;
         if (stopBtn) stopBtn.disabled = !gridRunning;
         setRunState("grid", gridRunning);
     }
@@ -195,13 +203,17 @@
 
     async function fetchJson(url, options = {}) {
         const headers = new Headers(options.headers || {});
-        if (configuredApiToken) headers.set("X-API-Token", configuredApiToken);
+        if (apiToken) headers.set("X-API-Token", apiToken);
         const resp = await fetch(url, { ...options, headers });
         let data = {};
         try {
             data = await resp.json();
         } catch {
             data = {};
+        }
+        if (resp.status === 401) {
+            lockApp("Code d'accès invalide — entre-le à nouveau.");
+            throw new Error("Code d'accès invalide");
         }
         if (!resp.ok) {
             throw new Error(data.message || data.detail || `HTTP ${resp.status}`);
@@ -459,7 +471,7 @@
         if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
         try {
-            ws = new WebSocket(WS_URL);
+            ws = new WebSocket(buildWsUrl());
         } catch {
             scheduleReconnect();
             return;
@@ -504,36 +516,91 @@
     }
 
     function updateGridDashboard(data) {
-        setText("grid-duration", data.duration || "00:00:00");
+        // Plus de cartes agrégées: tout l'affichage vit dans les cartes
+        // par token (renderBotsList). Seul le bandeau de session reste.
         setText("grid-run-duration", data.duration || "00:00:00");
-        setText("grid-volume", formatUSD(data.volume_usd));
-        setText("grid-fees", formatUSD(data.fees));
-        setText("grid-cost-1m", formatUSD(data.cost_per_1m));
-        setText("grid-fills", String(data.fills || 0));
-        setText("grid-mid-price", formatPrice(data.mid_price));
-        setText("grid-spread-display", formatBPS(data.spread_bps));
-        setText("grid-position", formatUSD(data.position_usd));
-        setText("grid-passive-capture", formatUSD(data.net_passive_capture));
-        setText("grid-adverse-lost", formatUSD(data.net_adverse_lost));
 
-        const adverseCard = $("#grid-adverse-halt-card");
-        if (adverseCard) {
-            adverseCard.style.display = data.adverse_halt ? "flex" : "none";
-        }
-
-        const pnl = $("#grid-pnl");
-        if (pnl) {
-            pnl.textContent = formatUSD(data.net_pnl, true);
-            setPnLColor(pnl, data.net_pnl);
-        }
-
-        const token = data.config?.token || selectedGridToken.key;
+        const bots = Array.isArray(data.bots) ? data.bots : [];
+        const runningTokens = bots.filter((b) => b.running).map((b) => b.token);
+        const token = runningTokens.length
+            ? runningTokens.join(" · ")
+            : (data.config?.token || selectedGridToken.key);
         setText("grid-run-token", token);
+
+        renderBotsList(bots);
 
         if (typeof data.running === "boolean") {
             gridRunning = data.running;
             updateGridButtons();
         }
+    }
+
+    function renderBotsList(bots) {
+        const container = $("#grid-bots-list");
+        if (!container) return;
+        if (!bots.length) {
+            container.hidden = true;
+            container.innerHTML = "";
+            container.dataset.tokens = "";
+            return;
+        }
+        container.hidden = false;
+
+        // Reconstruire le DOM seulement si la liste de tokens change; sinon
+        // ne mettre à jour que les valeurs (pas de flicker à 1 Hz).
+        const signature = bots.map((b) => b.token).join("|");
+        if (container.dataset.tokens !== signature) {
+            container.dataset.tokens = signature;
+            container.innerHTML = bots.map((b) => `
+              <article class="bot-card" data-token="${b.token}">
+                <header class="bot-card-head">
+                  <span class="bot-dot" aria-hidden="true"></span>
+                  <strong class="bot-card-token">${b.token}</strong>
+                  <span class="bot-card-duration" data-f="duration">00:00:00</span>
+                  <button class="btn btn-stop bot-card-stop" type="button" data-token="${b.token}">
+                    Stop
+                  </button>
+                </header>
+                <div class="bot-card-grid">
+                  <div class="bot-stat"><span>Mid</span><strong data-f="mid">—</strong></div>
+                  <div class="bot-stat"><span>Volume</span><strong data-f="vol">—</strong></div>
+                  <div class="bot-stat"><span>Net PnL</span><strong data-f="pnl">—</strong></div>
+                  <div class="bot-stat"><span>Fees</span><strong data-f="fees">—</strong></div>
+                  <div class="bot-stat"><span>Cost/1M</span><strong data-f="cost">—</strong></div>
+                  <div class="bot-stat"><span>Fills</span><strong data-f="fills">—</strong></div>
+                  <div class="bot-stat"><span>Position</span><strong data-f="pos">—</strong></div>
+                  <div class="bot-stat"><span>Spread</span><strong data-f="spread">—</strong></div>
+                </div>
+                <footer class="bot-card-action" data-f="action"></footer>
+              </article>`).join("");
+            container.querySelectorAll(".bot-card-stop").forEach((btn) => {
+                btn.addEventListener("click", () => stopGridBot(btn.dataset.token));
+            });
+        }
+
+        bots.forEach((b) => {
+            const card = container.querySelector(`.bot-card[data-token="${b.token}"]`);
+            if (!card) return;
+            card.classList.toggle("stopped", !b.running);
+            const set = (f, v) => {
+                const el = card.querySelector(`[data-f="${f}"]`);
+                if (el && el.textContent !== v) el.textContent = v;
+            };
+            set("duration", b.duration || "00:00:00");
+            set("mid", formatPrice(b.mid_price));
+            set("vol", formatUSD(b.volume_usd));
+            set("pnl", formatUSD(b.net_pnl, true));
+            const pnlEl = card.querySelector('[data-f="pnl"]');
+            if (pnlEl) setPnLColor(pnlEl, b.net_pnl);
+            set("fees", formatUSD(b.fees));
+            set("cost", formatUSD(b.cost_per_1m));
+            set("fills", String(b.fills || 0));
+            set("pos", formatUSD(b.position_usd));
+            set("spread", formatBPS(b.spread_bps));
+            set("action", b.error ? `⚠ ${b.error}` : (b.action || ""));
+            const stopBtn = card.querySelector(".bot-card-stop");
+            if (stopBtn) stopBtn.style.display = b.running ? "" : "none";
+        });
     }
 
     function updateWorldcupDashboard(data) {
@@ -570,7 +637,7 @@
         if (!validateMin("grid", [
             { selector: "#grid-order-size", min: 10, fallback: order_size_usd, message: "Order USD must be at least 10." },
         ])) {
-            showToast("error", "Check Grid settings", "Correct the highlighted field before starting.");
+            showToast("error", "Check OBI settings", "Correct the highlighted field before starting.");
             return;
         }
 
@@ -586,25 +653,29 @@
             gridRunning = true;
             setText("grid-run-token", token);
             updateGridButtons();
-            showToast("success", "Grid bot started", `${token} is now running.`);
+            showToast("success", "OBI bot started", `${token} is now running.`);
         } catch (error) {
-            console.error("Grid start failed:", error);
-            showToast("error", "Grid start failed", error.message);
+            console.error("OBI start failed:", error);
+            showToast("error", "OBI start failed", error.message);
         } finally {
             setBusy("grid-start-btn", false);
         }
     }
 
-    async function stopGridBot() {
+    async function stopGridBot(token) {
+        // token précis → stoppe ce bot; sans token → stoppe TOUS les bots.
         setBusy("grid-stop-btn", true);
         try {
-            await fetchJson(`${API_BASE}/api/grid/stop`, { method: "POST" });
-            gridRunning = false;
-            updateGridButtons();
-            showToast("info", "Grid bot stopped", "Open orders are handled by the backend stop flow.");
+            await fetchJson(`${API_BASE}/api/grid/stop`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(token ? { token } : {}),
+            });
+            showToast("info", token ? `Bot ${token} stopped` : "All bots stopped",
+                "Cancel all + flatten market exécutés par le bot avant l'arrêt.");
         } catch (error) {
-            console.error("Grid stop failed:", error);
-            showToast("error", "Grid stop failed", error.message);
+            console.error("Stop failed:", error);
+            showToast("error", "Stop failed", error.message);
         } finally {
             setBusy("grid-stop-btn", false);
         }
@@ -660,6 +731,114 @@
         }
     }
 
+    // ------------------------------------------------------------ access gate
+    let appBooted = false;
+
+    function bootApp() {
+        if (appBooted) return;
+        appBooted = true;
+        loadGridTokens();
+        loadInitialStatus();
+        connectWebSocket();
+    }
+
+    function showAccessGate(message) {
+        const gate = $("#access-gate");
+        if (!gate) return;
+        gate.hidden = false;
+        const err = $("#access-gate-error");
+        if (err) {
+            err.textContent = message || "";
+            err.hidden = !message;
+        }
+        requestAnimationFrame(() => $("#access-code-input")?.focus());
+    }
+
+    function hideAccessGate() {
+        const gate = $("#access-gate");
+        if (gate) gate.hidden = true;
+    }
+
+    function lockApp(message) {
+        try { localStorage.removeItem(TOKEN_STORAGE_KEY); } catch { /* private mode */ }
+        apiToken = "";
+        if (ws) {
+            try { ws.close(); } catch { /* déjà fermé */ }
+            ws = null;
+        }
+        showAccessGate(message);
+    }
+
+    async function submitAccessCode() {
+        const input = $("#access-code-input");
+        const code = (input?.value || "").trim();
+        if (!code) {
+            showAccessGate("Entre le code d'accès.");
+            return;
+        }
+        setBusy("access-code-submit", true);
+        apiToken = code;
+        try {
+            await fetchJson(`${API_BASE}/api/health`);
+            try { localStorage.setItem(TOKEN_STORAGE_KEY, code); } catch { /* private mode */ }
+            hideAccessGate();
+            showToast("success", "Accès autorisé", "Code mémorisé sur ce navigateur.");
+            bootApp();
+            if (ws) {
+                try { ws.close(); } catch { /* reconnexion avec token */ }
+                ws = null;
+            }
+            connectWebSocket();
+        } catch (error) {
+            if (String(error.message).includes("invalide")) {
+                // 401: lockApp a déjà réaffiché la porte avec le message.
+            } else {
+                // Backend injoignable: on mémorise quand même — un 401 plus
+                // tard re-verrouillera si le code est faux.
+                try { localStorage.setItem(TOKEN_STORAGE_KEY, code); } catch { /* private mode */ }
+                hideAccessGate();
+                showToast("error", "Backend injoignable",
+                    "Code mémorisé. Utilise le bouton Backend pour retester la connexion.");
+                bootApp();
+            }
+        } finally {
+            setBusy("access-code-submit", false);
+        }
+    }
+
+    async function checkBackend() {
+        setBusy("backend-connect-btn", true);
+        try {
+            await fetchJson(`${API_BASE}/api/health`);
+            showToast("success", "Backend en ligne", API_BASE);
+            if (!appBooted) bootApp();
+            if (!ws || (ws.readyState !== WebSocket.OPEN && ws.readyState !== WebSocket.CONNECTING)) {
+                connectWebSocket();
+            }
+            loadInitialStatus();
+        } catch (error) {
+            showToast("error", "Backend injoignable", `${API_BASE} — ${error.message}`);
+        } finally {
+            setBusy("backend-connect-btn", false);
+        }
+    }
+
+    async function initAccess() {
+        if (apiToken) {
+            hideAccessGate();
+            bootApp();
+            return;
+        }
+        try {
+            // Backend sans code configuré (usage local): entrer directement.
+            await fetchJson(`${API_BASE}/api/health`);
+            bootApp();
+        } catch {
+            // 401 → lockApp a montré la porte; réseau → montrer la porte aussi.
+            showAccessGate();
+        }
+    }
+
     document.addEventListener("DOMContentLoaded", () => {
 
         $$(".nav-tab").forEach((tab) => {
@@ -712,7 +891,7 @@
         setSelectedWcMarket(selectedWcMarket);
 
         $("#grid-start-btn")?.addEventListener("click", startGridBot);
-        $("#grid-stop-btn")?.addEventListener("click", stopGridBot);
+        $("#grid-stop-btn")?.addEventListener("click", () => stopGridBot());
         $("#wc-start-btn")?.addEventListener("click", startWorldcupBot);
         $("#wc-stop-btn")?.addEventListener("click", stopWorldcupBot);
 
@@ -721,8 +900,15 @@
         updateGridButtons();
         updateWcButtons();
 
-        loadGridTokens();
-        loadInitialStatus();
-        connectWebSocket();
+        $("#access-code-submit")?.addEventListener("click", submitAccessCode);
+        $("#access-code-input")?.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                submitAccessCode();
+            }
+        });
+        $("#backend-connect-btn")?.addEventListener("click", checkBackend);
+
+        initAccess();
     });
 })();

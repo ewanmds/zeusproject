@@ -37,7 +37,7 @@
     <nav class="strategy-tabs" role="tablist" aria-label="Strategies">
       <button class="nav-tab active" type="button" role="tab" id="tab-grid" aria-selected="true" aria-controls="page-grid" data-page="grid">
         <svg aria-hidden="true"><use href="#icon-grid"></use></svg>
-        Grid Adaptive
+        OBI Volume Bot
       </button>
       <button class="nav-tab" type="button" role="tab" id="tab-worldcup" aria-selected="false" aria-controls="page-worldcup" data-page="worldcup">
         <svg aria-hidden="true"><use href="#icon-cup"></use></svg>
@@ -46,6 +46,10 @@
     </nav>
 
     <div class="topbar-actions">
+      <button class="backend-btn" id="backend-connect-btn" type="button" title="Tester / reconnecter le backend">
+        <svg aria-hidden="true"><use href="#icon-play"></use></svg>
+        Backend
+      </button>
       <div class="connection-pill">
         <span class="status-dot" aria-hidden="true"></span>
         <span class="status-text">Offline</span>
@@ -56,14 +60,28 @@
     </div>
   </header>
 
+  <!-- Page d'accueil sécurisée: code d'accès (mémorisé en localStorage) -->
+  <div class="access-gate" id="access-gate" hidden>
+    <div class="access-card">
+      <div class="brand-mark access-brand" aria-hidden="true">HL</div>
+      <h2>Accès protégé</h2>
+      <p>Entre le code d'accès pour ouvrir le Control Deck.<br>
+         Il sera mémorisé sur ce navigateur.</p>
+      <input type="password" id="access-code-input" placeholder="Code d'accès"
+             autocomplete="current-password" spellcheck="false">
+      <p class="access-error" id="access-gate-error" hidden></p>
+      <button class="btn btn-start access-submit" id="access-code-submit" type="button">Entrer</button>
+    </div>
+  </div>
+
   <main id="main-content">
     <section id="page-grid" class="page active" role="tabpanel" aria-labelledby="tab-grid">
       <div class="workspace">
         <aside class="control-panel">
           <header class="panel-head">
             <div class="panel-copy">
-              <h2 class="panel__title" id="grid-heading">Grid Adaptive</h2>
-              <p class="panel__desc">Single-level grid on HIP-3 markets.</p>
+              <h2 class="panel__title" id="grid-heading">OBI Volume Bot</h2>
+              <p class="panel__desc">Order-book-imbalance maker on HIP-3 — multi-token, un process par marché.</p>
             </div>
             <span class="state-pill" id="grid-state-pill" hidden>Live</span>
           </header>
@@ -104,7 +122,7 @@
               <div class="field">
                 <label for="grid-order-size">Order (USD)</label>
                 <input type="number" id="grid-order-size" value="100" min="10" step="1" inputmode="decimal">
-                <span class="field-hint">Max position = 2 × order (fixe)</span>
+                <span class="field-hint">Max position = 2 × order · signal OBI + markout + EV gate</span>
               </div>
             </fieldset>
 
@@ -124,7 +142,7 @@
           </form>
         </aside>
 
-        <section class="dashboard" aria-label="Grid session stats">
+        <section class="dashboard" aria-label="OBI session stats">
           <div class="run-banner" id="grid-run-banner" hidden>
             <span class="run-dot" aria-hidden="true"></span>
             <div class="run-copy">
@@ -133,70 +151,8 @@
             </div>
           </div>
 
-          <div class="metrics-grid">
-            <article class="metric-card">
-              <div class="metric-icon" aria-hidden="true">
-                <svg><use href="#icon-cup"></use></svg>
-              </div>
-              <span class="metric-label">Net PnL</span>
-              <strong class="metric-value positive" id="grid-pnl">$0.00</strong>
-              <span class="metric-foot">Real-time profit/loss</span>
-            </article>
-
-            <article class="metric-card">
-              <div class="metric-icon" aria-hidden="true">
-                <svg><use href="#icon-grid"></use></svg>
-              </div>
-              <span class="metric-label">Duration</span>
-              <strong class="metric-value metric-mono" id="grid-duration">00:00:00</strong>
-              <span class="metric-foot">Elapsed time</span>
-            </article>
-
-            <article class="metric-card">
-              <div class="metric-icon" aria-hidden="true">
-                <svg><use href="#icon-play"></use></svg>
-              </div>
-              <span class="metric-label">Volume</span>
-              <strong class="metric-value metric-mono" id="grid-volume">$0.00</strong>
-              <span class="metric-foot">Total traded volume</span>
-            </article>
-
-            <article class="metric-card">
-              <div class="metric-icon" aria-hidden="true">
-                <svg><use href="#icon-info"></use></svg>
-              </div>
-              <span class="metric-label">Fees</span>
-              <strong class="metric-value metric-mono" id="grid-fees">$0.00</strong>
-              <span class="metric-foot">Execution fees</span>
-            </article>
-
-            <article class="metric-card">
-              <div class="metric-icon" aria-hidden="true">
-                <svg><use href="#icon-alert"></use></svg>
-              </div>
-              <span class="metric-label">Cost / 1M</span>
-              <strong class="metric-value metric-mono" id="grid-cost-1m">$0.00</strong>
-              <span class="metric-foot">Cost per million</span>
-            </article>
-
-            <article class="metric-card">
-              <div class="metric-icon" aria-hidden="true">
-                <svg><use href="#icon-check"></use></svg>
-              </div>
-              <span class="metric-label">Fills</span>
-              <strong class="metric-value metric-mono" id="grid-fills">0</strong>
-              <span class="metric-foot">Filled orders count</span>
-            </article>
-
-            <article class="metric-card" id="grid-adverse-halt-card" style="display: none;">
-              <div class="metric-icon" aria-hidden="true" style="color: red;">
-                <svg><use href="#icon-alert"></use></svg>
-              </div>
-              <span class="metric-label" style="color: red;">Adverse Halt</span>
-              <strong class="metric-value metric-mono" style="color: red;">ACTIVE</strong>
-              <span class="metric-foot">Draining Position</span>
-            </article>
-          </div>
+          <!-- Bots actifs (multi-process): une carte par token, stop individuel -->
+          <div class="bots-list" id="grid-bots-list" hidden></div>
         </section>
       </div>
     </section>

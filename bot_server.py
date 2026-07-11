@@ -1,8 +1,9 @@
 """
 Trading Bot Dashboard — FastAPI Backend Server
 ================================================
-Wraps two trading bots (Grid Adaptive & WorldCup Spread) and exposes
+Wraps two trading bots (OBI Volume Bot & WorldCup Spread) and exposes
 REST API + WebSocket endpoints for a frontend dashboard.
+(L'onglet "Grid" du frontend pilote désormais OBI_VOLUME_BOT.)
 """
 
 import os
@@ -23,6 +24,7 @@ import asyncio
 import logging
 import signal
 import secrets
+import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -64,7 +66,8 @@ def load_dotenv(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 # Load .env at import time so bot modules can see the env vars
-load_dotenv(Path(__file__).parent / ".env")
+BASE_DIR = Path(__file__).parent
+load_dotenv(BASE_DIR / ".env")
 
 BOT_API_TOKEN = os.getenv("BOT_API_TOKEN", "").strip()
 BOT_CORS_ORIGINS = [
@@ -105,6 +108,11 @@ class GridStartRequest(BaseModel):
     offset_bps: Optional[float] = None
     grid_reset_bps: Optional[float] = None
     num_levels: int = 1
+
+
+class GridStopRequest(BaseModel):
+    """Stop ciblé: token précis, ou tous les bots si omis."""
+    token: Optional[str] = None
 
 
 class WorldcupStartRequest(BaseModel):
@@ -220,11 +228,10 @@ class BotManager:
     """Manages lifecycle and stats for both trading bots."""
 
     def __init__(self) -> None:
-        # Grid Adaptive bot state
-        self.grid_bot = None          # GridMarketMaker instance
-        self.grid_thread: Optional[threading.Thread] = None
-        self.grid_running: bool = False
-        self.grid_config: Dict[str, Any] = {}
+        # OBI bots: un PROCESS ENFANT par token. token_key -> {proc, symbol,
+        # stats_file, stop_file, log, started, config}
+        self.obi_procs: Dict[str, Dict[str, Any]] = {}
+        self.grid_config: Dict[str, Any] = {}   # dernière config (restart)
 
         # WorldCup Spread bot state
         self.wc_bot = None            # HyperliquidSpreadBot instance
@@ -246,117 +253,116 @@ class BotManager:
     # Grid Adaptive Bot
     # -----------------------------------------------------------------------
     def start_grid(self, config: GridStartRequest) -> None:
-        with self.lock:
-            if self.grid_running:
-                raise RuntimeError("Grid bot is already running")
-
-            grid_mod = _safe_import("MM_GRID_ADAPTIVE_version_originale")
-            if grid_mod is None:
-                raise RuntimeError(
-                    "Cannot import MM_GRID_ADAPTIVE_version_originale — "
-                    "make sure the file is in the same directory"
-                )
-
-            # Order sizing influences dynamic token size derivation.
-            grid_mod.TARGET_ORDER_NOTIONAL_USD = max(12.0, config.order_size_usd)
-
-            # Look up token configuration. If the token is not in the local
-            # presets, refresh the live HIP-3 catalog and merge it into TOKENS.
-            token_key = _grid_token_key(config.token)
-            if token_key not in grid_mod.TOKENS:
-                try:
-                    _refresh_grid_token_catalog(grid_mod)
-                except Exception:
-                    logger.exception("Failed to refresh HIP-3 token catalog")
-            if token_key not in grid_mod.TOKENS:
-                raise ValueError(
-                    f"Unknown token '{config.token}'. "
-                    f"Available: {list(grid_mod.TOKENS.keys())}"
-                )
-            token_cfg = grid_mod.TOKENS[token_key]
-
-            # Resolve current mid price for sizing
-            mid = float(token_cfg.get("api_mid", 0.0))
-            if mid <= 0:
-                try:
-                    mids = grid_mod._fetch_all_mids()
-                    mid = float(mids.get(token_cfg["symbol"], 0.0))
-                except Exception:
-                    pass
-            if mid <= 0:
-                mid = 7500.0 if "SP500" in token_cfg["symbol"] or "US500" in token_cfg["symbol"] else 1.0
-
-            # Calculate ORDER_SIZE dynamically based on order_size_usd
-            sz_decimals = token_cfg.get("sz_decimals")
-            if sz_decimals is None:
-                min_size = token_cfg.get("min_size", 0.001)
-                sz_decimals = max(0, -math.floor(math.log10(min_size)))
-            else:
-                min_size = 10.0 ** (-sz_decimals) if sz_decimals > 0 else 1.0
-
-            raw_size = config.order_size_usd / mid
-            order_size = max(min_size, round(raw_size, sz_decimals))
-
-            # Set module-level globals
-            grid_mod.SYMBOL = token_cfg["symbol"]
-            grid_mod.TICK_SIZE = token_cfg["tick_size"]
-            grid_mod.MIN_SIZE = min_size
-            grid_mod.ORDER_SIZE = order_size
-
-            # La stratégie N'EST PAS pilotée par l'UI: la version originale
-            # quote à FIXED_HALF_SPREAD_TICKS (5 ticks) du mid avec son reset
-            # 2 bps — mêmes réglages qu'un lancement console.
-            grid_mod.NUM_LEVELS = GRID_NUM_LEVELS
-
-            # IS_CROSS / LEVERAGE from token config if available
-            grid_mod.IS_CROSS = token_cfg.get("is_cross", True)
-            grid_mod.LEVERAGE = max(1, min(50, int(token_cfg.get("max_leverage", 50) or 50)))
-
-            # Derived precision
-            grid_mod.PRICE_DECIMALS = max(
-                0, -math.floor(math.log10(grid_mod.TICK_SIZE))
-            ) if grid_mod.TICK_SIZE < 1 else 0
-            grid_mod.SIZE_DECIMALS = max(
-                0, -math.floor(math.log10(grid_mod.MIN_SIZE))
-            ) if grid_mod.MIN_SIZE < 1 else 0
-
-            # Cap d'inventaire force: position max autorisee = 1 ordre.
-            grid_mod.MAX_INVENTORY_ORDERS = 1
-
-            self.grid_config = config.model_dump()
-            self.grid_config["num_levels"] = GRID_NUM_LEVELS
-
-            def run_grid():
-                try:
-                    logger.info("Grid bot thread starting for %s", token_key)
-                    self.grid_bot = grid_mod.GridMarketMaker()
-                    self.grid_bot.run()
-                except Exception:
-                    logger.exception("Grid bot crashed")
-                finally:
-                    self.grid_running = False
-                    logger.info("Grid bot thread exited")
-
-            self.grid_thread = threading.Thread(
-                target=run_grid, name="grid-bot", daemon=True
+        """Lance UN process enfant `python OBI_VOLUME_BOT.py --token X --live`
+        par token — plusieurs tokens peuvent tourner en parallèle."""
+        obi_mod = _safe_import("OBI_VOLUME_BOT")
+        if obi_mod is None:
+            raise RuntimeError(
+                "Cannot import OBI_VOLUME_BOT — "
+                "make sure the file is in the same directory"
             )
-            self.grid_thread.start()
-            self.grid_running = True
-            logger.info("Grid bot started: token=%s", token_key)
 
-    def stop_grid(self) -> None:
+        token_key = (config.token or "SP500").strip().upper()
+        try:
+            symbol = obi_mod.resolve_token(token_key)
+        except BaseException as exc:  # resolve_token lève SystemExit si inconnu
+            raise ValueError(f"Unknown token '{config.token}': {exc}")
+        order_usd = max(10.5, float(config.order_size_usd))
+
         with self.lock:
-            if not self.grid_running or self.grid_bot is None:
-                logger.info("Grid bot is not running, nothing to stop")
-                return
-            logger.info("Stopping Grid bot …")
-            self.grid_bot.running = False
+            existing = self.obi_procs.get(token_key)
+            if existing is not None and existing["proc"].poll() is None:
+                raise RuntimeError(f"Un bot tourne déjà sur {token_key}")
 
-        # Join outside the lock to avoid blocking other ops
-        if self.grid_thread is not None:
-            self.grid_thread.join(timeout=10)
-        self.grid_running = False
-        logger.info("Grid bot stopped")
+            # Stopfile périmé d'un run précédent: le supprimer avant de lancer.
+            stop_file = obi_mod.stop_file_path(symbol)
+            try:
+                os.remove(stop_file)
+            except OSError:
+                pass
+
+            log_path = BASE_DIR / f"obi_{token_key}.log"
+            log_f = open(log_path, "ab")
+            env = os.environ.copy()
+            env["OBI_HEADLESS"] = "1"   # pas de Rich Live dans un process enfant
+            cmd = [
+                sys.executable, "-u", str(BASE_DIR / "OBI_VOLUME_BOT.py"),
+                "--token", token_key, "--live", "--notional", str(order_usd),
+            ]
+            proc = subprocess.Popen(
+                cmd, cwd=str(BASE_DIR), env=env,
+                stdout=log_f, stderr=subprocess.STDOUT,
+            )
+            self.obi_procs[token_key] = {
+                "proc": proc,
+                "symbol": symbol,
+                "stats_file": obi_mod.stats_file_path(symbol),
+                "stop_file": stop_file,
+                "log": str(log_path),
+                "log_f": log_f,
+                "started": time.time(),
+                "config": {"token": token_key, "order_size_usd": order_usd},
+            }
+            self.grid_config = config.model_dump()
+
+        # Détection de crash immédiat (verrou d'instance déjà pris, etc.)
+        time.sleep(1.5)
+        if proc.poll() is not None:
+            with self.lock:
+                self.obi_procs.pop(token_key, None)
+            try:
+                log_f.close()
+            except Exception:
+                pass
+            tail = ""
+            try:
+                lines = log_path.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+                tail = lines[-1] if lines else ""
+            except Exception:
+                pass
+            raise RuntimeError(f"Le bot {token_key} s'est arrêté immédiatement: {tail}")
+        logger.info("OBI bot process started: %s (pid %s)", symbol, proc.pid)
+
+    def stop_grid(self, token: Optional[str] = None) -> None:
+        """Arrêt PROPRE via stopfile (le bot fait cancel all + flatten avant
+        de sortir). token=None → stoppe tous les bots."""
+        with self.lock:
+            if token:
+                keys = [token.strip().upper()]
+            else:
+                keys = list(self.obi_procs.keys())
+            targets = [(k, self.obi_procs[k]) for k in keys if k in self.obi_procs]
+        if not targets:
+            logger.info("No OBI bot to stop (%s)", token or "all")
+            return
+
+        for key, info in targets:
+            try:
+                Path(info["stop_file"]).write_text("stop", encoding="utf-8")
+            except Exception:
+                logger.exception("Cannot write stop file for %s", key)
+
+        # Laisser le temps du cancel all + flatten market avant d'escalader.
+        deadline = time.time() + 30
+        for key, info in targets:
+            proc = info["proc"]
+            while proc.poll() is None and time.time() < deadline:
+                time.sleep(0.4)
+            if proc.poll() is None:
+                logger.warning("OBI %s: pas d'arrêt propre après 30s — terminate", key)
+                proc.terminate()
+            try:
+                info["log_f"].close()
+            except Exception:
+                pass
+            try:
+                os.remove(info["stop_file"])
+            except OSError:
+                pass
+        with self.lock:
+            for key, _ in targets:
+                self.obi_procs.pop(key, None)
+        logger.info("OBI bot(s) stopped: %s", ", ".join(k for k, _ in targets))
 
     def get_grid_stats(self) -> Dict[str, Any]:
         default = {
@@ -376,50 +382,96 @@ class BotManager:
             "adverse_halt": False,
             "config": self.grid_config,
         }
-        if not self.grid_running or self.grid_bot is None:
-            return default
-
-        bot = self.grid_bot
+        default["bots"] = []
         try:
-            with bot.lock:
-                elapsed = time.time() - bot.start_time
-                duration = _fmt_duration(elapsed)
+            now = time.time()
+            with self.lock:
+                items = list(self.obi_procs.items())
+            if not items:
+                return default
 
-                net_pnl = bot.session_pnl - bot.total_fees
-                volume = bot.total_volume
-                cost_per_1m = (
-                    (bot.total_fees - bot.session_pnl) / (volume / 1_000_000)
-                    if volume > 0
-                    else 0.0
-                )
-                spread_bps = (
-                    (bot.cur_half_spread * 2 / bot.mid * 10_000)
-                    if bot.mid > 0
-                    else 0.0
-                )
-                position_usd = bot.position * bot.mid if bot.mid > 0 else 0.0
-
-                result = {
-                    "type": "grid_stats",
-                    "running": True,
-                    "duration": duration,
-                    "volume_usd": _json_float(volume, 2),
-                    "net_pnl": _json_float(net_pnl, 4),
-                    "fees": _json_float(bot.total_fees, 4),
-                    "cost_per_1m": _json_float(cost_per_1m, 2),
-                    "fills": int(bot.fills_count),
-                    "mid_price": _json_float(bot.mid, 4),
-                    "spread_bps": _json_float(spread_bps, 2),
-                    "position_usd": _json_float(position_usd, 2),
-                    "net_passive_capture": _json_float(getattr(bot, 'net_passive_capture', 0.0), 4),
-                    "net_adverse_lost": _json_float(getattr(bot, 'net_adverse_lost', 0.0), 4),
-                    "adverse_halt": getattr(bot, 'adverse_halt', False),
-                    "config": self.grid_config,
+            bots = []
+            dead = []
+            tot_vol = tot_fees = tot_rpnl = tot_pos = 0.0
+            tot_fills = 0
+            earliest = None
+            for key, info in items:
+                alive = info["proc"].poll() is None
+                if not alive:
+                    dead.append(key)
+                st: Dict[str, Any] = {}
+                try:
+                    with open(info["stats_file"], encoding="utf-8") as f:
+                        st = json.load(f)
+                    if st.get("symbol") != info["symbol"]:
+                        st = {}   # fichier d'un autre run/token
+                except Exception:
+                    st = {}
+                vol = float(st.get("volume", 0) or 0)
+                fees_v = float(st.get("fees", 0) or 0)
+                rpnl = float(st.get("rpnl", 0) or 0)
+                start = float(st.get("start_time", info["started"]) or info["started"])
+                entry = {
+                    "token": key,
+                    "symbol": info["symbol"],
+                    "running": alive,
+                    "duration": _fmt_duration(max(0.0, now - start)),
+                    "volume_usd": _json_float(vol, 2),
+                    "net_pnl": _json_float(rpnl - fees_v, 4),
+                    "fees": _json_float(fees_v, 4),
+                    "cost_per_1m": _json_float((fees_v - rpnl) / (vol / 1_000_000), 2) if vol > 0 else 0.0,
+                    "fills": int(st.get("fills", 0) or 0),
+                    "mid_price": _json_float(st.get("mid", 0), 4),
+                    "spread_bps": _json_float(st.get("spread_bps", 0), 2),
+                    "position_usd": _json_float(st.get("position_usd", 0), 2),
+                    "upnl": _json_float(st.get("upnl", 0), 4),
+                    "action": str(st.get("action", "")),
+                    "error": str(st.get("error", "")),
                 }
-                self._grid_stats_cache = result
-                return result
+                bots.append(entry)
+                if alive:
+                    tot_vol += vol
+                    tot_fees += fees_v
+                    tot_rpnl += rpnl
+                    tot_pos += float(st.get("position_usd", 0) or 0)
+                    tot_fills += entry["fills"]
+                    earliest = start if earliest is None else min(earliest, start)
+
+            # Les process morts sortent du registre (leur dernier snapshot
+            # reste visible ce cycle-ci via `bots`).
+            if dead:
+                with self.lock:
+                    for key in dead:
+                        try:
+                            self.obi_procs[key]["log_f"].close()
+                        except Exception:
+                            pass
+                        self.obi_procs.pop(key, None)
+
+            alive_bots = [b for b in bots if b["running"]]
+            single = alive_bots[0] if len(alive_bots) == 1 else None
+            result = {
+                "type": "grid_stats",
+                "running": bool(alive_bots),
+                "duration": _fmt_duration(max(0.0, now - earliest)) if earliest else "00:00:00",
+                "volume_usd": _json_float(tot_vol, 2),
+                "net_pnl": _json_float(tot_rpnl - tot_fees, 4),
+                "fees": _json_float(tot_fees, 4),
+                "cost_per_1m": _json_float((tot_fees - tot_rpnl) / (tot_vol / 1_000_000), 2) if tot_vol > 0 else 0.0,
+                "fills": tot_fills,
+                "mid_price": single["mid_price"] if single else 0.0,
+                "spread_bps": single["spread_bps"] if single else 0.0,
+                "position_usd": _json_float(tot_pos, 2),
+                "net_passive_capture": 0.0,
+                "net_adverse_lost": 0.0,
+                "adverse_halt": False,
+                "bots": bots,
+                "config": self.grid_config,
+            }
+            self._grid_stats_cache = result
+            return result
         except Exception:
-            logger.exception("Error reading Grid stats")
+            logger.exception("Error reading OBI stats")
             return self._grid_stats_cache or default
 
     # -----------------------------------------------------------------------
@@ -666,7 +718,7 @@ async def health():
 async def get_grid_tokens(_: None = Depends(_require_api_token)):
     """Return available HIP-3 token metadata for the Grid bot picker."""
     try:
-        import MM_GRID_ADAPTIVE_version_originale as grid_mod
+        import autre.MM_GRID_ADAPTIVE_version_originale as grid_mod
         token_map = _refresh_grid_token_catalog(grid_mod)
         tokens = [
             _grid_token_payload(key, cfg)
@@ -692,13 +744,21 @@ async def get_grid_tokens(_: None = Depends(_require_api_token)):
         ]}
 
 
+@app.get("/api/health")
+async def health(_: None = Depends(_require_api_token)):
+    """Valide à la fois la joignabilité du backend ET le code d'accès
+    (401 si BOT_API_TOKEN est configuré et que le code est faux)."""
+    return {"status": "ok", "ts": time.time()}
+
+
 @app.post("/api/grid/start")
 async def start_grid(req: GridStartRequest, _: None = Depends(_require_api_token)):
     try:
-        manager.start_grid(req)
-        return {"status": "ok", "message": f"Grid bot started on {req.token}"}
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, manager.start_grid, req)
+        return {"status": "ok", "message": f"Bot started on {req.token}"}
     except Exception as e:
-        logger.exception("Failed to start Grid bot")
+        logger.exception("Failed to start OBI bot")
         return JSONResponse(
             status_code=400,
             content={"status": "error", "message": str(e)},
@@ -706,12 +766,14 @@ async def start_grid(req: GridStartRequest, _: None = Depends(_require_api_token
 
 
 @app.post("/api/grid/stop")
-async def stop_grid(_: None = Depends(_require_api_token)):
+async def stop_grid(req: Optional[GridStopRequest] = None, _: None = Depends(_require_api_token)):
     try:
-        manager.stop_grid()
-        return {"status": "ok", "message": "Grid bot stopped"}
+        token = req.token if req else None
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, manager.stop_grid, token)
+        return {"status": "ok", "message": f"Bot stopped ({token or 'all'})"}
     except Exception as e:
-        logger.exception("Failed to stop Grid bot")
+        logger.exception("Failed to stop OBI bot")
         return JSONResponse(
             status_code=400,
             content={"status": "error", "message": str(e)},
