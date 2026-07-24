@@ -70,9 +70,6 @@ BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
 
 BOT_API_TOKEN = os.getenv("BOT_API_TOKEN", "").strip()
-OBI_RANKING_PATH = Path(
-    os.getenv("OBI_RANKING_PATH", str(BASE_DIR / "ranking.json"))
-).expanduser()
 BOT_CORS_ORIGINS = [
     origin.strip().rstrip("/")
     for origin in os.getenv("BOT_CORS_ORIGINS", "*").split(",")
@@ -149,18 +146,6 @@ def _json_float(value: Any, ndigits: int = 2, default: float = 0.0) -> float:
     if not math.isfinite(num):
         return default
     return round(num, ndigits)
-
-
-def _load_obi_ranking() -> Dict[str, Any]:
-    """Charge le ranking produit par obi_report sans bloquer le dashboard."""
-    empty = {"generated_at": None, "window_hours": 48, "ranking": []}
-    try:
-        payload = json.loads(OBI_RANKING_PATH.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or not isinstance(payload.get("ranking"), list):
-            return empty
-        return payload
-    except (OSError, ValueError, TypeError):
-        return empty
 
 
 def _safe_import(module_name: str):
@@ -818,12 +803,6 @@ async def restart_grid(_: None = Depends(_require_api_token)):
 @app.get("/api/grid/status")
 async def grid_status(_: None = Depends(_require_api_token)):
     return manager.get_grid_stats()
-
-
-@app.get("/api/grid/ranking")
-async def grid_ranking(_: None = Depends(_require_api_token)):
-    """Ranking informatif 48 h; aucune allocation automatique."""
-    return _load_obi_ranking()
 
 
 # ---------------------------------------------------------------------------

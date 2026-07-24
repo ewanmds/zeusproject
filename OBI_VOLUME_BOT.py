@@ -49,7 +49,7 @@ import argparse
 import tempfile
 import threading
 from collections import deque
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, NamedTuple
 
 # Windows: stdout redirigé = cp1252 → crash sur les emojis. Forcer UTF-8.
 try:
@@ -68,14 +68,6 @@ from rich.table import Table
 from rich.live import Live
 from rich.panel import Panel
 from rich import box
-
-# Télémétrie (fills + markouts en SQLite, hors chemin critique). Optionnelle:
-# si le module manque, le bot trade normalement sans persistance.
-try:
-    from obi_telemetry import FillLogger, MARKOUT_HORIZONS
-except Exception:
-    FillLogger = None
-    MARKOUT_HORIZONS = (1.0, 5.0, 30.0)
 
 # =============================================================================
 # CONFIGURATION
@@ -106,9 +98,14 @@ TOKENS: Dict[str, Dict[str, Any]] = {
     "NVDA":   {"symbol": "xyz:NVDA"},
     "TSLA":   {"symbol": "xyz:TSLA"},
     "US500":  {"symbol": "mkts:US500", "session_utc": ((810, 1200),)},
-    # SK Hynix — nom wire "xyz:SKHX" (le frontend affiche SKHXUSD), max 10x
-    "SKHX":    {"symbol": "xyz:SKHX", "session_utc": ((0, 390),)},
-    "SKHXUSD": {"symbol": "xyz:SKHX", "session_utc": ((0, 390),)},
+    # SK Hynix — nom wire "xyz:SKHX" (le frontend affiche SKHXUSD), max 10x.
+    # Pas de session KRX: le perp a une liquidité PROPRE 24/7 ($660M+/24h,
+    # book profond même hors heures Corée) — le limiter à 00:00-06:30 UTC le
+    # met en mode dégradé pile quand il est le plus actif. Spread large
+    # (~1.6 bps) → demi-spread proche de spread/2, la fourchette est le profit.
+    # Volatilité gérée par early-warning + markout + vol-widen, pas un calendrier.
+    "SKHX":    {"symbol": "xyz:SKHX", "half_spread_bps": 0.8},
+    "SKHXUSD": {"symbol": "xyz:SKHX", "half_spread_bps": 0.8},
 }
 DEFAULT_TOKEN = os.getenv("OBI_TOKEN", "SP500")
 
@@ -153,6 +150,31 @@ EMERG_COOLDOWN_SEC = 1.0
 #    les 3-10 bps du move qui suit un fill informé.
 TOXIC_SCRATCH_Z    = 1.5
 SCRATCH_COOLDOWN_SEC = 2.0
+# --- EARLY WARNING pump/dump: détection AVANT le move ---
+# Le détecteur regime() actuel constate un déplacement du mid déjà réalisé
+# (≥3 bps en 1s) — trop tard. L'early warning n'utilise QUE des indices
+# avancés qui précèdent le prix: z_OFI (queues du book qui s'effondrent),
+# z_TFI (flux agresseur qui monte), flux 2s one-sided, OBI brut extrême.
+# ≥ EARLY_SCORE_MIN indices alignés = alerte → côté ouvrant menacé retiré
+# et, si position contre, sortie bank ALO immédiate — le tout AVANT le tick.
+EARLY_Z            = 1.5    # |z_OFI| ou |z_TFI| au-delà = un indice
+EARLY_FLOW         = 0.75   # flux agresseur 2s quasi one-sided
+EARLY_OBI          = 0.55   # déséquilibre pondéré du book extrême
+EARLY_SCORE_MIN    = 2      # nb d'indices alignés pour déclencher
+# --- Sorties 100% MAKER: "bank ALO" à la touche ---
+# Plus d'IOC taker (0.83 bps) sur les sorties routinières: le bank pose la
+# sortie reduce-only EN TÊTE DE QUEUE (long → ask à bb+1 tick; short → bid à
+# ba−1 tick), re-peggée à chaque mouvement du BBO. Le taker ne subsiste que
+# sur les hard-stops de sécurité (stop adverse, session, feed mort, Ctrl+C).
+BANK_ALO_SEC       = 8.0    # durée d'une fenêtre de sortie agressive post-only
+# Hard-stop MAKER-FIRST: sur un stop adverse "normal", on tente d'abord de
+# sortir en MAKER (post reduce-only à la touche, zéro frais taker, on ne paie
+# PAS le spread) pendant HARD_EXIT_MAKER_SEC ; le taker IOC n'intervient qu'en
+# DERNIER recours si la position n'est toujours pas fermée après ce délai, OU
+# immédiatement si la perte est un vrai runaway (≥ RUNAWAY_MULT × le stop).
+# → les closes routiniers ne traversent plus le spread (cf. PnL négatif observé).
+HARD_EXIT_MAKER_SEC = float(os.getenv("OBI_HARD_EXIT_MAKER_SEC", "4.0"))
+RUNAWAY_STOP_MULT   = 2.0   # perte ≥ N× le stop = runaway → taker immédiat (sécurité)
 # --- Queue position model (étape 3 du plan) ---
 # La rentabilité d'un ordre passif dépend de sa place dans la file: devant,
 # on capture le bruit (fills bénins); au fond, on ne reçoit QUE les sweeps.
@@ -160,10 +182,15 @@ QUEUE_MODEL         = os.getenv("OBI_QUEUE_MODEL", "1") == "1"
 QUEUE_FRONT_FRAC    = 0.30   # ≤30% de la file initiale devant nous = front → sticky renforcé
 QUEUE_DEEP_FRAC     = 0.80   # ≥80% devant nous = fond de file
 QUEUE_ADV_ALPHA_BPS = 0.30   # fond de file + alpha contre nous → replace gratuit
+QUEUE_NEAR_TICKS    = 2      # "own-next" ne s'applique QU'aux ordres à ≤N ticks
+                            # du BBO: un ordre parké loin (half-spread) ne
+                            # filera pas, le glisser d'un tick = churn stérile
 # --- Sizing par conviction (étape 4 du plan, Kelly-lite) ---
 # Taille × [1 .. 2] du côté favorisé par l'alpha, × [1 .. 0.5] du côté
 # défavorisé — grosse taille seulement quand le signal paie.
 SIZING_CONVICTION   = os.getenv("OBI_SIZING", "1") == "1"
+SIZING_MIN_ALPHA_BPS = 0.5   # hystérésis: en-dessous, taille SYMÉTRIQUE (pas de
+                             # flip fav/unfav sur un alpha bruité proche de 0)
 OFI_BUCKET_SEC     = 1.0    # agrégation de l'OFI (cadence du tuto hftbacktest)
 BETA_HORIZON_SEC   = float(os.getenv("OBI_BETA_HORIZON_SEC", "5"))
 BETA_TAU_SEC       = 1800.0 # mémoire de la régression (décroissance exp.)
@@ -176,6 +203,12 @@ SKEW_BPS           = float(os.getenv("OBI_SKEW_BPS", "1.2")) # bps de skew par u
 # À DISTANCE du mid, et laisser l'alpha rapprocher le côté favorisé du BBO —
 # coller en permanence au BBO = adverse selection maximale, cost/M qui explose).
 HALF_SPREAD_BPS    = float(os.getenv("OBI_HALF_SPREAD_BPS", "1.5"))
+# Demi-spread ADAPTATIF: capture une fraction du spread live du book. Sur un
+# token à spread large (SKHX ~1.6 bps) → quote proche du BBO et encaisse la
+# large fourchette; sur un token serré (SP500 ~0.13 bps) → composante
+# négligeable, on reste au plancher. Se widen tout seul quand le spread
+# s'élargit (volatilité) — exactement ce qu'on veut sur un chart qui trend.
+SPREAD_CAPTURE_FRAC = float(os.getenv("OBI_SPREAD_CAPTURE_FRAC", "0.5"))
 
 # --- Pump/dump detector (fast-tick) ---
 PUMP_MOM_BPS       = float(os.getenv("OBI_PUMP_MOM_BPS", "3.0"))  # |Δmid 1s| déclencheur
@@ -213,6 +246,10 @@ FILL_COOLDOWN_SEC   = 2.5
 #    (markout) + marge. Sinon on recule jusqu'à ce que ça paie, ou on retire.
 MIN_EV_BPS          = 0.10
 EV_MAX_EXTRA_TICKS  = 5
+# Coût adverse instantané imputé quand la queue au touch est stackée à 100%
+# contre le côté qu'on ouvre (déséquilibre = ±1). Prédicteur direct de fill
+# toxique (traversant) ⇒ l'EV gate recule/retire ce côté. 0 = désactivé.
+TOUCH_ADVERSE_BPS   = float(os.getenv("OBI_TOUCH_ADVERSE_BPS", "0.6"))
 # 5) VOL widen: si la vol court-terme dépasse la moitié du spread, on recule.
 VOL_TAU_SEC         = 20.0
 VOL_WIDEN_MULT      = 1.0
@@ -253,6 +290,36 @@ STALE_ORDERUPDATE_SEC = 15.0  # ordres au repos sans le moindre event WS depuis
                               # N s → réconciliation immédiate (ordre fantôme)
 
 MAKER_FEE_BPS = 0.288       # xyz: 28.8 $/M par fill
+
+# --- COUCHE DE CONTEXTE MACRO (indicateurs sur vraies bougies Hyperliquid) ---
+# EMA/MACD/RSI/Bollinger/VWAP calculés sur des bougies RÉELLES (candleSnapshot
+# REST au démarrage + subscription WS "candle" en live). Signaux LENTS (échelle
+# minute) : ils ne remplacent PAS le moteur OFI micro, ils le MODULENT —
+#   1) biais de fair dans le sens de la tendance (EMA/MACD) + pull mean-reversion
+#      vers le VWAP (borné MACRO_MAX_BPS),
+#   2) coût adverse par côté quand on quote CONTRE une tendance confirmée
+#      (vendre en rallye = toxique) → l'EV gate recule/retire ce côté,
+#   3) widen du spread quand les bandes de Bollinger s'écartent (vol qui monte).
+# Tout est plafonné et tunable ; MACRO_ENABLE=0 restaure le comportement actuel.
+MACRO_ENABLE        = os.getenv("OBI_MACRO_ENABLE", "1") not in ("0", "false", "False")
+MACRO_INTERVAL      = os.getenv("OBI_MACRO_INTERVAL", "1m")
+MACRO_BACKFILL_BARS = int(os.getenv("OBI_MACRO_BACKFILL_BARS", "200"))
+EMA_FAST            = int(os.getenv("OBI_EMA_FAST", "12"))
+EMA_SLOW            = int(os.getenv("OBI_EMA_SLOW", "26"))
+MACD_SIGNAL         = int(os.getenv("OBI_MACD_SIGNAL", "9"))
+RSI_PERIOD          = int(os.getenv("OBI_RSI_PERIOD", "14"))
+BB_PERIOD           = int(os.getenv("OBI_BB_PERIOD", "20"))
+BB_K                = float(os.getenv("OBI_BB_K", "2.0"))
+VWAP_BARS           = int(os.getenv("OBI_VWAP_BARS", "60"))   # fenêtre glissante 24/7
+# Poids de modulation (bps) — conservateurs par défaut, plafonds durs.
+MACRO_TREND_W          = float(os.getenv("OBI_MACRO_TREND_W", "0.5"))    # skew fair/tendance
+MACRO_REVERT_K         = float(os.getenv("OBI_MACRO_REVERT_K", "0.05"))  # pull vers VWAP
+MACRO_REVERT_CAP_BPS   = float(os.getenv("OBI_MACRO_REVERT_CAP_BPS", "0.5"))
+MACRO_MAX_BPS          = float(os.getenv("OBI_MACRO_MAX_BPS", "0.6"))    # |skew fair| total
+MACRO_TREND_ADVERSE_BPS= float(os.getenv("OBI_MACRO_TREND_ADVERSE_BPS", "0.5"))
+MACRO_VOL_K            = float(os.getenv("OBI_MACRO_VOL_K", "0.15"))     # Bollinger→widen
+RSI_OVERBOUGHT         = float(os.getenv("OBI_RSI_OB", "70"))
+RSI_OVERSOLD           = float(os.getenv("OBI_RSI_OS", "30"))
 
 SESSION_WINDOWS_UTC: Tuple[Tuple[int, int], ...] = ()
 OPEN_BLACKOUT_MIN = 10
@@ -404,6 +471,212 @@ def fetch_token_meta(symbol: str) -> Dict[str, Any]:
 
 
 # =============================================================================
+# MACRO CONTEXT — indicateurs techniques sur VRAIES bougies Hyperliquid
+# =============================================================================
+# EMA / MACD / RSI / Bollinger / VWAP calculés sur des bougies réelles
+# (candleSnapshot REST au démarrage + WS "candle" en live). Couche de CONTEXTE
+# lente qui module le maker OFI (voir bloc config MACRO_*). Pas de données
+# synthétiques : tout provient de l'API Hyperliquid.
+
+# Normalisation de la force de tendance : séparation EMA (bps) à laquelle
+# trend_strength atteint 1.0.
+TREND_FULL_BPS   = float(os.getenv("OBI_TREND_FULL_BPS", "15"))
+TREND_DEADBAND_BPS = float(os.getenv("OBI_TREND_DEADBAND_BPS", "0.5"))
+MACRO_WIDEN_CAP  = float(os.getenv("OBI_MACRO_WIDEN_CAP_BPS", "3.0"))
+_INTERVAL_MS = {"1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
+                "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000}
+
+
+class MacroCtx(NamedTuple):
+    """Sortie immuable de MacroContext.context(), prête à consommer."""
+    ready: bool
+    trend_dir: int            # -1 / 0 / +1  (confluence EMA + MACD hist)
+    trend_strength: float     # [0, 1]
+    revert_bps: float         # pull mean-reversion vers le VWAP (signé)
+    widen_bps: float          # élargissement de spread (Bollinger), ≥ 0
+    diag: Dict[str, float]    # valeurs brutes pour le dashboard
+
+
+MACRO_NEUTRAL = MacroCtx(False, 0, 0.0, 0.0, 0.0, {})
+
+
+class MacroContext:
+    """Buffer OHLCV de bougies RÉELLES + indicateurs techniques standard.
+
+    Thread-safe (lock propre). Alimenté par backfill() (REST) puis on_candle()
+    (WS). Les indicateurs sont recalculés depuis le buffer à chaque bougie CLOSE
+    (coût trivial, ~1×/minute). context() est un pur read borné."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        maxlen = max(MACRO_BACKFILL_BARS, EMA_SLOW + MACD_SIGNAL + 5,
+                     BB_PERIOD + 5, RSI_PERIOD + 5, VWAP_BARS + 5) + 10
+        self.bars: deque = deque(maxlen=maxlen)   # bougies CLOSES: (t,o,h,l,c,v)
+        self._cur: Optional[list] = None          # bougie en cours [t,o,h,l,c,v]
+        self._ctx = MACRO_NEUTRAL
+
+    # ---- ingestion -----------------------------------------------------------
+    @staticmethod
+    def _parse(c: Dict) -> list:
+        return [int(c["t"]), float(c["o"]), float(c["h"]),
+                float(c["l"]), float(c["c"]), float(c.get("v", 0.0) or 0.0)]
+
+    def backfill(self, info, name: str, interval: str) -> int:
+        """Charge ~MACRO_BACKFILL_BARS dernières bougies via candleSnapshot."""
+        step = _INTERVAL_MS.get(interval, 60_000)
+        end = int(time.time() * 1000)
+        start = end - (MACRO_BACKFILL_BARS + 2) * step
+        raw = info.candles_snapshot(name, interval, start, end)
+        rows = [self._parse(c) for c in raw] if raw else []
+        rows.sort(key=lambda r: r[0])
+        with self.lock:
+            self.bars.clear()
+            # Toutes sauf la dernière = closes ; la dernière = bougie en cours.
+            for r in rows[:-1]:
+                self.bars.append(r)
+            self._cur = rows[-1] if rows else None
+            self._recompute_locked()
+        return len(rows)
+
+    def on_candle(self, c: Dict) -> None:
+        """Callback WS. La bougie en cours est mise à jour jusqu'à sa clôture ;
+        quand un nouveau t arrive, la précédente est figée dans le buffer."""
+        row = self._parse(c)
+        with self.lock:
+            if self._cur is None:
+                self._cur = row
+            elif row[0] > self._cur[0]:
+                self.bars.append(self._cur)   # la précédente vient de clôturer
+                self._cur = row
+                self._recompute_locked()
+            else:
+                self._cur = row               # même bougie: maj live o/h/l/c/v
+
+    # ---- indicateurs (formules standard) ------------------------------------
+    @staticmethod
+    def _ema_series(vals: List[float], n: int) -> List[float]:
+        """EMA seedée par la SMA des n premières valeurs (convention classique).
+        Renvoie la série alignée à partir de l'indice n-1."""
+        if len(vals) < n:
+            return []
+        k = 2.0 / (n + 1.0)
+        ema = sum(vals[:n]) / n
+        out = [ema]
+        for v in vals[n:]:
+            ema = v * k + ema * (1.0 - k)
+            out.append(ema)
+        return out
+
+    @staticmethod
+    def _rsi(closes: List[float], n: int) -> float:
+        """RSI de Wilder. Nécessite ≥ n+1 closes."""
+        if len(closes) < n + 1:
+            return 50.0
+        gains = losses = 0.0
+        for i in range(1, n + 1):
+            d = closes[i] - closes[i - 1]
+            gains += max(d, 0.0)
+            losses += max(-d, 0.0)
+        avg_g, avg_l = gains / n, losses / n
+        for i in range(n + 1, len(closes)):
+            d = closes[i] - closes[i - 1]
+            avg_g = (avg_g * (n - 1) + max(d, 0.0)) / n
+            avg_l = (avg_l * (n - 1) + max(-d, 0.0)) / n
+        if avg_l == 0.0:
+            return 100.0 if avg_g > 0.0 else 50.0
+        rs = avg_g / avg_l
+        return 100.0 - 100.0 / (1.0 + rs)
+
+    def _recompute_locked(self) -> None:
+        """Recalcule tous les indicateurs depuis le buffer de closes + la bougie
+        en cours. Appelé sous self.lock à chaque clôture / backfill."""
+        bars = list(self.bars)
+        cur = self._cur
+        # Séquence de closes : bougies closes + close live (réactivité).
+        closes = [b[4] for b in bars]
+        last_px = cur[4] if cur else (closes[-1] if closes else 0.0)
+        seq = closes + ([last_px] if cur else [])
+        need = max(EMA_SLOW + MACD_SIGNAL, BB_PERIOD, RSI_PERIOD + 1)
+        if len(seq) < need or last_px <= 0:
+            self._ctx = MACRO_NEUTRAL
+            return
+
+        ema_f = self._ema_series(seq, EMA_FAST)
+        ema_s = self._ema_series(seq, EMA_SLOW)
+        # Aligner les deux séries EMA sur leur queue commune pour le MACD.
+        m = min(len(ema_f), len(ema_s))
+        macd_series = [ema_f[-m + i] - ema_s[-m + i] for i in range(m)]
+        sig_series = self._ema_series(macd_series, MACD_SIGNAL)
+        macd = macd_series[-1]
+        signal = sig_series[-1] if sig_series else macd
+        hist = macd - signal
+        ema_fast_v, ema_slow_v = ema_f[-1], ema_s[-1]
+
+        rsi = self._rsi(seq, RSI_PERIOD)
+
+        window = seq[-BB_PERIOD:]
+        basis = sum(window) / BB_PERIOD
+        var = sum((x - basis) ** 2 for x in window) / BB_PERIOD
+        sd = math.sqrt(var)
+        upper, lower = basis + BB_K * sd, basis - BB_K * sd
+        width_bps = (upper - lower) / basis * 1e4 if basis > 0 else 0.0
+        pctb = (last_px - lower) / (upper - lower) if upper > lower else 0.5
+
+        # VWAP glissant sur VWAP_BARS bougies (typical·volume). Fenêtre roulante
+        # adaptée au 24/7 (SKHX) ; pour une session bornée (SP500) c'est le VWAP
+        # de la dernière heure — proxy de mean-reversion suffisant.
+        vbars = bars[-VWAP_BARS:] if len(bars) >= 1 else []
+        num = sum(((b[2] + b[3] + b[4]) / 3.0) * b[5] for b in vbars)
+        den = sum(b[5] for b in vbars)
+        vwap = (num / den) if den > 0 else last_px
+
+        # ---- dérivés bornés (couche de contexte) ----
+        # Direction + force = séparation des EMA (robuste sur tendance soutenue,
+        # contrairement au MACD hist qui → 0 sur une pente constante). Deadband
+        # anti-flicker autour de 0.
+        sep_bps = (ema_fast_v - ema_slow_v) / ema_slow_v * 1e4 if ema_slow_v > 0 else 0.0
+        trend_dir = 1 if sep_bps > TREND_DEADBAND_BPS else (-1 if sep_bps < -TREND_DEADBAND_BPS else 0)
+        strength = max(0.0, min(1.0, abs(sep_bps) / max(TREND_FULL_BPS, 1e-9)))
+        # MACD histogram (accélération) = modulateur de CONVICTION : s'il
+        # confirme la direction (tendance qui accélère) on garde toute la force ;
+        # s'il l'oppose (tendance qui décélère / risque de retournement) on
+        # divise la conviction par deux. C'est là que le MACD sert vraiment.
+        if trend_dir > 0 and hist < 0:
+            strength *= 0.5
+        elif trend_dir < 0 and hist > 0:
+            strength *= 0.5
+
+        dist_bps = (last_px - vwap) / vwap * 1e4 if vwap > 0 else 0.0
+        revert = -MACRO_REVERT_K * dist_bps
+        # Renforcer le fade UNIQUEMENT hors tendance (band-walk en tendance =
+        # pas de contre-sens) quand RSI extrême et prix hors des bandes.
+        if trend_dir == 0:
+            if (rsi >= RSI_OVERBOUGHT and pctb > 1.0) or (rsi <= RSI_OVERSOLD and pctb < 0.0):
+                revert *= 1.8
+        else:
+            revert *= 0.3   # en tendance, on n'essaie pas de mean-reverter fort
+        revert = max(-MACRO_REVERT_CAP_BPS, min(MACRO_REVERT_CAP_BPS, revert))
+
+        widen = max(0.0, min(MACRO_WIDEN_CAP, MACRO_VOL_K * width_bps))
+
+        self._ctx = MacroCtx(
+            ready=True, trend_dir=trend_dir, trend_strength=strength,
+            revert_bps=revert, widen_bps=widen,
+            diag={"ema_f": ema_fast_v, "ema_s": ema_slow_v, "macd": macd,
+                  "macd_sig": signal, "macd_hist": hist, "rsi": rsi,
+                  "bb_basis": basis, "bb_up": upper, "bb_lo": lower,
+                  "bb_pctb": pctb, "bb_width_bps": width_bps,
+                  "vwap": vwap, "vwap_dist_bps": dist_bps, "last": last_px},
+        )
+
+    def context(self) -> MacroCtx:
+        if not MACRO_ENABLE:
+            return MACRO_NEUTRAL
+        with self.lock:
+            return self._ctx
+
+
+# =============================================================================
 # SIGNAL ENGINE — OBI + flux agresseur
 # =============================================================================
 class SignalEngine:
@@ -455,6 +728,8 @@ class SignalEngine:
         # Snapshot des niveaux L2 (px → sz) pour le queue position model.
         self.book_bid_szs: Dict[float, float] = {}
         self.book_ask_szs: Dict[float, float] = {}
+        self.b0_sz = 0.0             # taille au meilleur bid / ask (touch)
+        self.a0_sz = 0.0
 
     def on_l2(self, bids: List[Dict], asks: List[Dict]) -> None:
         num = 0.0
@@ -522,6 +797,7 @@ class SignalEngine:
             self._prev_bb_px, self._prev_bb_sz = b0_px, b0_sz
             self._prev_ba_px, self._prev_ba_sz = a0_px, a0_sz
             self.micro_px = micro
+            self.b0_sz, self.a0_sz = b0_sz, a0_sz   # tailles AU touch (toxicité fill)
             # Snapshot des niveaux pour le queue model (dicts px→sz, ≤20 niveaux).
             self.book_bid_szs = {float(l["px"]): float(l["sz"]) for l in bids}
             self.book_ask_szs = {float(l["px"]): float(l["sz"]) for l in asks}
@@ -602,14 +878,11 @@ class SignalEngine:
         self.flow = (sum(v for _, v in self.trades) / tot) if tot > 0 else 0.0
 
     def _combined_locked(self) -> float:
+        # Composite OBI+flow+tilt — DIAGNOSTIC ONLY (dashboard). Le quoting
+        # utilise l'alpha OFI (alpha_bps/zscore/micro), pas ce composite.
         tilt_c = max(-1.0, min(1.0, self.tilt_ewma / TILT_NORM_BPS))
         return max(-1.0, min(1.0, OBI_WEIGHT * self.obi_ewma
                              + FLOW_WEIGHT * self.flow + TILT_WEIGHT * tilt_c))
-
-    def combined(self) -> float:
-        with self.lock:
-            self._refresh_flow()
-            return self._combined_locked()
 
     def momentum_bps(self, window_sec: float) -> float:
         """Δmid sur la fenêtre, en bps (+ = ça monte)."""
@@ -674,6 +947,17 @@ class SignalEngine:
         with self.lock:
             book = self.book_bid_szs if side == "B" else self.book_ask_szs
             return book.get(px, 0.0)
+
+    def touch_imbalance(self) -> float:
+        """Déséquilibre de taille AU touch ∈ [-1,1] : (b0-a0)/(b0+a0).
+        >0 = bids dominent (pression acheteuse) ; <0 = asks dominent.
+        Prédicteur direct de toxicité de fill : un fill sur notre bid quand
+        les asks dominent (<0) = vendeurs qui traversent = toxique."""
+        with self.lock:
+            tot = self.b0_sz + self.a0_sz
+            if tot <= 0.0:
+                return 0.0
+            return (self.b0_sz - self.a0_sz) / tot
 
     def beta_bps(self) -> float:
         """Sensibilité apprise fair↔z_OFI (bps/z). Warm-up → C1_BPS."""
@@ -749,6 +1033,30 @@ class SignalEngine:
         a = abs(m1)
         return reg, 1 + (1 if a >= 2 * PUMP_MOM_BPS else 0) + (1 if a >= 10.0 else 0)
 
+    def early_warning(self) -> Tuple[Optional[str], int]:
+        """Détection AVANT le move (leading): faisceau d'indices qui précèdent
+        le prix — aucun ne dépend d'un déplacement du mid déjà réalisé.
+
+        Indices DUMP: z_OFI très négatif (queues bid qui fondent), z_TFI très
+        négatif (vendeurs agressifs en rafale), flux 2s one-sided vendeur,
+        OBI pondéré écrasé côté ask. PUMP = miroir. ≥ EARLY_SCORE_MIN indices
+        du même côté = alerte (côté, score)."""
+        now = time.time()
+        with self.lock:
+            z1 = self._zscore_locked(now)
+            z2 = self._tfi_zscore_locked(now)
+            obi = self.obi_ewma
+        ff = self.flow_fast(2.0)
+        dump_score = int(z1 <= -EARLY_Z) + int(z2 <= -EARLY_Z) \
+            + int(ff <= -EARLY_FLOW) + int(obi <= -EARLY_OBI)
+        pump_score = int(z1 >= EARLY_Z) + int(z2 >= EARLY_Z) \
+            + int(ff >= EARLY_FLOW) + int(obi >= EARLY_OBI)
+        if dump_score >= EARLY_SCORE_MIN and dump_score > pump_score:
+            return "DUMP", dump_score
+        if pump_score >= EARLY_SCORE_MIN and pump_score > dump_score:
+            return "PUMP", pump_score
+        return None, 0
+
     def snapshot(self) -> Tuple[float, float, float, float]:
         with self.lock:
             self._refresh_flow()
@@ -769,6 +1077,8 @@ class OBIVolumeBot:
         self.exchange = Exchange(self.wallet, base_url=BASE_URL, account_address=ACCOUNT_ADDRESS,
                                  spot_meta=self.fixed_spot_meta, perp_dexs=PERP_DEXS)
         self.signal = SignalEngine()
+        self.macro = MacroContext()      # indicateurs sur vraies bougies HL
+        self._macro = MACRO_NEUTRAL      # contexte caché 1×/cycle
 
         # Market state (WS)
         self.best_bid = 0.0
@@ -785,10 +1095,6 @@ class OBIVolumeBot:
         self.equity = 0.0
         self.spot_usdc = 0.0
         self.pos_since = 0.0          # depuis quand la position est non nulle
-
-        # Télémétrie (étape 1 du plan): fills + markouts persistés en SQLite.
-        self.telemetry = FillLogger(SYMBOL) if (FillLogger and live) else None
-        self.pending_telem: List[list] = []   # [ts, tid, side, px, next_horizon_idx]
 
         # Anti-adverse: markout par côté + sweep breaker
         self.markout_bps: Dict[str, float] = {"B": 0.0, "A": 0.0}
@@ -812,7 +1118,23 @@ class OBIVolumeBot:
         self.last_quote_bb = 0.0      # BBO au moment du dernier quote (urgence)
         self.last_quote_ba = 0.0
 
+        # Cache des signaux calculés UNE fois par cycle (_refresh_signals):
+        # regime() avance sa machine à états UNIQUEMENT là — tous les autres
+        # lecteurs (compute_intent, risk_checks, dashboard, scratch WS) lisent
+        # ce cache pour éviter l'incohérence intra-cycle + le recalcul redondant.
+        self._reg_now: Tuple[Optional[str], int] = (None, 0)
+        self._early_now: Tuple[Optional[str], int] = (None, 0)
+        self._sig_alpha = 0.0
+        self._sig_z = 0.0
+        self._sig_vol = 0.0
+        self._sig_touch = 0.0
+        self._qf_b: Optional[float] = None
+        self._qf_a: Optional[float] = None
+
         # PnL positif: take-profit actif + protection de session (sans arrêt)
+        self.bank_until = 0.0         # fenêtre de sortie bank ALO (maker, à la touche)
+        self._hard_exit_at = 0.0      # échéance d'escalade taker si maker n'a pas fermé
+        self._hard_exit_reason = ""
         self.upnl_peak_bps = 0.0      # plus haut uPnL (bps) de la position courante
         self.session_net_high = 0.0   # high-water du net de session
         self.protect = 0              # 0 = normal, 1/2 = resserrement progressif
@@ -906,6 +1228,10 @@ class OBIVolumeBot:
         self.ws_info.subscribe({"type": "trades", "coin": SYMBOL}, self._on_trades)
         self.ws_info.subscribe({"type": "userFills", "user": ACCOUNT_ADDRESS}, self._on_user_fills)
         self.ws_info.subscribe({"type": "orderUpdates", "user": ACCOUNT_ADDRESS}, self._on_order_updates)
+        if MACRO_ENABLE:
+            self.ws_info.subscribe(
+                {"type": "candle", "coin": SYMBOL, "interval": MACRO_INTERVAL},
+                self._on_candle)
 
     def restart_ws(self):
         try:
@@ -927,15 +1253,27 @@ class OBIVolumeBot:
             ba = float(levels[1][0]["px"])
             if bb <= 0 or ba <= bb:
                 return
+            # A5: mettre à jour le signal AVANT de marquer le feed "vivant".
+            # Si on_l2 lève, last_tick_ts/ws_ready ne mentent pas au deadman.
+            self.signal.on_l2(levels[0], levels[1])
             with self.lock:
                 self.best_bid, self.best_ask = bb, ba
                 self.mid = (bb + ba) / 2.0
                 self.last_tick_ts = time.time()
                 self.ws_ready = True
-            self.signal.on_l2(levels[0], levels[1])
             self.wake.set()
         except Exception:
             pass
+
+    def _on_candle(self, data):
+        """WS candle: {"channel":"candle","data":{t,T,s,i,o,h,l,c,v,n}}.
+        Alimente la couche de contexte macro (vraies bougies Hyperliquid)."""
+        try:
+            c = data.get("data") if isinstance(data, dict) else None
+            if c and "c" in c:
+                self.macro.on_candle(c)
+        except Exception as exc:
+            self.last_error = f"candle: {str(exc)[:60]}"
 
     def _on_trades(self, data):
         try:
@@ -990,8 +1328,11 @@ class OBIVolumeBot:
         if not self.live or now - self._emerg_ts[side] < EMERG_COOLDOWN_SEC:
             return
         with self.lock:
+            # A4: pull tout ordre du côté menacé qui n'est PAS une sortie RO
+            # confirmée (inclut ro=None, appris via WS) — sinon un ordre ouvrant
+            # découvert par le flux WS ne serait jamais retiré en urgence.
             oids = [o for o, d in self.orders.items()
-                    if d["side"] == side and d.get("ro") is False]
+                    if d["side"] == side and d.get("ro") is not True]
         if not oids:
             return
         self._emerg_ts[side] = now
@@ -999,7 +1340,7 @@ class OBIVolumeBot:
         with self.lock:
             self.last_intent = None
             self.last_action = f"⚡ sweep ${burst_usd:,.0f} → pull {side}"
-        self.force_quote = True
+            self.force_quote = True   # A3: sous lock (sinon perdu vs read-clear)
         self.wake.set()
 
     def _on_user_fills(self, data):
@@ -1012,79 +1353,55 @@ class OBIVolumeBot:
                 return
             with self.lock:
                 for f in fills:
-                    if not self._coin_matches(f.get("coin")):
-                        continue
-                    tid = str(f.get("tid"))
-                    if tid in self.processed_fills:
-                        continue
-                    self.processed_fills.add(tid)
-                    px, sz = float(f["px"]), float(f["sz"])
-                    side = str(f.get("side", "")).upper()
-                    direction = str(f.get("dir", "")).lower()
-                    if side == "B" or direction in ("open long", "close short"):
-                        new_pos = round(self.position + sz, SZ_DECIMALS)
-                        sd = "B"
-                    else:
-                        new_pos = round(self.position - sz, SZ_DECIMALS)
-                        sd = "A"
-                    now_f = time.time()
-                    # Télémétrie: contexte complet du fill (attribution).
-                    if self.telemetry is not None:
-                        try:
-                            bb_f, ba_f, mid_f = self.best_bid, self.best_ask, self.mid
-                            tick_f = dyn_tick(mid_f if mid_f > 0 else px)
-                            dist = (abs(px - (bb_f if sd == "B" else ba_f)) / tick_f
-                                    if bb_f > 0 and ba_f > 0 else 0.0)
-                            reg_f, _ = self.signal.regime()
-                            self.telemetry.log_fill({
-                                "tid": tid, "ts": now_f, "side": sd,
-                                "px": px, "sz": sz,
-                                "fee": float(f.get("fee", 0)),
-                                "closed_pnl": float(f.get("closedPnl", 0)),
-                                "crossed": 1 if bool(f.get("crossed", False)) else 0,
-                                "z_ofi": self.signal.zscore(),
-                                "z_tfi": self.signal.tfi_zscore(),
-                                "alpha_bps": self.signal.alpha_bps(),
-                                "spread_bps": ((ba_f - bb_f) / mid_f * 1e4
-                                               if mid_f > 0 and ba_f > bb_f > 0 else 0.0),
-                                "vol_bps": self.signal.vol_bps(),
-                                "regime": reg_f or "",
-                                "mid": mid_f,
-                                "position_before": self.position,
-                                "dist_bbo_ticks": dist,
-                                "hour_utc": time.gmtime(now_f).tm_hour,
-                            })
-                            self.pending_telem.append([now_f, tid, sd, px, 0])
-                        except Exception:
-                            pass
-                    # Markout différé + détection de sweep (≥2 fills même côté
-                    # dans la fenêtre = flux informé, on retire ce côté).
-                    self.pending_markouts.append((now_f, sd, px))
-                    self.last_side_fill_ts[sd] = now_f
-                    q = self.side_fills[sd]
-                    q.append(now_f)
-                    while q and q[0] < now_f - BURST_WINDOW_SEC:
-                        q.popleft()
-                    if len(q) >= 2:
-                        self.side_pause_until[sd] = now_f + BURST_PAUSE_SEC
-                    if abs(self.position) < MIN_SIZE / 2 and abs(new_pos) >= MIN_SIZE / 2:
-                        self.pos_since = time.time()
-                    self.position = new_pos
-                    if abs(self.position) < MIN_SIZE / 2:
-                        self.pos_since = 0.0
-                    self.total_volume += px * sz
-                    fee = float(f.get("fee", 0))
-                    closed_pnl = float(f.get("closedPnl", 0))
-                    self.total_fees += fee
-                    self.session_pnl += closed_pnl
-                    self.hourly_net_events.append((now_f, closed_pnl - fee))
-                    self.fills_count += 1
-                    if not bool(f.get("crossed", False)):
-                        self.maker_fills += 1
-                    self.last_fill_ts = time.time()
-                    # Flip éclair: reposter la sortie immédiatement, sans
-                    # attendre la fenêtre de coalesce.
-                    self.force_quote = True
+                    # A6: try/except PAR fill — un fill corrompu ne fait plus
+                    # sauter le BATCH (sinon perte silencieuse d'un fill →
+                    # position locale qui dérive de la vérité jusqu'au resync).
+                    try:
+                        if not self._coin_matches(f.get("coin")):
+                            continue
+                        tid = str(f.get("tid"))
+                        if tid in self.processed_fills:
+                            continue
+                        self.processed_fills.add(tid)
+                        px, sz = float(f["px"]), float(f["sz"])
+                        side = str(f.get("side", "")).upper()
+                        direction = str(f.get("dir", "")).lower()
+                        if side == "B" or direction in ("open long", "close short"):
+                            new_pos = round(self.position + sz, SZ_DECIMALS)
+                            sd = "B"
+                        else:
+                            new_pos = round(self.position - sz, SZ_DECIMALS)
+                            sd = "A"
+                        now_f = time.time()
+                        # Markout différé + détection de sweep (≥2 fills même
+                        # côté dans la fenêtre = flux informé, on retire ce côté).
+                        self.pending_markouts.append((now_f, sd, px))
+                        self.last_side_fill_ts[sd] = now_f
+                        q = self.side_fills[sd]
+                        q.append(now_f)
+                        while q and q[0] < now_f - BURST_WINDOW_SEC:
+                            q.popleft()
+                        if len(q) >= 2:
+                            self.side_pause_until[sd] = now_f + BURST_PAUSE_SEC
+                        if abs(self.position) < MIN_SIZE / 2 and abs(new_pos) >= MIN_SIZE / 2:
+                            self.pos_since = time.time()
+                        self.position = new_pos
+                        if abs(self.position) < MIN_SIZE / 2:
+                            self.pos_since = 0.0
+                        self.total_volume += px * sz
+                        fee = float(f.get("fee", 0))
+                        closed_pnl = float(f.get("closedPnl", 0))
+                        self.total_fees += fee
+                        self.session_pnl += closed_pnl
+                        self.hourly_net_events.append((now_f, closed_pnl - fee))
+                        self.fills_count += 1
+                        if not bool(f.get("crossed", False)):
+                            self.maker_fills += 1
+                        self.last_fill_ts = time.time()
+                        # Flip éclair: reposter la sortie immédiatement.
+                        self.force_quote = True
+                    except Exception as exc:
+                        self.last_error = f"fill parse: {str(exc)[:80]}"
             self.wake.set()
             # SCRATCH TOXIQUE (hors self.lock): si on vient de se faire
             # remplir en OUVERTURE alors que l'alpha est franchement contre
@@ -1095,6 +1412,10 @@ class OBIVolumeBot:
             pass
 
     def _maybe_toxic_scratch(self):
+        """Fill ouvrant reçu avec l'alpha franchement contre → sortie BANK ALO
+        immédiate (maker, tête de queue) au lieu de l'ancien IOC taker. Le
+        flip éclair + le re-peg d'urgence font le reste; si la perte creuse
+        malgré tout, le hard-stop vol-scalé (taker, assumé) tranche."""
         now = time.time()
         if not self.live or now - self._scratch_ts < SCRATCH_COOLDOWN_SEC:
             return
@@ -1103,32 +1424,25 @@ class OBIVolumeBot:
             bb, ba = self.best_bid, self.best_ask
         if abs(pos) < MIN_SIZE / 2 or bb <= 0 or ba <= bb:
             return
+        # z/z2 sont des lectures PURES (pas d'effet de bord) → fraîches OK sur
+        # un fill; reg vient du CACHE (ne PAS ré-avancer la machine d'état
+        # depuis le thread WS — c'est le bug A1).
         z = self.signal.zscore()
         z2 = self.signal.tfi_zscore()
-        reg, _ = self.signal.regime()
+        with self.lock:
+            reg = self._reg_now[0]
         toxic_long = pos > 0 and (min(z, z2) <= -TOXIC_SCRATCH_Z or reg == "DUMP")
         toxic_short = pos < 0 and (max(z, z2) >= TOXIC_SCRATCH_Z or reg == "PUMP")
         if not (toxic_long or toxic_short):
             return
         self._scratch_ts = now
-        tick = dyn_tick((bb + ba) / 2.0)
-        is_buy = pos < 0
-        sz = round_sz(abs(pos))
-        px = (ba + 10 * tick) if is_buy else (bb - 10 * tick)
-        px = px_up(max(px, tick), tick) if is_buy else px_down(max(px, tick), tick)
-        try:
-            with self.api_lock:
-                self.exchange.order(name=SYMBOL, is_buy=is_buy, sz=sz, limit_px=px,
-                                    order_type={"limit": {"tif": "Ioc"}}, reduce_only=True)
-            with self.lock:
-                self.last_action = f"⚡ scratch toxique (z {z:+.1f}/{z2:+.1f} {reg or ''})"
-                # Pause du côté qui rouvrirait dans le sens toxique.
-                self.side_pause_until["B" if toxic_long else "A"] = now + BURST_PAUSE_SEC
+        with self.lock:   # A3: bank_until + force_quote sous lock (thread WS)
+            self.bank_until = max(self.bank_until, now + BANK_ALO_SEC)
+            self.last_action = f"⚡ bank toxique ALO (z {z:+.1f}/{z2:+.1f} {reg or ''})"
+            # Pause du côté qui rouvrirait dans le sens toxique.
+            self.side_pause_until["B" if toxic_long else "A"] = now + BURST_PAUSE_SEC
             self.force_quote = True
-            self.wake.set()
-        except Exception as exc:
-            with self.lock:
-                self.last_error = f"scratch: {str(exc)[:80]}"
+        self.wake.set()
 
     def _on_order_updates(self, data):
         try:
@@ -1344,6 +1658,13 @@ class OBIVolumeBot:
                         err = str(status.get("error", status) if isinstance(status, dict) else status)
                         self.last_error = err[:100]
                         if retry < POST_ONLY_MAX_RETRIES and self._is_post_only_error(err):
+                            # A7: RECULER d'1 tick avant de retenter — resoumettre
+                            # le même prix croisant se ferait rejeter en boucle.
+                            rt = dyn_tick(self.mid if self.mid > 0 else req["limit_px"])
+                            if req["is_buy"]:
+                                req["limit_px"] = px_down(req["limit_px"] - rt, rt)
+                            else:
+                                req["limit_px"] = px_up(req["limit_px"] + rt, rt)
                             retry_reqs.append(req)
             if not retry_reqs:
                 return
@@ -1411,32 +1732,6 @@ class OBIVolumeBot:
                     self.last_error = str(status.get("error", status)
                                           if isinstance(status, dict) else status)[:100]
         return ok_all
-
-    def ioc_close(self, reason: str):
-        """Ferme la POSITION en IOC reduce-only sans annuler les quotes —
-        c'est le 'bank': encaisser le profit (ou couper) en payant le taker
-        (0.83 bps) quand le move le justifie. flatten() reste le hard-stop."""
-        with self.lock:
-            pos = self.position
-            bb, ba = self.best_bid, self.best_ask
-        if abs(pos) < MIN_SIZE / 2 or bb <= 0 or ba <= bb:
-            return
-        if not self.live:
-            self.last_action = f"[dry] bank ({reason})"
-            return
-        tick = dyn_tick(self.mid)
-        is_buy = pos < 0
-        sz = round_sz(abs(pos))
-        px = (ba + 20 * tick) if is_buy else (bb - 20 * tick)
-        px = px_up(max(px, tick), tick) if is_buy else px_down(max(px, tick), tick)
-        try:
-            self.exchange.order(name=SYMBOL, is_buy=is_buy, sz=sz, limit_px=px,
-                                order_type={"limit": {"tif": "Ioc"}}, reduce_only=True)
-            self.last_action = f"bank ({reason})"
-            self.force_quote = True   # re-quoter immédiatement après
-        except Exception as exc:
-            with self.lock:
-                self.last_error = f"bank: {str(exc)[:100]}"
 
     def flatten(self, reason: str):
         """Cancel all + sortie market IOC reduce-only (règle projet: un stop
@@ -1529,9 +1824,17 @@ class OBIVolumeBot:
         self.session_mode = session_mode
         mom_f = self.signal.momentum_bps(MOM_FAST_SEC)
         mom_s = self.signal.momentum_bps(MOM_SLOW_SEC)
-        vol = self.signal.vol_bps()
-        z = self.signal.zscore()
-        reg, reg_i = self.signal.regime()
+        # Signaux cachés (calculés 1×/cycle par _refresh_signals) — cohérents
+        # avec risk_checks du même cycle, pas de ré-avancement de regime().
+        with self.lock:
+            vol = self._sig_vol
+            z = self._sig_z
+            reg, reg_i = self._reg_now
+            cached_alpha = self._sig_alpha
+            early_now = self._early_now
+            touch_imb = self._sig_touch
+            macro = self._macro
+            qf_bid_c, qf_ask_c = self._qf_b, self._qf_a
 
         order_sz = round_sz(max(MIN_SIZE, ORDER_NOTIONAL_USD * self.size_mult / mid))
         if order_sz * mid < 10.0:
@@ -1546,18 +1849,30 @@ class OBIVolumeBot:
         inv_units = pos / max(order_sz, MIN_SIZE)
         # Fair = micro-price de Stoikov ajustée par l'alpha OFI auto-calibré
         # (beta appris en ligne × z de l'OFI, clampé) — plus de c1 en dur.
-        alpha_bps = self.signal.alpha_bps()
+        alpha_bps = cached_alpha
         if session_mode == "off":
             # Hors cash session: les signaux lead/lag sont moins fiables. On
             # revient à une faible mean-reversion du momentum lent.
             alpha_bps = max(-ALPHA_CAP_BPS, min(ALPHA_CAP_BPS, -0.25 * mom_s))
         base_px = self.signal.micro() or mid
-        fair = base_px * (1.0 + alpha_bps / 10000.0)
+        # Couche de contexte MACRO (indicateurs bougies) : petit biais de fair
+        # dans le sens de la tendance (EMA/MACD) + pull mean-reversion vers le
+        # VWAP, BORNÉ à ±MACRO_MAX_BPS. L'alpha OFI reste le terme dominant.
+        macro_bps = 0.0
+        if macro.ready:
+            macro_bps = MACRO_TREND_W * macro.trend_dir * macro.trend_strength + macro.revert_bps
+            macro_bps = max(-MACRO_MAX_BPS, min(MACRO_MAX_BPS, macro_bps))
+        fair = base_px * (1.0 + (alpha_bps + macro_bps) / 10000.0)
         resa = fair - mid * (SKEW_BPS / 10000.0) * inv_units
         # Demi-spread de BASE (mode profit hftbacktest): on quote À DISTANCE
         # du mid; seul un alpha/skew favorable ramène un côté vers le BBO
         # (clamp min/max) — coller au BBO en continu = cost/M qui explose.
-        half_px = max(HALF_SPREAD_BPS, MAKER_FEE_BPS + self._eff_min_ev()) * mid / 10000.0
+        # Composante adaptative: sur un book à spread large (SKHX) on capture
+        # une fraction du spread live → quote proche du BBO et encaisse la
+        # fourchette; sur un book serré (SP500) elle est négligeable.
+        half_bps = max(HALF_SPREAD_BPS, MAKER_FEE_BPS + self._eff_min_ev(),
+                       SPREAD_CAPTURE_FRAC * spread_bps)
+        half_px = half_bps * mid / 10000.0
         bid_t = min(resa - half_px, bb)
         ask_t = max(resa + half_px, ba)
         extra_bid = max(0.0, round((bb - bid_t) / tick))   # recul en ticks vs BBO
@@ -1567,10 +1882,12 @@ class OBIVolumeBot:
         tag = f"z{z:+.1f}"
         if session_mode != "open":
             tag += f" | session:{session_mode}"
-        if session_mode != "off" and z >= ZSCORE_PULL:
+        # B11: le z-pull s'applique AUSSI hors session — un z_OFI extrême signale
+        # un déséquilibre dangereux 24/7, pas seulement en cash session.
+        if z >= ZSCORE_PULL:
             quote_ask = False
             tag += " | ask✗z"
-        elif session_mode != "off" and z <= -ZSCORE_PULL:
+        elif z <= -ZSCORE_PULL:
             quote_bid = False
             tag += " | bid✗z"
 
@@ -1605,6 +1922,20 @@ class OBIVolumeBot:
                 quote_bid = False
             if ask_is_opening:
                 quote_ask = False
+
+        # ---- 1c. EARLY WARNING (avant le move): le côté qui va se faire
+        # courir dessus est retiré PENDANT que le book bascule, pas après.
+        # Le côté favorable RESTE — être short avant un dump (ou long avant
+        # un pump), c'est là que la prédiction paie.
+        early_side, early_score = (None, 0)
+        if not reg:
+            early_side, early_score = early_now
+            if early_side == "DUMP" and bid_is_opening and quote_bid:
+                quote_bid = False
+                tag += f" | early↓{early_score}"
+            elif early_side == "PUMP" and ask_is_opening and quote_ask:
+                quote_ask = False
+                tag += f" | early↑{early_score}"
 
         # ---- 2. Momentum: pas de quote ouvrante du côté qui se fait courir dessus
         mom_gate = MOM_GATE_BPS * (2.0 if session_mode == "off" else 1.0)
@@ -1648,8 +1979,7 @@ class OBIVolumeBot:
         # ---- 5. EV gate: capture attendue ≥ frais + adverse prédit + marge.
         # Reculer la quote augmente la capture d'autant; si le recul nécessaire
         # dépasse le cap, le côté ne paie pas → retiré.
-        qf_bid = self._queue_fraction("B")
-        qf_ask = self._queue_fraction("A")
+        qf_bid, qf_ask = qf_bid_c, qf_ask_c   # fractions cachées (1×/cycle)
 
         def queue_probs(qfrac: Optional[float]) -> Tuple[float, float]:
             if qfrac is None:
@@ -1657,8 +1987,24 @@ class OBIVolumeBot:
             q = max(0.0, min(1.0, qfrac))
             return max(0.20, 1.0 - q), max(0.20, q)
 
+        # Coût adverse attendu par côté = historique (markout EWMA négatif)
+        # + instantané (queue au touch stackée CONTRE nous ⇒ fill traversant).
+        # Un fill sur notre BID quand les asks dominent (touch_imb<0) = vendeurs
+        # qui balaient = toxique ; symétrique pour l'ASK.
+        adv_touch_bid = TOUCH_ADVERSE_BPS * max(0.0, -touch_imb)
+        adv_touch_ask = TOUCH_ADVERSE_BPS * max(0.0, touch_imb)
+        # + contexte MACRO : quoter CONTRE une tendance confirmée est toxique
+        # (acheter en dump / vendre en rallye). L'EV gate recule/retire ce côté.
+        adv_trend_bid = adv_trend_ask = 0.0
+        if macro.ready and macro.trend_dir != 0:
+            _t = MACRO_TREND_ADVERSE_BPS * macro.trend_strength
+            if macro.trend_dir < 0:      # tendance baissière → acheter = toxique
+                adv_trend_bid = _t
+            else:                        # tendance haussière → vendre = toxique
+                adv_trend_ask = _t
+
         if bid_is_opening and quote_bid:
-            adverse_pred = max(0.0, -mo_b)
+            adverse_pred = max(0.0, -mo_b) + adv_touch_bid + adv_trend_bid
             p_good, p_toxic = queue_probs(qf_bid)
             capture = spread_bps / 2 + extra_bid * tick_bps
             need_bps = (self._eff_min_ev() + MAKER_FEE_BPS
@@ -1671,7 +2017,7 @@ class OBIVolumeBot:
                 else:
                     extra_bid += add
         if ask_is_opening and quote_ask:
-            adverse_pred = max(0.0, -mo_a)
+            adverse_pred = max(0.0, -mo_a) + adv_touch_ask + adv_trend_ask
             p_good, p_toxic = queue_probs(qf_ask)
             capture = spread_bps / 2 + extra_ask * tick_bps
             need_bps = (self._eff_min_ev() + MAKER_FEE_BPS
@@ -1685,7 +2031,12 @@ class OBIVolumeBot:
                     extra_ask += add
 
         # ---- 6. Vol widen (le skew d'inventaire est déjà continu via resa)
-        vol_extra = int(min(3.0, max(0.0, (vol * VOL_WIDEN_MULT - spread_bps / 2) / max(tick_bps, 1e-9))))
+        # Vol tick (|Δmid|) OU expansion des bandes de Bollinger (contexte macro)
+        # — on prend le max, pas un canal parallèle, plafonné à 4 ticks.
+        widen_bps = vol * VOL_WIDEN_MULT
+        if macro.ready and macro.widen_bps > 0:
+            widen_bps = max(widen_bps, spread_bps / 2 + macro.widen_bps)
+        vol_extra = int(min(4.0, max(0.0, (widen_bps - spread_bps / 2) / max(tick_bps, 1e-9))))
         if vol_extra > 0:
             if bid_is_opening:
                 extra_bid += vol_extra
@@ -1705,7 +2056,10 @@ class OBIVolumeBot:
         # Sizing par conviction (étape 4, Kelly-lite): le côté favorisé par
         # l'alpha grossit (jusqu'à ×2), le côté défavorisé maigrit (jusqu'à
         # ×0.5) — l'exposition suit la probabilité que le fill soit bon.
-        if SIZING_CONVICTION and ALPHA_CAP_BPS > 0:
+        # B10: hystérésis — n'appliquer l'asymétrie que si l'alpha est FRANC
+        # (≥ SIZING_MIN_ALPHA_BPS), sinon taille symétrique = pas de flip
+        # fav/unfav sur un alpha bruité qui oscille autour de 0.
+        if SIZING_CONVICTION and ALPHA_CAP_BPS > 0 and abs(alpha_bps) >= SIZING_MIN_ALPHA_BPS:
             conv = min(1.0, abs(alpha_bps) / ALPHA_CAP_BPS)
             fav = round_sz(min(max_pos, order_sz * (1.0 + conv)))
             unfav = round_sz(order_sz * (1.0 - 0.5 * conv))
@@ -1713,21 +2067,33 @@ class OBIVolumeBot:
                 unfav = order_sz
             if alpha_bps > 0:
                 bid_sz, ask_sz = fav, unfav
-            elif alpha_bps < 0:
+            else:
                 bid_sz, ask_sz = unfav, fav
+        with self.lock:
+            banking = now < self.bank_until
         if pos >= eps:                      # long → l'ask déboucle
             ask_sz = round_sz(min(order_sz, abs(pos)))
             ask_ro = ask_sz >= MIN_SIZE
             quote_ask = ask_ro
+            # A2: pendant un bank (sortie urgente), NE PAS ajouter d'exposition
+            # — on retire le côté ouvrant, on ne garde que la sortie RO.
+            if banking:
+                quote_bid = False
             age = now - pos_since if pos_since else 1e9
-            if reg == "PUMP":
+            if banking:
+                # BANK ALO: sortie maker LA PLUS AGRESSIVE possible — ask posé
+                # 1 tick au-dessus du best bid = tête de l'ask queue, re-peggé
+                # à chaque mouvement du BBO. Zéro frais taker.
+                ask_px = px_up(bb + tick, tick)
+                tag += " | bank-alo"
+            elif reg == "PUMP":
                 # Long dans le sens du move: RIDE — l'exit colle au BBO et
                 # trail le prix à chaque tick (tête de queue, bypass coalesce).
                 ask_px = px_up(ba, tick)
                 tag += " | ride"
             elif reg == "DUMP":
-                # Long contre le move: FLEE — sortie au BBO immédiate (le cut
-                # IOC de risk_checks prend le relais si intensité ≥ 2).
+                # Long contre le move: FLEE — sortie au BBO immédiate (le
+                # hard-stop de risk_checks prend le relais si la perte creuse).
                 ask_px = px_up(ba, tick)
                 tag += " | flee"
             elif age <= UNWIND_ANCHOR_MAX_SEC and entry > 0:
@@ -1745,8 +2111,15 @@ class OBIVolumeBot:
             bid_sz = round_sz(min(order_sz, abs(pos)))
             bid_ro = bid_sz >= MIN_SIZE
             quote_bid = bid_ro
+            # A2: pendant un bank, retirer le côté ouvrant (ask), sortie seule.
+            if banking:
+                quote_ask = False
             age = now - pos_since if pos_since else 1e9
-            if reg == "DUMP":
+            if banking:
+                # BANK ALO: rachat maker en tête de bid queue (ba − 1 tick).
+                bid_px = px_down(ba - tick, tick)
+                tag += " | bank-alo"
+            elif reg == "DUMP":
                 bid_px = px_down(bb, tick)
                 tag += " | ride"
             elif reg == "PUMP":
@@ -1805,22 +2178,25 @@ class OBIVolumeBot:
             resting_asks = {o: d for o, d in self.orders.items() if d["side"] == "A"}
             last_intent = self.last_intent
 
-        # Queue position model (étape 3): fraction de file restante devant nos
-        # ordres ouvrants, resynchronisée avec la taille affichée au niveau.
-        alpha_now = self.signal.alpha_bps()
-        qf_b = self._queue_fraction("B")
-        qf_a = self._queue_fraction("A")
+        # Queue position model (étape 3): fractions cachées (1×/cycle), même
+        # alpha que le sizing de compute_intent → adv_b/adv_a cohérents.
+        with self.lock:
+            alpha_now = self._sig_alpha
+            qf_b, qf_a = self._qf_b, self._qf_a
         adv_b = alpha_now < -QUEUE_ADV_ALPHA_BPS   # alpha baissier → bid en danger
         adv_a = alpha_now > QUEUE_ADV_ALPHA_BPS
 
-        # Fond de file + alpha adverse: viser explicitement le niveau suivant.
-        # La cible est calculée depuis le fair courant, donc le déplacement ne
-        # dérive pas d'un tick supplémentaire à chaque cycle.
-        if (intent[0] is not None and not intent[0][2]
+        # Fond de file + alpha adverse ET ordre PROCHE du BBO: viser le niveau
+        # suivant. Restreint aux quotes à ≤QUEUE_NEAR_TICKS du BBO — un ordre
+        # parké loin (poussé par le half-spread) ne file pas de toute façon,
+        # le glisser d'un tick ne ferait que churner sans jamais remplir.
+        near_b = intent[0] is not None and bb - intent[0][0] <= QUEUE_NEAR_TICKS * tick + 1e-9
+        near_a = intent[1] is not None and intent[1][0] - ba <= QUEUE_NEAR_TICKS * tick + 1e-9
+        if (intent[0] is not None and not intent[0][2] and near_b
                 and qf_b is not None and qf_b >= QUEUE_DEEP_FRAC and adv_b):
             intent = ((px_down(intent[0][0] - tick, tick), intent[0][1], False), intent[1])
             tag += " | own-next B"
-        if (intent[1] is not None and not intent[1][2]
+        if (intent[1] is not None and not intent[1][2] and near_a
                 and qf_a is not None and qf_a >= QUEUE_DEEP_FRAC and adv_a):
             intent = (intent[0], (px_up(intent[1][0] + tick, tick), intent[1][1], False))
             tag += " | own-next A"
@@ -1843,14 +2219,19 @@ class OBIVolumeBot:
             return diff <= tol
 
         def must_act(want, resting: Dict[int, Dict], side: str) -> bool:
-            """Repos minimal: un ordre OUVRANT qui vient d'être posé ne bouge
-            pas avant MIN_REST_SEC — c'est en REPOSANT qu'on se fait remplir
-            et qu'on gagne la priorité de queue. Urgences qui imposent d'agir
-            quand même: retrait demandé, rien au repos, sortie RO à poser,
-            fill qui vient d'arriver, ou ordre traversé par le BBO."""
+            """Repos minimal ABSOLU: un ordre OUVRANT qui vient d'être posé ne
+            bouge pas avant MIN_REST_SEC — c'est en REPOSANT qu'on se fait
+            remplir et qu'on gagne la priorité de queue. Le plancher n'est
+            JAMAIS court-circuité par `force`/`urgent` pour un remplacement
+            d'ordre ouvrant (sinon early-warning/bank qui flottent = churn
+            place/cancel sans aucun fill). Seuls bypassent le plancher:
+              - retrait complet (want None) → on pull immédiatement
+              - rien au repos → on pose
+              - sortie reduce-only (want[2]) → suit la position en continu
+              - ordre traversé par le BBO (fill maker imminent raté)"""
             if want is None or not resting:
                 return True
-            if want[2] or force:
+            if want[2]:
                 return True
             for d in resting.values():
                 if side == "B" and ba > 0 and d["px"] >= ba:
@@ -1967,21 +2348,6 @@ class OBIVolumeBot:
                 mo = (mid - px) / px * 10000.0 if sd == "B" else (px - mid) / px * 10000.0
                 cur = self.markout_bps[sd]
                 self.markout_bps[sd] = cur + MARKOUT_EWMA_ALPHA * (mo - cur)
-            # Markouts télémétrie multi-horizons (1/5/30s) — liste scannée,
-            # chaque entrée avance d'horizon en horizon puis disparaît.
-            if self.telemetry is not None and self.pending_telem:
-                keep = []
-                for ent in self.pending_telem:
-                    ts_e, tid_e, sd_e, px_e, hidx = ent
-                    while hidx < len(MARKOUT_HORIZONS) and now - ts_e >= MARKOUT_HORIZONS[hidx]:
-                        mo_e = ((mid - px_e) / px_e * 10000.0 if sd_e == "B"
-                                else (px_e - mid) / px_e * 10000.0)
-                        self.telemetry.log_markout(tid_e, MARKOUT_HORIZONS[hidx], mo_e)
-                        hidx += 1
-                    if hidx < len(MARKOUT_HORIZONS):
-                        ent[4] = hidx
-                        keep.append(ent)
-                self.pending_telem = keep
 
     # ---------------------------------------------- valeurs effectives PROTECT
     def _eff_min_ev(self) -> float:
@@ -2009,9 +2375,10 @@ class OBIVolumeBot:
             upnl = self.unrealized_pnl
             mid = self.mid
             pos_since = self.pos_since
-        vol = self.signal.vol_bps()
-        z = self.signal.zscore()
-        reg, reg_i = self.signal.regime()
+            vol = self._sig_vol       # signaux cachés (1×/cycle), cohérents
+            z = self._sig_z           # avec compute_intent du même cycle
+            reg, reg_i = self._reg_now
+            early_side_c, early_score_c = self._early_now
         notional = abs(pos) * mid
         upnl_bps = (upnl / notional) * 10000.0 if notional > 0 else 0.0
 
@@ -2043,50 +2410,91 @@ class OBIVolumeBot:
                 self.protect = 1          # en gains → premier resserrement
         self.size_mult = 0.7 if self.protect >= 2 else 1.0
 
-        # --- C. uPnL peak + take-profit actif (encaisser au lieu de rendre).
+        # --- C. uPnL peak + take-profit actif — 100% MAKER: le bank ouvre une
+        # fenêtre de sortie ALO en tête de queue (bank-alo dans compute_intent)
+        # au lieu de payer le taker.
         if notional <= 0:
             self.upnl_peak_bps = 0.0
+            self.bank_until = 0.0   # plat: fenêtre bank soldée
         else:
             self.upnl_peak_bps = max(self.upnl_peak_bps, upnl_bps)
             z_opposed = (pos > 0 and z <= -1.0) or (pos < 0 and z >= 1.0)
             if self.upnl_peak_bps >= TP_MIN_BPS and (
                     upnl_bps <= self.upnl_peak_bps * (1.0 - TP_RETRACE) or z_opposed):
-                self.ioc_close(f"tp {upnl_bps:+.1f}/{self.upnl_peak_bps:.1f}bps")
-                self.upnl_peak_bps = 0.0
-                return
+                if now >= self.bank_until:
+                    self.bank_until = now + BANK_ALO_SEC
+                    self.last_action = f"bank-alo tp {upnl_bps:+.1f}/{self.upnl_peak_bps:.1f}bps"
+                    self.force_quote = True
 
-        # --- C. Pump/dump: cut immédiat si la position est CONTRE le move.
+        # --- C. Pump/dump CONTRE la position: sortie bank ALO immédiate
+        # (le hard-stop vol-scalé ci-dessous reste le filet si ça creuse).
         if reg and notional > 0 and reg_i >= 2:
             against = (pos > 0 and reg == "DUMP") or (pos < 0 and reg == "PUMP")
-            if against:
-                self.ioc_close(f"cut {reg}{reg_i}")
-                self.pause_until = now + 5.0
-                self._last_regime = reg
-                return
-        # Fin de régime aligné: le move s'essouffle → banker le ride.
+            if against and now >= self.bank_until:
+                self.bank_until = now + BANK_ALO_SEC
+                self.last_action = f"bank-alo cut {reg}{reg_i}"
+                self.force_quote = True
+        # EARLY WARNING contre la position: sortir AVANT le move, en maker.
+        if not reg and notional > 0:
+            early_side, early_score = early_side_c, early_score_c
+            if early_side:
+                against_early = (pos > 0 and early_side == "DUMP") or \
+                                (pos < 0 and early_side == "PUMP")
+                if against_early and now >= self.bank_until:
+                    self.bank_until = now + BANK_ALO_SEC
+                    self.last_action = f"bank-alo early {early_side}{early_score}"
+                    self.force_quote = True
+        # Fin de régime aligné: le move s'essouffle → banker le ride (maker).
         if self._last_regime and not reg and notional > 0:
             aligned = (pos > 0 and self._last_regime == "PUMP") or \
                       (pos < 0 and self._last_regime == "DUMP")
-            if aligned and upnl_bps >= 1.0:
-                self.ioc_close(f"bank {self._last_regime}-end {upnl_bps:+.1f}bps")
-                self._last_regime = reg
-                return
+            if aligned and upnl_bps >= 1.0 and now >= self.bank_until:
+                self.bank_until = now + BANK_ALO_SEC
+                self.last_action = f"bank-alo {self._last_regime}-end {upnl_bps:+.1f}bps"
+                self.force_quote = True
         self._last_regime = reg
 
-        # --- Stop adverse dynamique (vol-scalé, protect-aware).
-        if notional > 0 and upnl < 0 and abs(upnl_bps) >= self._eff_stop_bps(vol):
-            self.flatten(f"stop {abs(upnl_bps):.1f}bps")
+        # --- Escalade TAKER en dernier recours: un hard-stop maker-first qui
+        # n'a pas fermé la position après HARD_EXIT_MAKER_SEC → flatten IOC
+        # (garantit la sortie sur un vrai runaway). Sinon on reste en maker.
+        if abs(pos) < MIN_SIZE:
+            self._hard_exit_at = 0.0
+        elif self._hard_exit_at and now >= self._hard_exit_at:
+            self.flatten(self._hard_exit_reason or "hard-exit")   # IOC dernier recours
+            self._hard_exit_at = 0.0
             self.pause_until = now + STOP_PAUSE_SEC
-            return
-        if pos_since and now - pos_since > self._eff_max_hold() + FORCE_FLAT_EXTRA and abs(pos) >= MIN_SIZE:
-            self.flatten("max hold")
+
+        # --- Stop adverse dynamique (vol-scalé, protect-aware) — MAKER-FIRST.
+        stop_bps = self._eff_stop_bps(vol)
+        if notional > 0 and upnl < 0 and abs(upnl_bps) >= stop_bps and not self._hard_exit_at:
+            if abs(upnl_bps) >= RUNAWAY_STOP_MULT * stop_bps:
+                # Runaway: taker immédiat (la perte creuse trop vite pour maker).
+                self.flatten(f"stop-runaway {abs(upnl_bps):.1f}bps")
+                self.pause_until = now + STOP_PAUSE_SEC
+            else:
+                # Sortie MAKER d'abord (pas de spread payé); taker seulement si
+                # pas fermé après HARD_EXIT_MAKER_SEC.
+                self.bank_until = now + HARD_EXIT_MAKER_SEC
+                self._hard_exit_at = now + HARD_EXIT_MAKER_SEC
+                self._hard_exit_reason = f"stop {abs(upnl_bps):.1f}bps"
+                self.pause_until = now + STOP_PAUSE_SEC
+                self.last_action = f"bank-stop {abs(upnl_bps):.1f}bps (maker→taker {HARD_EXIT_MAKER_SEC:.0f}s)"
+                self.force_quote = True
+        # Position trop vieille: débouclage MAKER-FIRST (pas forcément en perte).
+        elif (pos_since and now - pos_since > self._eff_max_hold() + FORCE_FLAT_EXTRA
+              and abs(pos) >= MIN_SIZE and not self._hard_exit_at):
+            self.bank_until = now + HARD_EXIT_MAKER_SEC
+            self._hard_exit_at = now + HARD_EXIT_MAKER_SEC
+            self._hard_exit_reason = "max hold"
             self.pause_until = now + STOP_PAUSE_SEC / 2
-            return
+            self.last_action = f"bank-maxhold (maker→taker {HARD_EXIT_MAKER_SEC:.0f}s)"
+            self.force_quote = True
+
         if net <= -MAX_SESSION_LOSS_USD:
             self.last_action = f"SESSION LOSS LIMIT ${net:+.2f} — arrêt"
             self.running = False
 
-        # Deadman feed
+        # Deadman feed (tourne TOUJOURS — plus de return prématuré avant, A8)
         if now - self.last_tick_ts > DEADMAN_FEED_SEC and self.ws_ready:
             if not self.refresh_bbo_rest():
                 if abs(pos) >= MIN_SIZE:
@@ -2139,8 +2547,21 @@ class OBIVolumeBot:
                     "hourly_pause_until": self.hourly_pause_until,
                     "session_mode": self.session_mode,
                 }
-            reg, _ = self.signal.regime()
+            with self.lock:
+                reg = self._reg_now[0]
+                macro = self._macro
             data["regime"] = reg or ""
+            if macro.ready:
+                d = macro.diag
+                data["macro"] = {
+                    "trend_dir": macro.trend_dir,
+                    "trend_strength": round(macro.trend_strength, 3),
+                    "ema_f": d.get("ema_f"), "ema_s": d.get("ema_s"),
+                    "macd_hist": d.get("macd_hist"), "rsi": round(d.get("rsi", 0.0), 1),
+                    "bb_pctb": round(d.get("bb_pctb", 0.0), 3),
+                    "bb_width_bps": round(d.get("bb_width_bps", 0.0), 2),
+                    "vwap": d.get("vwap"), "vwap_dist_bps": round(d.get("vwap_dist_bps", 0.0), 2),
+                }
             tmp = self._stats_file + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f)
@@ -2150,12 +2571,14 @@ class OBIVolumeBot:
 
     # -------------------------------------------------------------- dashboard
     def dashboard(self) -> Panel:
-        obi, flow, tilt, comb = self.signal.snapshot()
+        obi, flow, tilt, _ = self.signal.snapshot()   # composite = diagnostic only
         mom = self.signal.momentum_bps(MOM_FAST_SEC)
-        volat = self.signal.vol_bps()
-        z = self.signal.zscore()
-        reg, reg_i = self.signal.regime()
         with self.lock:
+            volat = self._sig_vol         # signaux cachés (affichage cohérent)
+            z = self._sig_z
+            reg, reg_i = self._reg_now
+            early_s, early_n = self._early_now
+            alpha_disp = self._sig_alpha
             bb, ba, mid = self.best_bid, self.best_ask, self.mid
             pos, entry, upnl = self.position, self.entry_price, self.unrealized_pnl
             vol, fees, rpnl = self.total_volume, self.total_fees, self.session_pnl
@@ -2164,6 +2587,7 @@ class OBIVolumeBot:
             action, err = self.last_action, self.last_error
             eq = self.equity
             mo_b, mo_a = self.markout_bps["B"], self.markout_bps["A"]
+            macro = self._macro
         net = rpnl + upnl - fees
         # Même métrique que MM_GRID_ADAPTIVE: (fees − PnL réalisé) / M de volume,
         # uPnL exclu — chiffres comparables entre les deux dashboards.
@@ -2177,14 +2601,36 @@ class OBIVolumeBot:
         sig_color = "green" if z > 0.5 else "red" if z < -0.5 else "white"
         mo_b_c = "red" if mo_b <= MARKOUT_SOFT_BPS else "green" if mo_b > 0 else "white"
         mo_a_c = "red" if mo_a <= MARKOUT_SOFT_BPS else "green" if mo_a > 0 else "white"
-        reg_txt = f"[bold red]{reg}{reg_i}[/]" if reg else "—"
+        if reg:
+            reg_txt = f"[bold red]{reg}{reg_i}[/]"
+        elif early_s:
+            reg_txt = f"[yellow]early {early_s}{early_n}[/]"
+        else:
+            reg_txt = "—"
+        if time.time() < self.bank_until:
+            reg_txt += " [cyan]bank[/]"
         protect_txt = f" | protect{self.protect}" if self.protect else ""
+        # Ligne indicateurs macro (vraies bougies) — visible dans le dashboard.
+        if macro.ready:
+            d = macro.diag
+            td = macro.trend_dir
+            tc = "green" if td > 0 else "red" if td < 0 else "white"
+            arrow = "↑" if td > 0 else "↓" if td < 0 else "→"
+            rsi_v = d.get("rsi", 50.0)
+            rsi_c = "red" if rsi_v >= RSI_OVERBOUGHT else "green" if rsi_v <= RSI_OVERSOLD else "white"
+            macro_txt = (f"[{tc}]trend {arrow}{macro.trend_strength:.2f}[/] "
+                         f"MACD {d.get('macd_hist', 0.0):+.4f}\n"
+                         f"[{rsi_c}]RSI {rsi_v:.0f}[/] BB%b {d.get('bb_pctb', 0.0):+.2f} "
+                         f"w {d.get('bb_width_bps', 0.0):.0f}bps\n"
+                         f"VWAPΔ {d.get('vwap_dist_bps', 0.0):+.1f}bps")
+        else:
+            macro_txt = "[dim]macro: warmup…[/]"
         t.add_row(
             f"{SYMBOL}\nbid {bb:.{PRICE_DECIMALS}f}\nask {ba:.{PRICE_DECIMALS}f}\nmid {mid:.{PRICE_DECIMALS}f}\nvol {volat:.2f}bps",
             f"OBI {obi:+.2f} flow {flow:+.2f}\ntilt {tilt:+.2f}bps\n[{sig_color}]z {z:+.2f}[/] mom {mom:+.1f}\n"
-            f"β {self.signal.beta_bps():.2f} α {self.signal.alpha_bps():+.2f}bps\n"
+            f"β {self.signal.beta_bps():.2f} α {alpha_disp:+.2f}bps\n"
             f"session {self.session_mode}\n"
-            f"mo [{mo_b_c}]B {mo_b:+.2f}[/]/[{mo_a_c}]A {mo_a:+.2f}[/]\nordres {n_orders} | {reg_txt}",
+            f"mo [{mo_b_c}]B {mo_b:+.2f}[/]/[{mo_a_c}]A {mo_a:+.2f}[/]\nordres {n_orders} | {reg_txt}\n{macro_txt}",
             f"pos {pos:+.{SZ_DECIMALS}f}\nentry {entry:.{PRICE_DECIMALS}f}\nuPnL ${upnl:+.2f} (pk {self.upnl_peak_bps:.1f})\nequity ${eq:.2f}",
             f"vol ${vol:,.0f}\nfills {fills} ({maker_pct:.0f}% maker)\n"
             f"fees ${fees:.2f} | net ${net:+.2f} | h1 ${self.hourly_net_pnl:+.2f}\n"
@@ -2197,6 +2643,31 @@ class OBIVolumeBot:
         return Panel(t, title=f"OBI VOLUME BOT — {SYMBOL}", subtitle=sub, box=box.ROUNDED)
 
     # -------------------------------------------------------------------- run
+    def _refresh_signals(self):
+        """Calcule TOUS les signaux à effet de bord / coûteux UNE fois par
+        cycle et les cache sous lock. C'est le SEUL endroit où regime() avance
+        sa machine à états (sinon 4-5 avancées/cycle depuis 2 threads = état
+        instable) et où _queue_fraction() décrémente queue_ahead. Réactivité:
+        supprime ~15-20 acquisitions de lock redondantes par cycle."""
+        reg = self.signal.regime()          # unique point d'avancement machine
+        early = self.signal.early_warning()
+        alpha = self.signal.alpha_bps()
+        z = self.signal.zscore()
+        vol = self.signal.vol_bps()
+        touch = self.signal.touch_imbalance()   # déséquilibre au touch (toxicité)
+        macro = self.macro.context()            # indicateurs bougies (contexte)
+        qf_b = self._queue_fraction("B")
+        qf_a = self._queue_fraction("A")
+        with self.lock:
+            self._reg_now = reg
+            self._early_now = early
+            self._sig_alpha = alpha
+            self._sig_z = z
+            self._sig_vol = vol
+            self._sig_touch = touch
+            self._macro = macro
+            self._qf_b, self._qf_a = qf_b, qf_a
+
     def _trading_loop(self, live_display=None):
         last_render = 0.0
         while self.running:
@@ -2208,6 +2679,7 @@ class OBIVolumeBot:
             self._check_stop_file()
             if not self.running:
                 break
+            self._refresh_signals()   # cache signaux 1×/cycle AVANT tout usage
             if now - self.last_sync_ts > SYNC_EVERY_SEC:
                 self.last_sync_ts = now
                 self.sync_position()
@@ -2244,6 +2716,13 @@ class OBIVolumeBot:
         self.set_leverage()
         self.startup_sweep()
         self.sync_position()
+        if MACRO_ENABLE:
+            try:
+                n = self.macro.backfill(self.info, SYMBOL, MACRO_INTERVAL)
+                if not headless:
+                    print(f"📊 Macro: {n} bougies {MACRO_INTERVAL} chargées (EMA/MACD/RSI/BB/VWAP)")
+            except Exception as exc:
+                self.last_error = f"backfill macro: {str(exc)[:60]}"
         self.start_ws()
         deadline = time.time() + 15
         while not self.ws_ready and time.time() < deadline:
@@ -2273,8 +2752,6 @@ class OBIVolumeBot:
         except Exception:
             pass
         self.write_stats(running=False)   # dernier snapshot pour le dashboard
-        if self.telemetry is not None:
-            self.telemetry.close()
         if not headless:
             print("✅ Terminé.")
 
