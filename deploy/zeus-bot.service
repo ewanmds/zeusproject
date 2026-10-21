@@ -1,0 +1,19 @@
+[Unit]
+Description=Zeus Hyperliquid bot server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=/home/opc/zeusproject
+EnvironmentFile=/home/opc/zeusproject/.env
+ExecStart=/home/opc/zeusproject/.venv/bin/python /home/opc/zeusproject/bot_server.py
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

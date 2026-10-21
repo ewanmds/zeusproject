@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+pydantic
+eth-account
+hyperliquid-python-sdk
+python-dotenv
+requests
+rich

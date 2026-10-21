@@ -1,0 +1,10 @@
+.env
+*.log
+*.db
+ranking.json
+obi_fills_*.db
+__pycache__/
+*.pyc
+.venv/
+frontend/dist/
+frontend/node_modules/
