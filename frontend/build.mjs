@@ -12,7 +12,7 @@ for (const file of ["index.html", "index.css", "app.js"]) {
 
 const config = {
     // This URL is public frontend configuration, not a wallet secret.
-    apiBase: process.env.ZEUS_API_BASE || "",
+    apiBase: process.env.ZEUS_API_BASE || "https://3-112-81-235.sslip.io",
     apiToken: process.env.ZEUS_API_TOKEN || "",
     wsUrl: process.env.ZEUS_WS_URL || "",
 };
