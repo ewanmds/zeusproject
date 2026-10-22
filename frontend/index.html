@@ -1,17 +1,18 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Hyperliquid bot control panel">
-  <title>Hyperliquid Control Deck</title>
+  <meta name="description" content="Zeus — suivi et contrôle des stratégies Hyperliquid.">
+  <meta name="theme-color" content="#090d16">
+  <title>Zeus — Trading workspace</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="index.css">
 </head>
 <body>
-  <a class="skip-link" href="#main-content">Skip to content</a>
+  <a class="skip-link" href="#main-content">Aller au contenu</a>
 
   <svg class="svg-sprite" aria-hidden="true">
     <symbol id="icon-grid" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"></path></symbol>
@@ -21,6 +22,8 @@
     <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></symbol>
     <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M12 9v4"></path><path d="M12 17h.01"></path><path d="M10.3 4.6 2.8 18a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0Z"></path></symbol>
     <symbol id="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="M6 6 18 18M6 18 18 6"></path></symbol>
+    <symbol id="icon-book" viewBox="0 0 24 24"><path d="M4 5h16M4 10h9M4 15h16M4 20h9"></path></symbol>
     <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"></circle><path d="M12 11v5"></path><path d="M12 8h.01"></path></symbol>
     <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.53-11.45l2.69 2.69" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></symbol>
   </svg>
@@ -34,12 +37,12 @@
       </div>
     </div>
 
-    <nav class="strategy-tabs" role="tablist" aria-label="Strategies">
-      <button class="nav-tab active" type="button" role="tab" id="tab-grid" aria-selected="true" aria-controls="page-grid" data-page="grid">
+    <nav class="strategy-tabs" role="tablist" aria-label="Stratégies">
+      <button class="nav-tab active" type="button" role="tab" id="tab-grid" aria-selected="true" aria-controls="page-grid" data-page="grid" tabindex="0">
         <svg aria-hidden="true"><use href="#icon-grid"></use></svg>
         Market Making
       </button>
-      <button class="nav-tab" type="button" role="tab" id="tab-worldcup" aria-selected="false" aria-controls="page-worldcup" data-page="worldcup">
+      <button class="nav-tab" type="button" role="tab" id="tab-worldcup" aria-selected="false" aria-controls="page-worldcup" data-page="worldcup" tabindex="-1">
         <svg aria-hidden="true"><use href="#icon-cup"></use></svg>
         WorldCup
       </button>
@@ -48,39 +51,44 @@
     <div class="topbar-actions">
       <button class="backend-btn" id="backend-connect-btn" type="button" title="Tester / reconnecter le backend">
         <svg aria-hidden="true"><use href="#icon-play"></use></svg>
-        Backend
+        Reconnecter
       </button>
-      <div class="connection-pill">
+      <div class="connection-pill" role="status">
         <span class="status-dot" aria-hidden="true"></span>
-        <span class="status-text">Offline</span>
+        <span class="status-text">Connexion…</span>
       </div>
       <div class="network-chip">
-        <span class="dex-tag">HIP-3 xyz · mkts · io</span>
+        <span class="dex-tag">Hyperliquid <span>HIP-3 / HIP-4</span></span>
       </div>
     </div>
   </header>
 
   <!-- Page d'accueil sécurisée: code d'accès (mémorisé en localStorage) -->
-  <div class="access-gate" id="access-gate" hidden>
+  <dialog class="access-gate" id="access-gate" aria-labelledby="access-heading" aria-describedby="access-description" hidden>
     <div class="access-card">
       <div class="brand-mark access-brand" aria-hidden="true">HL</div>
-      <h2>Accès protégé</h2>
-      <p>Entre le code d'accès pour ouvrir le Control Deck.<br>
+      <h2 id="access-heading">Ton espace Zeus</h2>
+      <p id="access-description">Entre le code d'accès pour ouvrir le terminal.<br>
          Il sera mémorisé sur ce navigateur.</p>
-      <input type="password" id="access-code-input" placeholder="Code d'accès"
-             autocomplete="current-password" spellcheck="false">
-      <p class="access-error" id="access-gate-error" hidden></p>
+      <label for="access-code-input">Code d'accès</label>
+      <input type="password" id="access-code-input" placeholder="Saisir le code"
+             autocomplete="current-password" spellcheck="false" aria-describedby="access-gate-error" required>
+      <p class="access-error" id="access-gate-error" role="alert" hidden></p>
       <button class="btn btn-start access-submit" id="access-code-submit" type="button">Entrer</button>
     </div>
-  </div>
+  </dialog>
 
   <main id="main-content">
     <section id="page-grid" class="page active" role="tabpanel" aria-labelledby="tab-grid">
+      <div class="workspace-intro">
+        <div><p class="eyebrow">Terminal d'exécution</p><h2>Market making</h2><p>Configure tes quotes. Garde une vue claire sur chaque session.</p></div>
+        <span class="environment-tag"><span aria-hidden="true"></span>Ordres réels · Mainnet</span>
+      </div>
       <div class="workspace">
         <aside class="control-panel">
           <header class="panel-head">
             <div class="panel-copy">
-              <h2 class="panel__title" id="grid-heading">BBO Order Book</h2>
+              <p class="eyebrow">Nouvelle session</p><h3 class="panel__title" id="grid-heading">BBO Order Book</h3>
               <p class="panel__desc" id="grid-description">Quotes au meilleur bid et ask du carnet.</p>
             </div>
             <span class="state-pill" id="grid-state-pill" hidden>Live</span>
@@ -88,10 +96,10 @@
 
           <form class="panel__form" id="grid-form" novalidate>
             <fieldset class="form-block">
-              <legend>Strategy</legend>
+              <legend>Stratégie</legend>
               <div class="field">
-                <label for="grid-strategy">Market making mode</label>
-                <select id="grid-strategy">
+                <label for="grid-strategy">Mode de cotation</label>
+                <select id="grid-strategy" aria-describedby="grid-strategy-hint">
                   <option value="bbo">BBO Order Book</option>
                   <option value="mid">MID Order Book</option>
                 </select>
@@ -105,15 +113,15 @@
               </div>
             </fieldset>
             <fieldset class="form-block">
-              <legend>Market</legend>
+              <legend>Marché</legend>
               <div class="field">
                 <div class="field-head">
-                  <label id="grid-token-label" for="grid-token-search">Token</label>
-                  <span class="mini-badge" id="grid-token-count">Loading</span>
+                  <span id="grid-token-label">Token</span>
+                  <span class="mini-badge" id="grid-token-count">Chargement…</span>
                 </div>
                 <input type="hidden" id="grid-token" value="SP500">
                 <div class="token-picker" id="grid-token-picker">
-                  <button class="token-trigger" id="grid-token-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="grid-token-label grid-token-name">
+                  <button class="token-trigger" id="grid-token-trigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="grid-token-menu" aria-labelledby="grid-token-label grid-token-name">
                     <span class="token-logo" id="grid-token-logo" aria-hidden="true">SP</span>
                     <span class="token-copy">
                       <strong id="grid-token-name">SP500</strong>
@@ -121,10 +129,10 @@
                     </span>
                     <span class="token-chevron" aria-hidden="true">&#9662;</span>
                   </button>
-                  <div class="token-menu" id="grid-token-menu">
+                  <div class="token-menu" id="grid-token-menu" role="dialog" aria-label="Choisir un token" hidden>
                     <div class="search-shell">
                       <svg aria-hidden="true"><use href="#icon-search"></use></svg>
-                      <input class="token-search" id="grid-token-search" type="search" placeholder="Search tokens" autocomplete="off">
+                      <input class="token-search" id="grid-token-search" type="search" placeholder="Rechercher un token…" aria-label="Rechercher un token" autocomplete="off" aria-controls="grid-token-options">
                     </div>
                     <div class="token-options" id="grid-token-options" role="listbox" aria-labelledby="grid-token-label"></div>
                   </div>
@@ -135,11 +143,11 @@
 
 
             <fieldset class="form-block">
-              <legend>Size</legend>
+              <legend>Taille</legend>
               <div class="field">
-                <label for="grid-order-size">Order (USD)</label>
-                <input type="number" id="grid-order-size" value="100" min="10" step="1" inputmode="decimal">
-                <span class="field-hint">Max position = 1 × order · après un fill, sortie reduce-only avant toute nouvelle entrée.</span>
+                <label for="grid-order-size">Montant par ordre <span class="unit-label">USD</span></label>
+                <input type="number" id="grid-order-size" value="100" min="10" step="1" inputmode="decimal" aria-describedby="grid-size-help grid-form-alert" required>
+                <span class="field-hint" id="grid-size-help">Inventaire limité à une taille d'ordre. Retour à plat avant une nouvelle entrée.</span>
               </div>
             </fieldset>
 
@@ -149,17 +157,24 @@
             <div class="action-row">
               <button class="btn btn-start" id="grid-start-btn" type="button">
                 <svg aria-hidden="true"><use href="#icon-play"></use></svg>
-                Start
+                Lancer
               </button>
               <button class="btn btn-stop" id="grid-stop-btn" type="button" disabled>
                 <svg aria-hidden="true"><use href="#icon-stop"></use></svg>
-                Stop
+                Tout arrêter
               </button>
             </div>
+            <p class="action-help" id="grid-action-help">Arrêter annule les ordres et ferme la position du bot.</p>
           </form>
         </aside>
 
         <section class="dashboard" aria-label="Market making session stats">
+          <div class="overview-grid" aria-label="Vue d'ensemble des sessions">
+            <article class="overview-card"><span>Volume exécuté</span><strong id="overview-volume">—</strong><small>Sessions actives</small></article>
+            <article class="overview-card"><span>PnL net réalisé</span><strong id="overview-pnl">—</strong><small>Frais déduits · hors funding</small></article>
+            <article class="overview-card"><span>Coût / million</span><strong id="overview-cost">—</strong><small>(Frais − PnL réalisé) / volume × 1M</small></article>
+          </div>
+          <div class="sessions-heading"><h3>Sessions</h3><span id="session-count" class="mini-badge">En attente</span></div>
           <div class="run-banner" id="grid-run-banner" hidden>
             <span class="run-dot" aria-hidden="true"></span>
             <div class="run-copy">
@@ -170,16 +185,23 @@
 
           <!-- Bots actifs (multi-process): une carte par token, stop individuel -->
           <div class="bots-list" id="grid-bots-list" hidden></div>
+          <div class="empty-state" id="grid-empty-state">
+            <div class="empty-state-icon" aria-hidden="true"><svg><use href="#icon-book"></use></svg></div>
+            <h3>Ton prochain marché, ici.</h3>
+            <p>Choisis un mode, un token et un montant.<br>Chaque session aura ses propres chiffres et commandes.</p>
+            <div class="empty-state-steps" aria-label="Étapes de configuration"><span><b>1</b>Mode</span><span><b>2</b>Marché</span><span><b>3</b>Montant</span></div>
+          </div>
         </section>
       </div>
     </section>
 
     <section id="page-worldcup" class="page" role="tabpanel" aria-labelledby="tab-worldcup" hidden>
+      <div class="workspace-intro"><div><p class="eyebrow">Marchés de prédiction</p><h2>WorldCup</h2><p>Suis ton panier HIP-4 et ses exécutions.</p></div><span class="environment-tag"><span aria-hidden="true"></span>Ordres réels · Mainnet</span></div>
       <div class="workspace">
         <aside class="control-panel">
           <header class="panel-head">
             <div class="panel-copy">
-              <h2 class="panel__title" id="wc-heading">WorldCup</h2>
+              <p class="eyebrow">Nouvelle session</p><h3 class="panel__title" id="wc-heading">WorldCup</h3>
               <p class="panel__desc">Multi-market HIP-4 basket.</p>
             </div>
             <span class="state-pill" id="wc-state-pill" hidden>Live</span>
@@ -190,12 +212,12 @@
               <legend>Market</legend>
               <div class="field">
                 <div class="field-head">
-                  <label id="wc-market-label" for="wc-market-search">Marché</label>
+                  <span id="wc-market-label">Marché</span>
                   <span class="mini-badge" id="wc-market-count">12 choix</span>
                 </div>
                 <input type="hidden" id="wc-market" value="ALL">
                 <div class="token-picker" id="wc-market-picker">
-                  <button class="token-trigger" id="wc-market-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="wc-market-label wc-market-name">
+                  <button class="token-trigger" id="wc-market-trigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="wc-market-menu" aria-labelledby="wc-market-label wc-market-name">
                     <span class="token-logo" id="wc-market-logo" aria-hidden="true">WC</span>
                     <span class="token-copy">
                       <strong id="wc-market-name">Tous les marchés</strong>
@@ -203,10 +225,10 @@
                     </span>
                     <span class="token-chevron" aria-hidden="true">&#9662;</span>
                   </button>
-                  <div class="token-menu" id="wc-market-menu">
+                  <div class="token-menu" id="wc-market-menu" role="dialog" aria-label="Choisir un marché WorldCup" hidden>
                     <div class="search-shell">
                       <svg aria-hidden="true"><use href="#icon-search"></use></svg>
-                      <input class="token-search" id="wc-market-search" type="search" placeholder="Rechercher un pays" autocomplete="off">
+                      <input class="token-search" id="wc-market-search" type="search" placeholder="Rechercher un pays" aria-label="Rechercher un pays" aria-controls="wc-market-options" autocomplete="off">
                     </div>
                     <div class="token-options" id="wc-market-options" role="listbox" aria-labelledby="wc-market-label"></div>
                   </div>
@@ -217,17 +239,17 @@
               <legend>Parameters</legend>
               <div class="field">
                 <label for="wc-order-size">Order (USD)</label>
-                <input type="number" id="wc-order-size" value="50" min="10" step="1" inputmode="decimal">
+                <input type="number" id="wc-order-size" value="50" min="10" step="1" inputmode="decimal" aria-describedby="wc-form-alert" required>
               </div>
               <div class="field-row">
                 <div class="field">
                   <label for="wc-spread">Max spread (%)</label>
-                  <input type="number" id="wc-spread" value="0.02" min="0" step="0.005" inputmode="decimal">
-                  <span class="field-hint">ex 0.02 = 0.02% (2 bps), comme --max-spread-pct</span>
+                  <input type="number" id="wc-spread" value="0.02" min="0" step="0.005" inputmode="decimal" aria-describedby="wc-spread-help wc-form-alert" required>
+                  <span class="field-hint" id="wc-spread-help">0,02 % = 2 bps.</span>
                 </div>
                 <div class="field">
                   <label for="wc-max-pos">Max position (USD)</label>
-                  <input type="number" id="wc-max-pos" value="200" min="10" step="10" inputmode="decimal">
+                  <input type="number" id="wc-max-pos" value="200" min="10" step="10" inputmode="decimal" aria-describedby="wc-form-alert" required>
                 </div>
               </div>
             </fieldset>
@@ -262,7 +284,7 @@
                 <svg><use href="#icon-cup"></use></svg>
               </div>
               <span class="metric-label">Net PnL</span>
-              <strong class="metric-value positive" id="wc-pnl">$0.00</strong>
+              <strong class="metric-value positive" id="wc-pnl">—</strong>
               <span class="metric-foot">Real-time profit/loss</span>
             </article>
 
@@ -280,7 +302,7 @@
                 <svg><use href="#icon-play"></use></svg>
               </div>
               <span class="metric-label">Volume</span>
-              <strong class="metric-value metric-mono" id="wc-volume">$0.00</strong>
+              <strong class="metric-value metric-mono" id="wc-volume">—</strong>
               <span class="metric-foot">Total traded volume</span>
             </article>
 
@@ -289,7 +311,7 @@
                 <svg><use href="#icon-info"></use></svg>
               </div>
               <span class="metric-label">Fees</span>
-              <strong class="metric-value metric-mono" id="wc-fees">$0.00</strong>
+              <strong class="metric-value metric-mono" id="wc-fees">—</strong>
               <span class="metric-foot">Execution fees</span>
             </article>
 
@@ -298,7 +320,7 @@
                 <svg><use href="#icon-alert"></use></svg>
               </div>
               <span class="metric-label">Cost / 1M</span>
-              <strong class="metric-value metric-mono" id="wc-cost-1m">$0.00</strong>
+              <strong class="metric-value metric-mono" id="wc-cost-1m">—</strong>
               <span class="metric-foot">Cost per million</span>
             </article>
 

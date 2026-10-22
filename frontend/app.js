@@ -38,8 +38,9 @@
     const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
     function formatUSD(val, showSign = false) {
+        if (val == null || val === "") return "—";
         const num = Number(val);
-        if (!Number.isFinite(num)) return "$0.00";
+        if (!Number.isFinite(num)) return "—";
         const formatted = Math.abs(num).toLocaleString("en-US", {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
@@ -51,7 +52,7 @@
 
     function formatPrice(val) {
         const num = Number(val);
-        if (!Number.isFinite(num) || num === 0) return "--";
+        if (val == null || !Number.isFinite(num) || num === 0) return "—";
         if (Math.abs(num) >= 1000) {
             return `$${num.toLocaleString("en-US", {
                 minimumFractionDigits: 2,
@@ -64,7 +65,7 @@
 
     function formatBPS(val) {
         const num = Number(val);
-        if (!Number.isFinite(num)) return "-- BPS";
+        if (val == null || !Number.isFinite(num)) return "—";
         return `${num.toFixed(1)} BPS`;
     }
 
@@ -98,12 +99,50 @@
         copy.append(heading);
         if (message) copy.append(detail);
 
-        toast.append(icon, copy);
+        const close = document.createElement("button");
+        close.type = "button";
+        close.className = "toast-close";
+        close.setAttribute("aria-label", "Fermer la notification");
+        close.innerHTML = '<svg aria-hidden="true"><use href="#icon-close"></use></svg>';
+        toast.append(icon, copy, close);
         stack.prepend(toast);
-        window.setTimeout(() => toast.remove(), 4500);
+        let timer;
+        let leaving = false;
+        const remove = () => {
+            if (leaving) return;
+            leaving = true;
+            window.clearTimeout(timer);
+            document.removeEventListener("visibilitychange", visibility);
+            toast.classList.add("leaving");
+            window.setTimeout(() => toast.remove(), 180);
+        };
+        const pause = () => window.clearTimeout(timer);
+        const resume = () => {
+            pause();
+            if (!document.hidden && !toast.contains(document.activeElement) && !toast.matches(":hover")) {
+                timer = window.setTimeout(remove, type === "error" ? 10000 : 6000);
+            }
+        };
+        const visibility = () => document.hidden ? pause() : resume();
+        close.addEventListener("click", () => {
+            if (toast.contains(document.activeElement)) {
+                const page = $(".page.active");
+                page?.querySelector("button:not(:disabled), input:not([type=hidden]), select")?.focus();
+            }
+            remove();
+        });
+        toast.addEventListener("pointerenter", pause);
+        toast.addEventListener("pointerleave", resume);
+        toast.addEventListener("focusin", pause);
+        toast.addEventListener("focusout", () => window.setTimeout(resume, 0));
+        document.addEventListener("visibilitychange", visibility);
+        toast.dismiss = remove;
+        resume();
 
         while (stack.children.length > 4) {
-            stack.lastElementChild?.remove();
+            const oldest = stack.lastElementChild;
+            oldest?.dismiss?.();
+            oldest?.remove();
         }
     }
 
@@ -112,11 +151,6 @@
         if (!alert) return;
         alert.hidden = !message;
         alert.textContent = message || "";
-    }
-
-    function readNumber(selector, fallback = 0) {
-        const value = Number.parseFloat($(selector)?.value);
-        return Number.isFinite(value) ? value : fallback;
     }
 
     function markInvalid(selector, invalid) {
@@ -128,11 +162,12 @@
 
     function validateMin(prefix, fields) {
         for (const field of fields) {
-            const value = readNumber(field.selector, field.fallback);
-            const invalid = value < field.min;
+            const value = Number.parseFloat($(field.selector)?.value);
+            const invalid = !Number.isFinite(value) || value < field.min;
             markInvalid(field.selector, invalid);
             if (invalid) {
                 setFormError(prefix, field.message);
+                $(field.selector)?.focus();
                 return false;
             }
         }
@@ -152,7 +187,7 @@
         const shell = $("#connection-status");
         const label = shell?.querySelector(".status-text");
         shell?.classList.toggle("connected", connected);
-        if (label) label.textContent = connected ? "Connected" : "Disconnected";
+        if (label) label.textContent = connected ? "Connecté" : "Déconnecté";
     }
 
     function setRunState(prefix, running) {
@@ -162,14 +197,18 @@
             pill.hidden = !running;
             pill.classList.toggle("running", running);
             pill.classList.toggle("idle", !running);
-            pill.textContent = running ? "Running" : "";
+            pill.textContent = running ? "Active" : "";
         }
         if (banner) banner.hidden = !running;
     }
 
     function setBusy(buttonId, busy) {
         const btn = $(`#${buttonId}`);
-        if (btn) btn.setAttribute("aria-busy", busy ? "true" : "false");
+        if (!btn) return;
+        if (busy && btn.getAttribute("aria-busy") !== "true") btn.dataset.wasDisabled = String(btn.disabled);
+        btn.setAttribute("aria-busy", busy ? "true" : "false");
+        btn.disabled = busy || btn.dataset.wasDisabled === "true";
+        if (!busy) delete btn.dataset.wasDisabled;
     }
 
     function updateGridButtons() {
@@ -177,8 +216,8 @@
         // Stop (global) n'est actif que si au moins un bot tourne.
         const startBtn = $("#grid-start-btn");
         const stopBtn = $("#grid-stop-btn");
-        if (startBtn) startBtn.disabled = false;
-        if (stopBtn) stopBtn.disabled = !gridRunning;
+        if (startBtn) startBtn.disabled = startBtn.getAttribute("aria-busy") === "true";
+        if (stopBtn) stopBtn.disabled = !gridRunning || stopBtn.getAttribute("aria-busy") === "true";
         setRunState("grid", gridRunning);
     }
 
@@ -200,8 +239,8 @@
     function updateWcButtons() {
         const startBtn = $("#wc-start-btn");
         const stopBtn = $("#wc-stop-btn");
-        if (startBtn) startBtn.disabled = wcRunning;
-        if (stopBtn) stopBtn.disabled = !wcRunning;
+        if (startBtn) startBtn.disabled = wcRunning || startBtn.getAttribute("aria-busy") === "true";
+        if (stopBtn) stopBtn.disabled = !wcRunning || stopBtn.getAttribute("aria-busy") === "true";
         setRunState("wc", wcRunning);
     }
 
@@ -210,9 +249,12 @@
             const active = tab.dataset.page === pageName;
             tab.classList.toggle("active", active);
             tab.setAttribute("aria-selected", active ? "true" : "false");
+            tab.tabIndex = active ? 0 : -1;
         });
         $$(".page").forEach((page) => {
-            page.classList.toggle("active", page.id === `page-${pageName}`);
+            const active = page.id === `page-${pageName}`;
+            page.classList.toggle("active", active);
+            page.hidden = !active;
         });
     }
 
@@ -296,7 +338,7 @@
         if (shown.length === 0) {
             const empty = document.createElement("div");
             empty.className = "empty-option";
-            empty.textContent = "No HIP-3 token found";
+            empty.textContent = "Aucun token trouvé";
             container.replaceChildren(empty);
             return;
         }
@@ -328,7 +370,7 @@
                 button.append(logo, meta);
                 button.addEventListener("click", () => {
                     setSelectedGridToken(token);
-                    closeTokenPicker();
+                    closeTokenPicker(true);
                 });
                 return button;
             })
@@ -340,17 +382,20 @@
         const trigger = $("#grid-token-trigger");
         if (!picker || !trigger) return;
         picker.classList.add("open");
+        $("#grid-token-menu").hidden = false;
         trigger.setAttribute("aria-expanded", "true");
         renderTokenOptions($("#grid-token-search")?.value || "");
         requestAnimationFrame(() => $("#grid-token-search")?.focus());
     }
 
-    function closeTokenPicker() {
+    function closeTokenPicker(restoreFocus = false) {
         const picker = $("#grid-token-picker");
         const trigger = $("#grid-token-trigger");
         if (!picker || !trigger) return;
         picker.classList.remove("open");
+        $("#grid-token-menu").hidden = true;
         trigger.setAttribute("aria-expanded", "false");
+        if (restoreFocus) trigger.focus();
     }
 
     /* --------- WorldCup market picker (même composant que le token picker) --------- */
@@ -424,7 +469,7 @@
                 button.append(logo, meta);
                 button.addEventListener("click", () => {
                     setSelectedWcMarket(market);
-                    closeWcMarketPicker();
+                    closeWcMarketPicker(true);
                 });
                 return button;
             })
@@ -436,17 +481,51 @@
         const trigger = $("#wc-market-trigger");
         if (!picker || !trigger) return;
         picker.classList.add("open");
+        $("#wc-market-menu").hidden = false;
         trigger.setAttribute("aria-expanded", "true");
         renderWcMarketOptions($("#wc-market-search")?.value || "");
         requestAnimationFrame(() => $("#wc-market-search")?.focus());
     }
 
-    function closeWcMarketPicker() {
+    function closeWcMarketPicker(restoreFocus = false) {
         const picker = $("#wc-market-picker");
         const trigger = $("#wc-market-trigger");
         if (!picker || !trigger) return;
         picker.classList.remove("open");
+        $("#wc-market-menu").hidden = true;
         trigger.setAttribute("aria-expanded", "false");
+        if (restoreFocus) trigger.focus();
+    }
+
+    function bindPickerKeyboard(menuId, searchId, close) {
+        const menu = $(`#${menuId}`);
+        menu.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                close(true);
+                return;
+            }
+            const options = Array.from(menu.querySelectorAll(".token-option"));
+            const index = options.indexOf(document.activeElement);
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const next = index < 0 ? (event.key === "ArrowDown" ? 0 : options.length - 1)
+                    : (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+                options.forEach((option, i) => { option.tabIndex = i === next ? 0 : -1; });
+                options[next]?.focus();
+            } else if (index >= 0 && (event.key === "Home" || event.key === "End")) {
+                event.preventDefault();
+                options[event.key === "Home" ? 0 : options.length - 1]?.focus();
+            } else if (index >= 0 && event.key === "Tab" && event.shiftKey) {
+                event.preventDefault();
+                $(`#${searchId}`).focus();
+            }
+        });
+        menu.addEventListener("focusout", () => {
+            window.setTimeout(() => {
+                if (!menu.parentElement.contains(document.activeElement)) close();
+            }, 0);
+        });
     }
 
     async function loadGridTokens() {
@@ -531,11 +610,22 @@
     }
 
     function updateGridDashboard(data) {
-        // Plus de cartes agrégées: tout l'affichage vit dans les cartes
-        // par token (renderBotsList). Seul le bandeau de session reste.
         setText("grid-run-duration", data.duration || "00:00:00");
 
         const bots = Array.isArray(data.bots) ? data.bots : [];
+        const active = bots.filter((bot) => bot.running);
+        const sumKnown = (field) => active.length && active.every((bot) => typeof bot[field] === "number" && Number.isFinite(bot[field]))
+            ? active.reduce((sum, bot) => sum + bot[field], 0) : null;
+        const volume = sumKnown("volume_usd");
+        const fees = sumKnown("fees");
+        const realized = sumKnown("realized_pnl");
+        const net = fees != null && realized != null ? realized - fees : null;
+        setText("overview-volume", formatUSD(volume));
+        setText("overview-pnl", formatUSD(net, true));
+        setPnLColor($("#overview-pnl"), net);
+        setText("overview-cost", volume > 0 && net != null ? formatUSD(-net / volume * 1e6) : "—");
+        setText("session-count", `${active.length} active${active.length === 1 ? "" : "s"} · ${bots.length} au total`);
+        $("#grid-empty-state").hidden = bots.length > 0;
         const runningTokens = bots.filter((b) => b.running).map((b) => b.token);
         const token = runningTokens.length
             ? runningTokens.join(" · ")
@@ -561,19 +651,19 @@
         }
         container.hidden = false;
 
-        // Reconstruire le DOM seulement si la liste de tokens change; sinon
-        // ne mettre à jour que les valeurs (pas de flicker à 1 Hz).
-        const signature = bots.map((b) => `${b.token}:${b.strategy || "bbo"}:${b.offset_bps ?? ""}:${b.phase || ""}:${b.running}`).join("|");
+        // Keep each card and its focused controls across live state changes.
+        const signature = bots.map((b) => b.token).join("|");
         if (container.dataset.tokens !== signature) {
             container.dataset.tokens = signature;
+            const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
             container.innerHTML = bots.map((b) => `
-              <article class="bot-card" data-token="${b.token}">
+              <article class="bot-card" data-token="${escapeHtml(b.token)}">
                 <header class="bot-card-head">
                   <span class="bot-dot" aria-hidden="true"></span>
-                  <strong class="bot-card-token">${b.token} · ${b.strategy === "mid" ? `MID ORDER BOOK · ${Number(b.offset_bps || 0).toFixed(1)} BPS` : b.strategy === "bbo" ? "BBO ORDER BOOK" : "ANCIEN MODE"} · ${!b.running ? "ARRÊTÉ" : b.phase === "connecting" ? "CONNEXION" : "LIVE"}</strong>
+                  <strong class="bot-card-token" data-f="title"></strong>
                   <span class="bot-card-duration" data-f="duration">00:00:00</span>
-                  <button class="btn btn-stop bot-card-stop" type="button" data-token="${b.token}">
-                    Stop
+                  <button class="btn btn-stop bot-card-stop" type="button" data-token="${escapeHtml(b.token)}" aria-label="Arrêter ${escapeHtml(b.token)}">
+                    Arrêter
                   </button>
                 </header>
                 <div class="bot-card-grid">
@@ -599,13 +689,15 @@
         }
 
         bots.forEach((b) => {
-            const card = container.querySelector(`.bot-card[data-token="${b.token}"]`);
+            const card = Array.from(container.children).find((item) => item.dataset.token === String(b.token));
             if (!card) return;
             card.classList.toggle("stopped", !b.running);
+            card.classList.toggle("failed", Boolean(b.error));
             const set = (f, v) => {
                 const el = card.querySelector(`[data-f="${f}"]`);
                 if (el && el.textContent !== v) el.textContent = v;
             };
+            set("title", `${b.token} · ${b.strategy === "mid" ? `MID · ${Number(b.offset_bps || 0).toFixed(1)} BPS` : b.strategy === "bbo" ? "BBO" : "ANCIEN MODE"} · ${!b.running ? "ARRÊTÉ" : b.phase === "connecting" ? "CONNEXION" : "LIVE"}`);
             set("duration", b.duration || "00:00:00");
             set("mid", formatPrice(b.mid_price));
             set("vol", formatUSD(b.volume_usd));
@@ -624,7 +716,13 @@
             set("markout", `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
             set("action", b.error ? `⚠ ${b.error}` : (b.action || ""));
             const stopBtn = card.querySelector(".bot-card-stop");
-            if (stopBtn) stopBtn.style.display = b.running ? "" : "none";
+            if (stopBtn) {
+                if (!b.running && document.activeElement === stopBtn) {
+                    card.tabIndex = -1;
+                    card.focus({ preventScroll: true });
+                }
+                stopBtn.hidden = !b.running;
+            }
         });
     }
 
@@ -635,7 +733,7 @@
         setText("wc-run-duration", data.duration || "00:00:00");
         setText("wc-volume", formatUSD(data.volume_usd));
         setText("wc-fees", formatUSD(data.fees));
-        setText("wc-cost-1m", formatUSD(data.cost_per_1m));
+        setText("wc-cost-1m", data.volume_usd > 0 ? formatUSD(data.cost_per_1m) : "—");
         setText("wc-fills", String(data.fills || 0));
         setText("wc-mid-price", formatPrice(data.mid_price));
         setText("wc-spread-display", formatBPS(data.spread_bps));
@@ -652,8 +750,6 @@
             updateWcButtons();
         }
     }
-
-    // Shader and spotlight features removed in line with ui-ux-pro-max design system.
 
     async function startGridBot() {
         const token = $("#grid-token")?.value || selectedGridToken.key || "SP500";
@@ -698,9 +794,11 @@
             showToast("info", "Connexion à Hyperliquid", `${token} · le démarrage est en cours. L'état et les erreurs restent visibles dans la carte.`);
         } catch (error) {
             console.error("Market maker start failed:", error);
+            setFormError("grid", error.message);
             showToast("error", "Market maker start failed", error.message);
         } finally {
             setBusy("grid-start-btn", false);
+            updateGridButtons();
         }
     }
 
@@ -720,19 +818,21 @@
             showToast("error", "Stop failed", error.message);
         } finally {
             setBusy("grid-stop-btn", false);
+            updateGridButtons();
         }
     }
 
     async function startWorldcupBot() {
         const order_size_usd = Number.parseFloat($("#wc-order-size")?.value) || 50;
         // En %, même convention que --max-spread-pct (0.02 = 0.02% = 2 bps)
-        const max_spread_pct = Number.parseFloat($("#wc-spread")?.value) || 0.02;
+        const max_spread_pct = Number.parseFloat($("#wc-spread")?.value);
         const max_position_usd = Number.parseFloat($("#wc-max-pos")?.value) || 250;
         const market = $("#wc-market")?.value || "ALL";
 
         if (!validateMin("wc", [
             { selector: "#wc-order-size", min: 10, fallback: order_size_usd, message: "Order USD must be at least 10." },
             { selector: "#wc-max-pos", min: 10, fallback: max_position_usd, message: "Max Pos USD must be at least 10." },
+            { selector: "#wc-spread", min: 0, message: "Le spread doit être un nombre positif ou nul." },
         ])) {
             showToast("error", "Check WorldCup settings", "Correct the highlighted field before starting.");
             return;
@@ -752,9 +852,11 @@
             showToast("success", "WorldCup bot started", `${marketTxt} · spread < ${max_spread_pct}%`);
         } catch (error) {
             console.error("WorldCup start failed:", error);
+            setFormError("wc", error.message);
             showToast("error", "WorldCup start failed", error.message);
         } finally {
             setBusy("wc-start-btn", false);
+            updateWcButtons();
         }
     }
 
@@ -770,6 +872,7 @@
             showToast("error", "WorldCup stop failed", error.message);
         } finally {
             setBusy("wc-stop-btn", false);
+            updateWcButtons();
         }
     }
 
@@ -788,6 +891,7 @@
         const gate = $("#access-gate");
         if (!gate) return;
         gate.hidden = false;
+        if (!gate.open) gate.showModal();
         const err = $("#access-gate-error");
         if (err) {
             err.textContent = message || "";
@@ -798,7 +902,10 @@
 
     function hideAccessGate() {
         const gate = $("#access-gate");
-        if (gate) gate.hidden = true;
+        if (gate) {
+            gate.close();
+            gate.hidden = true;
+        }
     }
 
     function lockApp(message) {
@@ -888,7 +995,39 @@
 
         $$(".nav-tab").forEach((tab) => {
             tab.addEventListener("click", () => switchPage(tab.dataset.page));
+            tab.addEventListener("keydown", (event) => {
+                const tabs = $$(".nav-tab");
+                const index = tabs.indexOf(tab);
+                let next;
+                if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+                if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+                if (event.key === "Home") next = 0;
+                if (event.key === "End") next = tabs.length - 1;
+                if (next == null) return;
+                event.preventDefault();
+                switchPage(tabs[next].dataset.page);
+                tabs[next].focus();
+            });
         });
+
+        document.addEventListener("keydown", () => { document.documentElement.dataset.input = "keyboard"; });
+        document.addEventListener("pointerdown", () => { document.documentElement.dataset.input = "pointer"; });
+        $("#access-gate").addEventListener("cancel", (event) => event.preventDefault());
+        $("#access-gate").addEventListener("keydown", (event) => {
+            if (event.key !== "Tab") return;
+            const controls = Array.from(event.currentTarget.querySelectorAll("input, button:not(:disabled)"));
+            const first = controls[0];
+            const last = controls[controls.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        });
+        bindPickerKeyboard("grid-token-menu", "grid-token-search", closeTokenPicker);
+        bindPickerKeyboard("wc-market-menu", "wc-market-search", closeWcMarketPicker);
 
         $("#grid-token-trigger")?.addEventListener("click", () => {
             const picker = $("#grid-token-picker");
@@ -898,14 +1037,6 @@
 
         $("#grid-token-search")?.addEventListener("input", (event) => {
             renderTokenOptions(event.target.value);
-        });
-
-        $("#grid-token-search")?.addEventListener("keydown", (event) => {
-            if (event.key === "Escape") closeTokenPicker();
-            if (event.key === "ArrowDown") {
-                event.preventDefault();
-                $("#grid-token-options .token-option")?.focus();
-            }
         });
 
         document.addEventListener("click", (event) => {
@@ -923,14 +1054,6 @@
 
         $("#wc-market-search")?.addEventListener("input", (event) => {
             renderWcMarketOptions(event.target.value);
-        });
-
-        $("#wc-market-search")?.addEventListener("keydown", (event) => {
-            if (event.key === "Escape") closeWcMarketPicker();
-            if (event.key === "ArrowDown") {
-                event.preventDefault();
-                $("#wc-market-options .token-option")?.focus();
-            }
         });
 
         setSelectedWcMarket(selectedWcMarket);
