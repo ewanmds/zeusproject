@@ -71,6 +71,7 @@ def main():
             page.evaluate("document.fonts.ready")
             page.wait_for_function("document.querySelector('#session-count').textContent.includes('total')")
             assert page.locator("#grid-empty-state").is_visible()
+            assert page.locator("#grid-strategy option").evaluate_all("options => options.map(option => option.value)") == ["bbo", "mid"]
             assert page.locator("#overview-volume").inner_text() == "\u2014"
             palette = page.evaluate("['--bg','--primary','--cta'].map(x=>getComputedStyle(document.documentElement).getPropertyValue(x).trim())")
             assert palette == ["#090d16", "#f59e0b", "#8b5cf6"], palette
@@ -113,17 +114,6 @@ def main():
             page.evaluate("document.getAnimations().forEach(animation => { animation.playbackRate = 0.1; })")
             assert requests[-1] == ("grid/start", dict(token="SP500", strategy="mid", mode="live", order_size_usd=100, offset_bps=7.5))
             assert not page.locator("#grid-start-btn").is_disabled()
-            page.locator("#grid-strategy").select_option("experimental")
-            assert page.locator("#grid-order-size").is_disabled()
-            assert page.locator("#grid-token-trigger").is_disabled()
-            assert page.locator("#grid-experimental-help").is_visible()
-            assert page.locator("#grid-order-size").input_value() == "10.5"
-            page.locator("#grid-start-btn").click()
-            page.locator("#grid-form-alert").wait_for(state="visible")
-            assert requests[-1] == ("grid/start", dict(token="SP500", strategy="experimental", mode="live", order_size_usd=10.5))
-            page.locator("#grid-strategy").select_option("mid")
-            assert page.locator("#grid-order-size").input_value() == "100"
-            assert not page.locator("#grid-order-size").is_disabled()
             grid.update(running=True, bots=[bot])
             sockets[-1].send(json.dumps(grid))
             page.locator(".bot-card").wait_for()
@@ -151,14 +141,6 @@ def main():
             assert page.locator(".bot-card-stop").is_hidden()
             assert page.locator("#overview-cost").inner_text() == "\u2014"
             assert page.locator(".bot-card-action").is_visible()
-            bot.update(strategy="experimental", phase="ready", experimental=dict(
-                state="ready", execution_mode="direct", reason="direct", fees_verified=True,
-                report_accepted=False, offset_ticks=4, markouts={}))
-            sockets[-1].send(json.dumps(grid))
-            page.wait_for_function("document.querySelector('[data-f=research-details]').hidden === false")
-            page.locator(".experimental-diagnostics summary").focus()
-            page.locator(".experimental-diagnostics summary").press("Enter")
-            assert "non requise (direct)" in page.locator('[data-f="research-status"]').inner_text()
             page.emulate_media(reduced_motion="reduce")
             assert page.locator(".page.active").evaluate("el=>getComputedStyle(el).animationName") == "none"
             assert page.locator(".btn").first.evaluate("el=>getComputedStyle(el).transitionDuration") == "0s"

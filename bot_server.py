@@ -262,10 +262,8 @@ class BotManager:
             raise ValueError('Market making requires mode=live')
         token_key = (config.token or "SP500").strip().upper()
         strategy = (config.strategy or "bbo").strip().lower()
-        if strategy not in ("bbo", "mid", "experimental"):
+        if strategy not in ("bbo", "mid"):
             raise ValueError(f"Unknown market making strategy: {config.strategy}")
-        if strategy == "experimental" and token_key != "SP500":
-            raise ValueError("Experimental MM v1 supports SP500 (xyz:SP500) only")
         offset_bps = None
         if strategy == "mid":
             offset_bps = float(config.offset_bps if config.offset_bps is not None else 1.0)
@@ -282,7 +280,7 @@ class BotManager:
             symbol = obi_mod.resolve_token(token_key)
         except BaseException as exc:  # resolve_token lève SystemExit si inconnu
             raise ValueError(f"Unknown token '{config.token}': {exc}")
-        order_usd = 10.5 if strategy == "experimental" else max(10.5, float(config.order_size_usd))
+        order_usd = max(10.5, float(config.order_size_usd))
 
         with self.lock:
             existing = self.obi_procs.get(token_key)
@@ -486,7 +484,6 @@ class BotManager:
                     "upnl": _json_float(st.get("upnl", 0), 4),
                     "action": str(st.get("action", "")),
                     "error": error,
-                    "experimental": st.get("experimental") if info["config"].get("strategy") == "experimental" else None,
                 }
                 bots.append(entry)
                 if alive and entry['mode'] == 'live':

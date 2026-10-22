@@ -228,11 +228,12 @@ class OrderBookModeTests(unittest.TestCase):
 
 
 class BackendModeTests(unittest.TestCase):
-    def test_backend_rejects_obi_and_invalid_distance_without_spawning(self):
+    def test_backend_rejects_retired_modes_and_invalid_distance_without_spawning(self):
         import bot_server as server
         manager = server.BotManager()
         with patch.object(server.subprocess, "Popen") as spawn:
             for config in (server.GridStartRequest(strategy="obi"),
+                           server.GridStartRequest(strategy="experimental"),
                            server.GridStartRequest(strategy="mid", offset_bps=-1),
                            server.GridStartRequest(strategy="mid", offset_bps=10000)):
                 with self.assertRaises(ValueError):

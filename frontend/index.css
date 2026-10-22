@@ -882,9 +882,6 @@ main {
 }
 
 .bot-card-action:empty { display: none; }
-.experimental-diagnostics { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
-.experimental-diagnostics summary { cursor: pointer; min-height: 40px; display: list-item; align-content: center; color: var(--text); }
-.experimental-diagnostics p { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 
 @media (max-width: 720px) {
   .bot-card-grid { grid-template-columns: repeat(2, 1fr); }
