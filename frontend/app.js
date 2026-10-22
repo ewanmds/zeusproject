@@ -225,6 +225,25 @@
         const strategy = $("#grid-strategy")?.value || "bbo";
         const offsetField = $("#grid-offset-field");
         if (offsetField) offsetField.hidden = strategy !== "mid";
+        const experimental = strategy === "experimental";
+        const amount = $("#grid-order-size");
+        if (experimental && !amount.disabled) {
+            amount.dataset.previousAmount = amount.value;
+            amount.value = "10.5";
+        } else if (!experimental && amount.disabled) {
+            amount.value = amount.dataset.previousAmount || "100";
+        }
+        amount.disabled = experimental;
+        $("#grid-token-trigger").disabled = experimental;
+        $("#grid-experimental-help").hidden = !experimental;
+        if (experimental) {
+            closeTokenPicker();
+            setSelectedGridToken(gridTokens.find((token) => token.symbol === "xyz:SP500") || {key: "SP500", symbol: "xyz:SP500"});
+            setText("grid-heading", "Experimental MM");
+            setText("grid-description", "SP500 uniquement · exécution directe · priorité au CPM.");
+            setText("grid-strategy-hint", "Recul de 4 ticks, quotes conservées et filtre de flux. Frais et risque vérifiés avant toute ouverture.");
+            return;
+        }
         if (strategy === "mid") {
             setText("grid-heading", "MID Order Book");
             setText("grid-description", "Market making classique : achat et vente à une distance fixe du mid, réglable en bps.");
@@ -682,6 +701,7 @@
                   <div class="bot-stat"><span>Markout B/A</span><strong data-f="markout">—</strong></div>
                 </div>
                 <footer class="bot-card-action" data-f="action"></footer>
+                <details class="experimental-diagnostics" data-f="research-details" hidden><summary>Diagnostic expérimental</summary><p data-f="research-status"></p><p data-f="research-markouts"></p></details>
               </article>`).join("");
             container.querySelectorAll(".bot-card-stop").forEach((btn) => {
                 btn.addEventListener("click", () => stopGridBot(btn.dataset.token));
@@ -697,7 +717,17 @@
                 const el = card.querySelector(`[data-f="${f}"]`);
                 if (el && el.textContent !== v) el.textContent = v;
             };
-            set("title", `${b.token} · ${b.strategy === "mid" ? `MID · ${Number(b.offset_bps || 0).toFixed(1)} BPS` : b.strategy === "bbo" ? "BBO" : "ANCIEN MODE"} · ${!b.running ? "ARRÊTÉ" : b.phase === "connecting" ? "CONNEXION" : "LIVE"}`);
+            const phaseLabel = {connecting: "CONNEXION", collecting: "COLLECTE", blocked: "BLOQUÉ", ready: "VALIDÉ", quoting: "COTATION"}[b.phase] || "LIVE";
+            set("title", `${b.token} · ${b.strategy === "mid" ? `MID · ${Number(b.offset_bps || 0).toFixed(1)} BPS` : b.strategy === "bbo" ? "BBO" : b.strategy === "experimental" ? "EXPÉRIMENTAL" : "ANCIEN MODE"} · ${!b.running ? "ARRÊTÉ" : phaseLabel}`);
+            const research = b.strategy === "experimental" ? b.experimental : null;
+            card.querySelector('[data-f="research-details"]').hidden = !research;
+            if (research) {
+                set("research-status", `${research.reason || "Connexion en cours"} · Frais : ${research.fees_verified ? "vérifiés" : "inconnus"} · Calibration : ${research.execution_mode === "direct" ? "non requise (direct)" : research.report_accepted ? "acceptée" : "non validée"} · Recul : ${research.offset_ticks ?? "—"} ticks · Latence API p95 : ${research.ack_latency_ms_p95 == null ? "—" : Number(research.ack_latency_ms_p95).toFixed(0) + " ms"}`);
+                set("research-markouts", ["0.25", "1.0", "3.0", "6.0"].map((horizon) => {
+                    const sides = research.markouts?.[horizon];
+                    return `${horizon}s B/A : ${formatBPS(sides?.B?.mean_bps)} / ${formatBPS(sides?.A?.mean_bps)}`;
+                }).join(" · "));
+            }
             set("duration", b.duration || "00:00:00");
             set("mid", formatPrice(b.mid_price));
             set("vol", formatUSD(b.volume_usd));

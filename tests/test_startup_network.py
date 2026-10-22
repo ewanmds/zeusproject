@@ -82,7 +82,7 @@ class StartupNetworkTests(unittest.TestCase):
                          retry_read=lambda label, op: retry_read(label, op, sleep=Mock()))
         exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)
         bot = types.SimpleNamespace(fixed_spot_meta={}, _on_l2=Mock(), _on_trades=Mock(),
-                                    _on_user_fills=Mock(), _on_order_updates=Mock())
+                                    _on_user_fills=Mock(), _on_order_updates=Mock(), experimental=None)
         with patch("hyperliquid.websocket_manager.WebsocketManager") as websocket:
             namespace["start_ws"](bot)
             websocket.assert_called_once()

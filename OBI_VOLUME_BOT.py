@@ -300,7 +300,7 @@ def px_up(px: float, tick: float) -> float:
 
 def fast_mm() -> bool:
     """BBO + MID: requote rapide, pas de couches OBI."""
-    return STRATEGY in ("bbo", "mid")
+    return STRATEGY in ("bbo", "mid", "experimental")
 
 
 def touch_mm() -> bool:
@@ -1170,6 +1170,11 @@ class OrderBookBot:
         self._stats_file = stats_file_path(SYMBOL)
         self._stop_file = stop_file_path(SYMBOL)
         self._last_stats_write = 0.0
+        self.experimental = None
+        self._experimental_uncertain = False
+        if STRATEGY == "experimental":
+            from experimental_mm.runtime import Runtime
+            self.experimental = Runtime(lambda payload: post_info(BASE_URL, payload), ACCOUNT_ADDRESS)
         try:
             if os.path.exists(self._stop_file):
                 os.remove(self._stop_file)   # stopfile d'un run précédent
@@ -1230,6 +1235,8 @@ class OrderBookBot:
         self.ws_info.subscribe({"type": "trades", "coin": SYMBOL}, self._on_trades)
         self.ws_info.subscribe({"type": "userFills", "user": ACCOUNT_ADDRESS}, self._on_user_fills)
         self.ws_info.subscribe({"type": "orderUpdates", "user": ACCOUNT_ADDRESS}, self._on_order_updates)
+        if self.experimental:
+            self.ws_info.subscribe({"type": "activeAssetCtx", "coin": SYMBOL}, self._on_experimental_context)
         if MACRO_ENABLE:
             self.ws_info.subscribe(
                 {"type": "candle", "coin": SYMBOL, "interval": MACRO_INTERVAL},
@@ -1258,6 +1265,8 @@ class OrderBookBot:
             # A5: mettre à jour le signal AVANT de marquer le feed "vivant".
             # Si on_l2 lève, last_tick_ts/ws_ready ne mentent pas au deadman.
             self.signal.on_l2(levels[0], levels[1])
+            if self.experimental:
+                self.experimental.book(levels[0], levels[1], float(data["data"]["time"]) / 1000)
             with self.lock:
                 self.best_bid, self.best_ask = bb, ba
                 self.mid = (bb + ba) / 2.0
@@ -1265,7 +1274,17 @@ class OrderBookBot:
                 self.ws_ready = True
             self.wake.set()
         except Exception:
+            if self.experimental:
+                self.experimental.journal.record("gap", {"reason": "invalid L2 callback"})
+                with self.experimental.lock:
+                    self.experimental.features.book = None
             pass
+
+    def _on_experimental_context(self, event):
+        try:
+            self.experimental.context(event["data"])
+        except Exception:
+            self.experimental.journal.record("gap", {"reason": "invalid oracle context"})
 
     def _on_candle(self, data):
         """WS candle: {"channel":"candle","data":{t,T,s,i,o,h,l,c,v,n}}.
@@ -1279,6 +1298,8 @@ class OrderBookBot:
 
     def _on_trades(self, data):
         try:
+            if self.experimental:
+                self.experimental.trades(data.get("data", []) or [])
             got = False
             buy_usd = 0.0
             sell_usd = 0.0
@@ -1320,6 +1341,8 @@ class OrderBookBot:
                 # la boucle au lieu d'attendre le prochain tick L2.
                 self.wake.set()
         except Exception:
+            if self.experimental:
+                self.experimental.journal.record("gap", {"reason": "invalid trade callback"})
             pass
 
     def _emergency_pull(self, side: str, burst_usd: float):
@@ -1387,12 +1410,22 @@ class OrderBookBot:
                             self.side_pause_until[sd] = now_f + BURST_PAUSE_SEC
                         if abs(self.position) < MIN_SIZE / 2 and abs(new_pos) >= MIN_SIZE / 2:
                             self.pos_since = time.time()
+                        if self.experimental:
+                            signed = sz if sd == "B" else -sz
+                            if self.position == 0 or self.position * new_pos < 0:
+                                self.entry_price = px
+                            elif self.position * signed > 0:
+                                self.entry_price = (self.entry_price * abs(self.position) + px * sz) / (abs(self.position) + sz)
+                            if new_pos == 0:
+                                self.entry_price = 0.0
                         self.position = new_pos
                         if abs(self.position) < MIN_SIZE / 2:
                             self.pos_since = 0.0
                         self.total_volume += px * sz
                         fee = float(f.get("fee", 0))
                         closed_pnl = float(f.get("closedPnl", 0))
+                        if self.experimental:
+                            self.experimental.fill(now_f, sd, px, sz, fee, closed_pnl)
                         self.total_fees += fee
                         self.session_pnl += closed_pnl
                         self.hourly_net_events.append((now_f, closed_pnl - fee))
@@ -1630,8 +1663,9 @@ class OrderBookBot:
                 return
             try:
                 for r in pending:
-                    r["limit_px"] = self._execution_price(
-                        r["is_buy"], r["reduce_only"], bb, ba, tick)
+                    if STRATEGY != "experimental":
+                        r["limit_px"] = self._execution_price(
+                            r["is_buy"], r["reduce_only"], bb, ba, tick)
             except ValueError as exc:
                 self.last_error = str(exc)
                 return
@@ -1642,21 +1676,32 @@ class OrderBookBot:
                         # exposure from a stale opening request in that case.
                         if abs(self.position) >= MIN_SIZE / 2:
                             pending = [r for r in pending if r["reduce_only"]]
+                        if STRATEGY == "experimental":
+                            pending = [r for r in pending if self._experimental_submission_ok(r)]
                         if not pending:
                             self.force_quote = True
                             return
                         self.order_placements += len(pending)
                         self.order_requests += 1
+                    submitted_at = time.monotonic()
                     res = self.exchange.bulk_orders(pending)
+                    if STRATEGY == "experimental":
+                        self.experimental.ack("place", time.monotonic() - submitted_at, isinstance(res, dict) and res.get("status") == "ok")
             except Exception as exc:
                 with self.lock:
                     self.last_error = f"place: {str(exc)[:100]}"
+                    if STRATEGY == "experimental":
+                        self._experimental_uncertain = True
                 return
             if not isinstance(res, dict) or res.get("status") != "ok":
                 with self.lock:
                     self.last_error = f"place: {str(res)[:100]}"
+                    if STRATEGY == "experimental":
+                        self._experimental_uncertain = True
                 return
             statuses = res.get("response", {}).get("data", {}).get("statuses", [])
+            if STRATEGY == "experimental" and len(statuses) != len(pending):
+                self._experimental_uncertain = True
             retry_reqs = []
             with self.lock:
                 self.last_quote_ts = time.time()
@@ -1711,8 +1756,9 @@ class OrderBookBot:
             return False
         try:
             for _, r in pairs:
-                r["limit_px"] = self._execution_price(
-                    r["is_buy"], r["reduce_only"], bb, ba, tick)
+                if STRATEGY != "experimental":
+                    r["limit_px"] = self._execution_price(
+                        r["is_buy"], r["reduce_only"], bb, ba, tick)
         except ValueError as exc:
             self.last_error = str(exc)
             return False
@@ -1729,18 +1775,30 @@ class OrderBookBot:
                     if abs(self.position) >= MIN_SIZE / 2 and any(not r["reduce_only"] for _, r in pairs):
                         self.force_quote = True
                         return False
+                    if STRATEGY == "experimental" and not all(self._experimental_submission_ok(r) for _, r in pairs):
+                        self.force_quote = True
+                        return False
                     self.order_modifications += len(pairs)
                     self.order_requests += 1
+                submitted_at = time.monotonic()
                 res = self.exchange.bulk_modify_orders_new(modifies)
+                if STRATEGY == "experimental":
+                    self.experimental.ack("modify", time.monotonic() - submitted_at, isinstance(res, dict) and res.get("status") == "ok")
         except Exception as exc:
             with self.lock:
                 self.last_error = f"modify: {str(exc)[:100]}"
+                if STRATEGY == "experimental":
+                    self._experimental_uncertain = True
             return False
         if not isinstance(res, dict) or res.get("status") != "ok":
             with self.lock:
                 self.last_error = f"modify: {str(res)[:100]}"
+                if STRATEGY == "experimental":
+                    self._experimental_uncertain = True
             return False
         statuses = res.get("response", {}).get("data", {}).get("statuses", [])
+        if STRATEGY == "experimental" and len(statuses) != len(pairs):
+            self._experimental_uncertain = True
         ok_all = len(statuses) == len(pairs)
         with self.lock:
             self.last_quote_ts = time.time()
@@ -1887,16 +1945,70 @@ class OrderBookBot:
         return bid, ask, f"MID | mid +/- {MID_OFFSET_BPS:g}bps"
 
     def compute_intent(self):
+        if STRATEGY == "experimental":
+            return self.compute_experimental_intent()
         if STRATEGY == "mid":
             return self.compute_mid_intent()
         if STRATEGY == "bbo":
             return self.compute_bbo_intent()
         raise ValueError(f"Unsupported market making mode: {STRATEGY}")
 
+    def compute_experimental_intent(self):
+        st, error = self._fast_quote_gates()
+        if st is None:
+            return None, None, f"EXP | {error}"
+        now = time.time()
+        # Preserve all account/risk gates. Calibration only controls entries.
+        if self._experimental_uncertain and not st["pos"]:
+            return None, None, "EXP | réponse d'ordre incertaine : réconcilier puis redémarrer manuellement"
+        wanted = self.experimental.decision(now, SZ_DECIMALS, st["pos"], self.pos_since)
+        if st["pos"] and self.entry_price > 0:
+            from experimental_mm.core import POLICY
+            adverse = (st["mid"] - self.entry_price) / self.entry_price * 1e4 * (1 if st["pos"] > 0 else -1)
+            if adverse <= -POLICY.stop_bps or now - self.pos_since >= POLICY.max_hold:
+                if not self._hard_exit_at:
+                    self.bank_until = now + POLICY.maker_exit_window
+                    self._hard_exit_at = now + POLICY.maker_exit_window
+                    self._hard_exit_reason = "experimental inventory risk"
+                if adverse <= -2 * POLICY.stop_bps:
+                    self._hard_exit_at = now
+                    return None, None, "EXP | sortie de sécurité en cours"
+        bid = wanted.get("B") if st["bid_ok"] else None
+        ask = wanted.get("A") if st["ask_ok"] else None
+        state = self.experimental.snapshot()
+        return bid, ask, f"EXP | {state['state']} | {state['reason']}"
+
+    def _experimental_submission_ok(self, req):
+        """Called under account lock immediately before sending; no network I/O."""
+        now = time.time()
+        if not (self.best_ask > self.best_bid > 0) or now - self.last_tick_ts > 2:
+            return False
+        buy, price = req["is_buy"], req["limit_px"]
+        if not math.isfinite(price) or price <= 0 or (price >= self.best_ask if buy else price <= self.best_bid):
+            return False
+        if req["reduce_only"]:
+            return self.position * (1 if buy else -1) < 0 and req["sz"] <= abs(self.position) + MIN_SIZE / 2
+        if self._experimental_uncertain:
+            return False
+        if (abs(self.position) >= MIN_SIZE / 2 or now < self.pause_until
+                or now < self.hourly_pause_until or now < self.bank_until
+                or session_state_utc(SESSION_WINDOWS_UTC, now, OPEN_BLACKOUT_MIN) == "blackout"):
+            return False
+        wanted = self.experimental.decision(now, SZ_DECIMALS).get("B" if buy else "A")
+        return (wanted is not None and req["sz"] <= wanted[1] + MIN_SIZE / 2
+                and abs(price - wanted[0]) < dyn_tick(self.mid) / 2)
+
+    def _experimental_retain(self, old, want, now, tick):
+        from experimental_mm.core import retain, safe_resting
+        with self.experimental.lock:
+            book, fees = self.experimental.features.book, self.experimental.fees
+            return bool(book and fees and safe_resting(old, want, book, fees["maker"])
+                        and retain(old, want, now, tick))
+
     def apply_intent(self):
         """Shared BBO/MID execution: change only a different price/size/flag."""
         now = time.time()
-        if now - self.last_action_ts < ACTION_COALESCE_SEC:
+        if STRATEGY != "experimental" and now - self.last_action_ts < ACTION_COALESCE_SEC:
             return
         bid, ask, tag = self.compute_intent()
         intent = (bid, ask)
@@ -1916,6 +2028,8 @@ class OrderBookBot:
                 continue
             if len(resting) == 1:
                 oid, old = next(iter(resting.items()))
+                if STRATEGY == "experimental" and self._experimental_retain(old, want, now, tick):
+                    continue
                 if (abs(old["px"] - want[0]) < tick / 2.0
                         and abs(old["sz"] - want[1]) < MIN_SIZE / 2.0
                         and old.get("ro") == want[2]):
@@ -2191,6 +2305,11 @@ class OrderBookBot:
                 reg = self._reg_now[0]
                 macro = self._macro
             data["regime"] = reg or ""
+            if self.experimental:
+                data["experimental"] = self.experimental.snapshot()
+                if self._experimental_uncertain:
+                    data["experimental"].update(state="blocked", reason="réponse d'ordre incertaine : réconcilier puis redémarrer manuellement")
+                data["phase"] = phase or (data["experimental"]["state"] if running else "stopped")
             if macro.ready:
                 d = macro.diag
                 data["macro"] = {
@@ -2376,6 +2495,8 @@ class OrderBookBot:
             self.running = False
             print(str(exc), flush=True)
             self.write_stats(running=False, phase="failed")
+            if self.experimental:
+                self.experimental.close()
             return
         deadline = time.time() + 15
         while not self.ws_ready and time.time() < deadline:
@@ -2405,6 +2526,8 @@ class OrderBookBot:
         except Exception:
             pass
         self.write_stats(running=False)   # dernier snapshot pour le dashboard
+        if self.experimental:
+            self.experimental.close()
         if not headless:
             print("✅ Terminé.")
 
@@ -2431,7 +2554,7 @@ if __name__ == "__main__":
     parser.add_argument("--token", default=None, help="ex: SP500, XYZ100, SPCX")
     parser.add_argument("--live", action="store_true", help="ordres réels (défaut: dry-run)")
     parser.add_argument("--notional", type=float, default=None, help="USD par ordre")
-    parser.add_argument("--strategy", choices=("bbo", "mid"), default="bbo",
+    parser.add_argument("--strategy", choices=("bbo", "mid", "experimental"), default="bbo",
                         help="BBO Order Book ou MID Order Book")
     parser.add_argument("--offset-bps", type=float, default=None,
                         help="distance symétrique au mid pour strategy=mid")
@@ -2451,6 +2574,10 @@ if __name__ == "__main__":
         token = input(f"Token ? [{DEFAULT_TOKEN}] : ").strip() or DEFAULT_TOKEN
 
     SYMBOL = resolve_token(token)
+    if STRATEGY == "experimental":
+        if SYMBOL != "xyz:SP500":
+            parser.error("Experimental MM v1 supports xyz:SP500 only")
+        ORDER_NOTIONAL_USD = 10.5
     # Demi-spread par token (préset), sauf si forcé par variable d'env.
     _tok_cfg = TOKENS.get(token.strip().upper(), {})
     SESSION_WINDOWS_UTC = tuple(

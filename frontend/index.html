@@ -102,8 +102,10 @@
                 <select id="grid-strategy" aria-describedby="grid-strategy-hint">
                   <option value="bbo">BBO Order Book</option>
                   <option value="mid">MID Order Book</option>
+                  <option value="experimental">Experimental MM · SP500</option>
                 </select>
                 <span class="field-hint" id="grid-strategy-hint">Achat au meilleur bid, vente au meilleur ask.</span>
+                <p class="field-hint" id="grid-experimental-help" hidden>Exécution directe sur Hyperliquid, sans attendre de calibration. Stratégie expérimentale non validée : frais vérifiés et protections de risque actifs. Taille minimale arrondie : le montant réel peut dépasser 10,50 USD.</p>
               </div>
               <div class="field" id="grid-offset-field" hidden>
                 <label for="grid-offset-bps">Distance from mid (bps)</label>
