@@ -27,7 +27,7 @@ class Policy:
 
 POLICY = Policy()
 POLICY_HASH = hashlib.sha256(json.dumps(asdict(POLICY), sort_keys=True).encode()).hexdigest()
-OFFSETS = (0, 1, 2, 4)
+OFFSETS = (0, 1, 2, 3, 4)
 HORIZONS = (0.25, 1.0, 3.0, 6.0)
 
 
@@ -139,6 +139,14 @@ def quotes(book, now, decimals, offset, maker_rate, position=0.0, position_since
     if book["ofi"] < POLICY.ofi_limit:
         result["A"] = (ask, size, False)
     return result
+
+
+def nearest_cost_offset(book, decimals, maker_rate):
+    """Closest admissible symmetric quote; no promise of realized profitability."""
+    for offset in OFFSETS:
+        if quotes(book, book["ts"], decimals, offset, maker_rate):
+            return offset
+    return None
 
 
 def retain(old, want, now, tick):

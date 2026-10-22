@@ -241,7 +241,7 @@
             setSelectedGridToken(gridTokens.find((token) => token.symbol === "xyz:SP500") || {key: "SP500", symbol: "xyz:SP500"});
             setText("grid-heading", "Experimental MM");
             setText("grid-description", "SP500 uniquement · exécution directe · priorité au CPM.");
-            setText("grid-strategy-hint", "Recul de 4 ticks, quotes conservées et filtre de flux. Frais et risque vérifiés avant toute ouverture.");
+            setText("grid-strategy-hint", "Recul minimal compatible avec les frais, quotes conservées et filtre de flux. Carnet rafraîchi si le flux se tait.");
             return;
         }
         if (strategy === "mid") {

@@ -2,12 +2,14 @@
 from email.utils import parsedate_to_datetime
 import math
 import time
+import threading
 
 
 class ExchangeClock:
     def __init__(self):
         self.anchor = None
         self.monotonic_anchor = None
+        self.lock = threading.Lock()
 
     def observe(self, date_header, book_time_ms, sent_monotonic, received_monotonic):
         rtt = received_monotonic - sent_monotonic
@@ -17,17 +19,21 @@ class ExchangeClock:
             raise ValueError("unreliable exchange clock / cached book")
         # HTTP Date has one-second precision. Use the centre of its interval
         # and compensate half of the measured round trip.
-        estimate = server + .5 + rtt / 2
-        if self.anchor is not None and received_monotonic >= self.monotonic_anchor:
-            estimate = max(estimate, self.anchor + received_monotonic - self.monotonic_anchor)
-        self.anchor = estimate
-        self.monotonic_anchor = received_monotonic
+        with self.lock:
+            if self.monotonic_anchor is not None and received_monotonic < self.monotonic_anchor:
+                return
+            estimate = server + .5 + rtt / 2
+            if self.anchor is not None:
+                estimate = max(estimate, self.anchor + received_monotonic - self.monotonic_anchor)
+            self.anchor = estimate
+            self.monotonic_anchor = received_monotonic
 
     def now(self):
-        if self.anchor is None:
-            return None
-        elapsed = time.monotonic() - self.monotonic_anchor
-        return self.anchor + elapsed if 0 <= elapsed <= 300 else None
+        with self.lock:
+            if self.anchor is None:
+                return None
+            elapsed = time.monotonic() - self.monotonic_anchor
+            return self.anchor + elapsed if 0 <= elapsed <= 300 else None
 
     def refresh(self):
         import requests
@@ -38,4 +44,6 @@ class ExchangeClock:
         response.raise_for_status()
         if int(response.headers.get("Age", "0")) > 0:
             raise ValueError("cached exchange clock response")
-        self.observe(response.headers["Date"], response.json()["time"], before, after)
+        data = response.json()
+        self.observe(response.headers["Date"], data["time"], before, after)
+        return data

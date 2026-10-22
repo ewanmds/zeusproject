@@ -10,7 +10,7 @@ import uuid
 from collections import deque
 
 from .core import (Features, Markouts, OFFSETS, POLICY, POLICY_HASH, SCHEMA, SYMBOL,
-                   finite, quotes, verified_fees)
+                   finite, nearest_cost_offset, quotes, verified_fees)
 from .clock import ExchangeClock
 
 DATA_DIR = Path(__file__).resolve().parents[1] / ".zeus_experimental"
@@ -127,7 +127,7 @@ def validate_report(report, now, fees):
 
 
 class Runtime:
-    def __init__(self, post_info, account, directory=DATA_DIR, *, require_calibration=False):
+    def __init__(self, post_info, account, directory=DATA_DIR, *, require_calibration=False, on_book=None):
         self.lock = threading.RLock()
         self.journal = Journal(directory)
         self.directory = Path(directory)
@@ -150,6 +150,27 @@ class Runtime:
         self.next_poll = 0
         self.worker = threading.Thread(target=self._monitor, name="experimental-monitor", daemon=True)
         self.worker.start()
+        self.on_book = on_book
+        self.book_worker = None
+        if on_book is not None:
+            self.book_worker = threading.Thread(target=self._book_monitor, name="experimental-book-refresh", daemon=True)
+            self.book_worker.start()
+
+    def _refresh_book_once(self):
+        # Do not mistake an unchanged WS book for a dead feed. Refresh only
+        # after 1s of silence, with public REST I/O off the trading thread.
+        with self.lock:
+            silent = time.time() - self.last_book_received >= 1
+        if silent and self.on_book is not None:
+            self.on_book(self.clock.refresh())
+
+    def _book_monitor(self):
+        while not self.stopped.is_set():
+            try:
+                self._refresh_book_once()
+            except Exception:
+                pass  # No fresh snapshot: the existing 2s entry gate applies.
+            self.stopped.wait(.5)
 
     def _monitor(self):
         while not self.stopped.is_set():
@@ -203,12 +224,16 @@ class Runtime:
             if server_now is None:
                 self.features.book = None
                 self.reason = "synchronisation de l'heure Hyperliquid"
-                return
-            if not math.isfinite(source_ts) or source_ts < self.last_source or abs(server_now - source_ts) > POLICY.book_max_age:
+                return False
+            if math.isfinite(source_ts) and source_ts < self.last_source:
+                # A REST response can arrive after a newer WS snapshot. It
+                # must not erase the fresh book or roll the execution BBO back.
+                return False
+            if not math.isfinite(source_ts) or abs(server_now - source_ts) > POLICY.book_max_age:
                 self.journal.record("gap", {"reason": "source time invalid"})
                 self.features.book = None
                 self.reason = "horodatage carnet invalide"
-                return
+                return False
             if self.last_book_received and now - self.last_book_received > POLICY.book_max_age:
                 self.journal.record("gap", {"reason": "book gap"})
             self.last_source, self.last_book_received = source_ts, now
@@ -216,6 +241,7 @@ class Runtime:
             self.markouts.book(now, book["mid"])
             if self.require_calibration:
                 self.journal.record("book", dict(levels=levels, source_ts=source_ts, server_now=server_now), server_now)
+            return True
 
     def trades(self, data):
         if not self.require_calibration:
@@ -274,10 +300,14 @@ class Runtime:
             allowed = self.permitted(now)
             if not position and not allowed:
                 return {}
+            if not self.require_calibration and self.fees and self.features.book:
+                self.offset = nearest_cost_offset(self.features.book, decimals, self.fees["maker"])
             result = quotes(self.features.book, now, decimals, self.offset,
                             self.fees["maker"] if self.fees else 0, position, position_since)
             if allowed and result:
                 self.state = "quoting"
+            elif allowed and not position:
+                self.reason = "marge de spread insuffisante après frais"
             return result
 
     def snapshot(self):
@@ -292,4 +322,6 @@ class Runtime:
     def close(self):
         self.stopped.set()
         self.worker.join(timeout=1)
+        if self.book_worker:
+            self.book_worker.join(timeout=1)
         self.journal.close()

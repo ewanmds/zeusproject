@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from experimental_mm.core import (Features, Markouts, POLICY, POLICY_HASH, SCHEMA, SYMBOL,
-                                  minimum_size, quotes, retain, safe_resting, verified_fees)
+                                  minimum_size, nearest_cost_offset, quotes, retain, safe_resting, verified_fees)
 from experimental_mm.replay import Simulator, calibrate, confidence_bounds, read_session
 from experimental_mm.runtime import Journal, Runtime, implementation_hash, validate_report
 from test_order_book_modes import CLASS, SOURCE, production_methods, result
@@ -94,10 +94,42 @@ class PolicyTests(unittest.TestCase):
         runtime.clock = Mock()
         runtime.clock.now.return_value = now + 15
         runtime.last_source, runtime.last_book_received = 0, 0
-        runtime.book(*levels(), now + 15)
+        self.assertTrue(runtime.book(*levels(), now + 15))
         self.assertIsNotNone(runtime.features.book)
-        runtime.book(*levels(), now - 20)
+        runtime.clock.now.return_value = now + 60
+        self.assertFalse(runtime.book(*levels(), now + 30))
         self.assertIsNone(runtime.features.book)
+
+    def test_late_rest_response_cannot_erase_a_fresh_websocket_book(self):
+        runtime = runtime_fixture(False)
+        runtime.require_calibration = False
+        now = time.time()
+        runtime.clock.now.side_effect = None
+        runtime.clock.now.return_value = now
+        runtime.last_source, runtime.last_book_received = 0, 0
+        self.assertTrue(runtime.book(*levels(), now))
+        latest = dict(runtime.features.book)
+        self.assertFalse(runtime.book(*levels(98, 99), now - 1))
+        self.assertEqual(runtime.features.book, latest)
+
+    def test_rest_refresh_only_during_silence_and_never_from_decision(self):
+        runtime = runtime_fixture(False)
+        runtime.last_book_received = time.time()
+        runtime.on_book = Mock()
+        runtime.clock.refresh = Mock(return_value={"levels": levels()})
+        runtime._refresh_book_once()
+        runtime.clock.refresh.assert_not_called()
+        runtime.last_book_received = time.time() - 1.1
+        runtime._refresh_book_once()
+        runtime.clock.refresh.assert_called_once()
+        runtime.on_book.assert_called_once()
+
+    def test_direct_quotes_choose_nearest_fee_compatible_level(self):
+        book = Features().update(100, *levels(7673.7, 7673.8))
+        chosen = nearest_cost_offset(book, 3, .0000288)
+        self.assertEqual(chosen, 3)
+        self.assertTrue(quotes(book, 100, 3, chosen, .0000288))
+        self.assertEqual(quotes(book, 100, 3, chosen - 1, .0000288), {})
 
     def test_fee_bound_accounts_for_hip3_growth_and_never_credits_rebates(self):
         meta = dict(collateralToken=0, universe=[dict(name=SYMBOL, szDecimals=3, growthMode="enabled", deployerFeeScale="1")])
@@ -280,6 +312,23 @@ class ReplayTests(unittest.TestCase):
 
 
 class ProductionAdapterTests(unittest.TestCase):
+    def test_rest_fallback_updates_production_bbo_and_experimental_book_together(self):
+        bot = self.bot()
+        namespace, _ = production_methods("experimental")
+        node = next(node for node in CLASS.body if isinstance(node, ast.FunctionDef) and node.name == "_on_l2")
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), namespace)
+        bot._on_l2 = types.MethodType(namespace["_on_l2"], bot)
+        bot.signal.on_l2 = Mock()
+        bot.wake = threading.Event()
+        now = time.time()
+        bot.experimental.last_source, bot.experimental.last_book_received = 0, now - 5
+        bot.experimental.clock.refresh = Mock(return_value=dict(levels=levels(100.01, 100.03), time=now * 1000))
+        bot.experimental.on_book = lambda book: bot._on_l2({"data": book})
+        bot.experimental._refresh_book_once()
+        self.assertEqual((bot.best_bid, bot.best_ask), (100.01, 100.03))
+        self.assertEqual(bot.experimental.features.book["bid"], bot.best_bid)
+        self.assertTrue(bot.wake.is_set())
+
     def bot(self, ready=True):
         namespace, bot = production_methods("experimental")
         names = ("compute_experimental_intent", "_experimental_submission_ok", "_experimental_retain")

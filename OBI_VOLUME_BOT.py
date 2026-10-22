@@ -1174,7 +1174,8 @@ class OrderBookBot:
         self._experimental_uncertain = False
         if STRATEGY == "experimental":
             from experimental_mm.runtime import Runtime
-            self.experimental = Runtime(lambda payload: post_info(BASE_URL, payload), ACCOUNT_ADDRESS)
+            self.experimental = Runtime(lambda payload: post_info(BASE_URL, payload), ACCOUNT_ADDRESS,
+                                        on_book=lambda book: self._on_l2({"data": book}))
         try:
             if os.path.exists(self._stop_file):
                 os.remove(self._stop_file)   # stopfile d'un run précédent
@@ -1264,9 +1265,10 @@ class OrderBookBot:
                 return
             # A5: mettre à jour le signal AVANT de marquer le feed "vivant".
             # Si on_l2 lève, last_tick_ts/ws_ready ne mentent pas au deadman.
-            self.signal.on_l2(levels[0], levels[1])
             if self.experimental:
-                self.experimental.book(levels[0], levels[1], float(data["data"]["time"]) / 1000)
+                if not self.experimental.book(levels[0], levels[1], float(data["data"]["time"]) / 1000):
+                    return
+            self.signal.on_l2(levels[0], levels[1])
             with self.lock:
                 self.best_bid, self.best_ask = bb, ba
                 self.mid = (bb + ba) / 2.0

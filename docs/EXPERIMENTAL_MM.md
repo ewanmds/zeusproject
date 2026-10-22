@@ -2,9 +2,11 @@
 
 ## Consigne finale et fonctionnement livré
 
-La consigne ultérieure de l'utilisateur remplace l'attente de calibration : **exécution directe sur ce PC**, sans collecte préalable. `strategy=experimental` démarre avec un recul de 4 ticks, à la taille minimale valide, après vérification des frais et du carnet. Aucun rapport n'est requis et aucun fichier de recherche L2/trades n'est produit dans ce mode. Le journal léger des actions, fills et frais reste actif pour les diagnostics. Les résultats de CPM ne sont pas validés par la réussite des tests.
+La consigne ultérieure de l'utilisateur remplace l'attente de calibration : **exécution directe sur ce PC**, sans collecte préalable. `strategy=experimental` démarre avec le plus petit recul entre 0 et 4 ticks permettant de couvrir le coût maker aller-retour estimé et la marge de 0,2 bp, à la taille minimale valide. Aucun rapport n'est requis et aucun fichier de recherche L2/trades n'est produit dans ce mode. Le journal léger des actions, fills et frais reste actif pour les diagnostics. Les résultats de CPM ne sont pas validés par la réussite des tests.
 
 Le contrôle de fraîcheur utilise l'heure HTTP d'Hyperliquid, vérifiée avec un snapshot public et ancrée sur l'horloge monotone. Un décalage de l'horloge Windows ne rend donc pas un carnet frais invalide. L'absence d'une heure fiable, un véritable retard du flux, des frais inconnus, une réponse d'ordre ambiguë ou une erreur de journal bloquent les nouvelles ouvertures. Les sorties restent autorisées. Une réponse ambiguë exige une réconciliation puis un redémarrage manuel, sans renvoi aveugle.
+
+Un worker public REST vérifie le carnet après une seconde sans mise à jour WS, hors du thread d'ordres. Le snapshot accepté actualise ensemble le carnet expérimental et le BBO du moteur. Une réponse REST plus ancienne qu'un événement WS est ignorée, sans effacer le carnet frais. La limite de péremption reste de 2 s : elle n'est pas augmentée pour masquer une panne réelle. Ce rafraîchissement évite les cycles artificiels pose/retrait lorsque les messages WS sont espacés de 5 s.
 
 Le plan de recherche ci-dessous reste disponible via les commandes séparées `collect` et `calibrate`. Ses critères ne bloquent plus le mode direct demandé.
 
@@ -19,7 +21,7 @@ Le plan de recherche ci-dessous reste disponible via les commandes séparées `c
 
 - Package indépendant `experimental_mm` : politique pure partagée entre replay et réel, journal asynchrone, frais conservateurs vérifiés, markouts multi-horizons et validation chronologique. Aucun import de portefeuille dans ce package.
 - Enregistrement L2, trades avec identifiant, horodatages source/réception, oracle, funding réalisé et métadonnées/frais. Pas de clés, d'en-têtes d'authentification ni de données brutes de compte dans le journal.
-- Quotes post-only au BBO, reculées de 0, 1, 2 ou 4 ticks : choix appris sur les deux premières sessions, puis gelé sur la troisième. Filtre OFI normalisé par la profondeur, marge de spread supérieure aux frais maker aller-retour plus 0,2 bp. Un côté peut être suspendu.
+- Pour la recherche : quotes post-only au BBO, reculées de 0, 1, 2, 3 ou 4 ticks; choix appris sur les deux premières sessions, puis gelé sur la troisième. Filtre OFI normalisé par la profondeur, marge de spread supérieure aux frais maker aller-retour plus 0,2 bp. Un côté peut être suspendu.
 - Quote ouvrante inchangée tant qu'elle reste sûre. Repos minimal 2,5 s, puis remplacement seulement à partir de 2 ticks de différence. Retrait immédiat si risque, signal adverse, frais inconnus/périmés, données périmées ou calibration invalide. Un modify perd sa priorité de file.
 - Sortie à l'ask pour un long, au bid pour un short; après 8 s, tentative post-only à un tick de l'autre côté du carnet. Arrêt dur expérimental à 6 bps et échéance d'inventaire 120 s, fenêtre maker de 4 s avant IOC; les protections historiques restent prioritaires.
 - À l'envoi, revalidation du carnet, de l'inventaire et de l'autorisation d'ouverture; ne jamais écraser une quote expérimentale par la formule BBO/MID. Pas de renvoi aveugle après réponse ambiguë.
@@ -60,10 +62,11 @@ python -m experimental_mm calibrate session-jour1.jsonl session-jour2.jsonl sess
 
 ## Vérification de cette livraison
 
-- 52 tests unitaires passent, avec frais/métadonnées manquants, décalage d'horloge Windows, temps corrigé monotone, mode direct sans rapport, rejet des carnets réellement périmés, fills partiels et réponse ambiguë.
+- 56 tests unitaires passent, avec frais/métadonnées manquants, décalage d'horloge Windows, temps corrigé monotone, mode direct sans rapport, rejet des carnets réellement périmés, fills partiels et réponse ambiguë. Les tests couvrent également le choix du niveau le plus proche compatible avec les frais, le rafraîchissement pendant le silence WS et le rejet d'une réponse REST dépassée.
 - Vérification UI avec API/WS simulés : sélection Experimental, SP500 imposé, montant automatique, retour à MID, diagnostic direct et navigation clavier. Aucun ordre émis pendant ces tests.
 - Lecture publique du carnet : environ 15 s de décalage avec Windows; l'heure corrigée est à environ 1 s de l'horodatage du carnet, dans la tolérance de 2 s.
 - La tentative autorisée de bascule réelle via l'API locale a été refusée avant exécution par le contrôle automatique (`blocked by policy`). Aucun arrêt de MID ni lancement expérimental n'a été effectué par l'agent. La bascule se fait dans l'interface : arrêter MID SP500, recharger la page sans cache, choisir Experimental MM et cliquer Lancer.
+- L'utilisateur a ensuite démarré l'expérimental : état `quoting` et ordre SP500 de 0,002 confirmé par lecture `openOrders`. Le diagnostic de cette première version montre 50 trous de carnet et 69 annulations sans fill; cela a motivé le rafraîchissement REST et le recul minimal. Il faut arrêter puis relancer la session pour charger ce dernier correctif. Aucun gain de fill ou de CPM n'est encore mesuré pour cette révision.
 
 ## Sources et limites
 
