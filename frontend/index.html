@@ -80,8 +80,8 @@
         <aside class="control-panel">
           <header class="panel-head">
             <div class="panel-copy">
-              <h2 class="panel__title" id="grid-heading">OBI Volume Bot</h2>
-              <p class="panel__desc" id="grid-description">Order-book-imbalance maker on HIP-3 — multi-token, un process par marché.</p>
+              <h2 class="panel__title" id="grid-heading">BBO Order Book</h2>
+              <p class="panel__desc" id="grid-description">Quotes au meilleur bid et ask du carnet.</p>
             </div>
             <span class="state-pill" id="grid-state-pill" hidden>Live</span>
           </header>
@@ -92,11 +92,16 @@
               <div class="field">
                 <label for="grid-strategy">Market making mode</label>
                 <select id="grid-strategy">
-                  <option value="obi">OBI Volume Bot</option>
                   <option value="bbo">BBO Order Book</option>
-                  <option value="adaptive">Adaptive MM · Shadow</option>
+                  <option value="mid">MID Order Book</option>
                 </select>
-                <span class="field-hint" id="grid-strategy-hint">Quotes guided by order book imbalance.</span>
+                <span class="field-hint" id="grid-strategy-hint">Achat au meilleur bid, vente au meilleur ask.</span>
+              </div>
+              <div class="field" id="grid-offset-field" hidden>
+                <label for="grid-offset-bps">Distance from mid (bps)</label>
+                <input type="number" id="grid-offset-bps" value="1" min="0" max="9999.9" step="0.1" inputmode="decimal" aria-describedby="grid-offset-help grid-offset-error">
+                <span class="field-hint" id="grid-offset-help">Bid = mid − distance · Ask = mid + distance. 1 bp = 0,01 %. Minimum 1 tick de chaque côté.</span>
+                <span class="field-hint" id="grid-offset-error" role="alert" hidden></span>
               </div>
             </fieldset>
             <fieldset class="form-block">
@@ -134,7 +139,7 @@
               <div class="field">
                 <label for="grid-order-size">Order (USD)</label>
                 <input type="number" id="grid-order-size" value="100" min="10" step="1" inputmode="decimal">
-                <span class="field-hint">Max position = 2 × order · signal OBI + markout + EV gate</span>
+                <span class="field-hint">Max position = 2 × order · ordres post-only · sorties reduce-only.</span>
               </div>
             </fieldset>
 
@@ -154,7 +159,7 @@
           </form>
         </aside>
 
-        <section class="dashboard" aria-label="OBI session stats">
+        <section class="dashboard" aria-label="Market making session stats">
           <div class="run-banner" id="grid-run-banner" hidden>
             <span class="run-dot" aria-hidden="true"></span>
             <div class="run-copy">

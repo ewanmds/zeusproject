@@ -183,20 +183,18 @@
     }
 
     function updateGridStrategy() {
-        if ($("#grid-strategy")?.value === "adaptive") {
-            setText("grid-heading", "Adaptive MM · Simulation");
-            setText("grid-description", "xyz:SP500 · Cibles : CPM ≤ 10 $/million et volume ≥ 70 % du BBO. Résultats à valider sur trois séances.");
-            setText("grid-strategy-hint", "Shadow uniquement : aucun ordre réel. Frais vérifiés et calibration requis ; collecte avant validation.");
+        const strategy = $("#grid-strategy")?.value || "bbo";
+        const offsetField = $("#grid-offset-field");
+        if (offsetField) offsetField.hidden = strategy !== "mid";
+        if (strategy === "mid") {
+            setText("grid-heading", "MID Order Book");
+            setText("grid-description", "Market making classique : achat et vente à une distance fixe du mid, réglable en bps.");
+            setText("grid-strategy-hint", "Même exécution que BBO. Prix = mid ± distance, arrondis au tick, en post-only.");
             return;
         }
-        const bbo = $("#grid-strategy")?.value === "bbo";
-        setText("grid-heading", bbo ? "BBO Order Book" : "OBI Volume Bot");
-        setText("grid-description", bbo
-            ? "Quotes au meilleur bid et ask du carnet, avec contrôles de risque et d'inventaire."
-            : "Order-book-imbalance maker on HIP-3 — multi-token, un process par marché.");
-        setText("grid-strategy-hint", bbo
-            ? "Achat au meilleur bid, vente au meilleur ask. Suivi à chaque tick; suspension si un contrôle de risque bloque."
-            : "Quotes guided by order book imbalance.");
+        setText("grid-heading", "BBO Order Book");
+        setText("grid-description", "Quotes au meilleur bid et ask du carnet, avec contrôles de risque et d'inventaire.");
+        setText("grid-strategy-hint", "Achat au meilleur bid, vente au meilleur ask. Suivi à chaque tick; suspension si un contrôle de risque bloque.");
     }
 
     function updateWcButtons() {
@@ -565,14 +563,14 @@
 
         // Reconstruire le DOM seulement si la liste de tokens change; sinon
         // ne mettre à jour que les valeurs (pas de flicker à 1 Hz).
-        const signature = bots.map((b) => `${b.token}:${b.strategy || "obi"}`).join("|");
+        const signature = bots.map((b) => `${b.token}:${b.strategy || "bbo"}:${b.offset_bps ?? ""}:${b.phase || ""}:${b.running}`).join("|");
         if (container.dataset.tokens !== signature) {
             container.dataset.tokens = signature;
             container.innerHTML = bots.map((b) => `
               <article class="bot-card" data-token="${b.token}">
                 <header class="bot-card-head">
                   <span class="bot-dot" aria-hidden="true"></span>
-                  <strong class="bot-card-token">${b.token} · ${b.strategy === "adaptive" ? "Adaptive · SHADOW" : b.strategy === "bbo" ? "BBO · LIVE" : "OBI · LIVE"}</strong>
+                  <strong class="bot-card-token">${b.token} · ${b.strategy === "mid" ? `MID ORDER BOOK · ${Number(b.offset_bps || 0).toFixed(1)} BPS` : b.strategy === "bbo" ? "BBO ORDER BOOK" : "ANCIEN MODE"} · ${!b.running ? "ARRÊTÉ" : b.phase === "connecting" ? "CONNEXION" : "LIVE"}</strong>
                   <span class="bot-card-duration" data-f="duration">00:00:00</span>
                   <button class="btn btn-stop bot-card-stop" type="button" data-token="${b.token}">
                     Stop
@@ -582,21 +580,18 @@
                   <div class="bot-stat"><span>Mid</span><strong data-f="mid">—</strong></div>
                   <div class="bot-stat"><span>Volume</span><strong data-f="vol">—</strong></div>
                   <div class="bot-stat"><span>Net PnL</span><strong data-f="pnl">—</strong></div>
+                  <div class="bot-stat"><span>Realized PnL</span><strong data-f="rpnl">—</strong></div>
                   <div class="bot-stat"><span>Fees</span><strong data-f="fees">—</strong></div>
                   <div class="bot-stat"><span>Cost/1M</span><strong data-f="cost">—</strong></div>
                   <div class="bot-stat"><span>Fills</span><strong data-f="fills">—</strong></div>
+                  <div class="bot-stat"><span>Fills/h</span><strong data-f="fills-rate">—</strong></div>
+                  <div class="bot-stat"><span>Place / Modify / Cancel</span><strong data-f="order-actions">—</strong></div>
+                  <div class="bot-stat"><span>Actions/h</span><strong data-f="actions-rate">—</strong></div>
                   <div class="bot-stat"><span>Position</span><strong data-f="pos">—</strong></div>
                   <div class="bot-stat"><span>Spread</span><strong data-f="spread">—</strong></div>
+                  <div class="bot-stat"><span>Markout B/A</span><strong data-f="markout">—</strong></div>
                 </div>
                 <footer class="bot-card-action" data-f="action"></footer>
-                ${b.strategy === "adaptive" ? `<div class="bot-card-grid" aria-label="Mesures de simulation">
-                  <div class="bot-stat"><span>CPM liquidation estimée</span><strong data-f="liquidated">—</strong></div>
-                  <div class="bot-stat"><span>Volume / heure</span><strong data-f="hour">—</strong></div>
-                  <div class="bot-stat"><span>Fills / minute</span><strong data-f="minute">—</strong></div>
-                  <div class="bot-stat"><span>Proportion maker</span><strong data-f="maker">—</strong></div>
-                  <div class="bot-stat"><span>Funding</span><strong data-f="funding">—</strong></div>
-                  <div class="bot-stat"><span>Calibration / validation</span><strong data-f="calibration">—</strong></div>
-                </div>` : ""}
               </article>`).join("");
             container.querySelectorAll(".bot-card-stop").forEach((btn) => {
                 btn.addEventListener("click", () => stopGridBot(btn.dataset.token));
@@ -618,16 +613,15 @@
             const pnlEl = card.querySelector('[data-f="pnl"]');
             if (pnlEl) setPnLColor(pnlEl, b.net_pnl);
             set("fees", formatUSD(b.fees));
+            set("rpnl", b.realized_pnl == null ? "—" : formatUSD(b.realized_pnl, true));
             set("cost", !b.volume_usd || b.cost_per_1m == null ? "—" : formatUSD(b.cost_per_1m));
-            set("liquidated", b.cpm_liquidated == null ? "—" : formatUSD(b.cpm_liquidated));
-            set("hour", b.volume_per_hour == null ? "—" : formatUSD(b.volume_per_hour));
-            set("minute", b.fills_per_minute == null ? "—" : Number(b.fills_per_minute).toFixed(2));
-            set("maker", b.maker_ratio == null ? "—" : `${(b.maker_ratio * 100).toFixed(1)} %`);
-            set("funding", b.funding_verified ? formatUSD(b.funding) : "non vérifié");
-            set("calibration", `${b.calibration || "non calibré"} · ${b.acceptance || "échantillon insuffisant"}`);
             set("fills", String(b.fills || 0));
+            set("fills-rate", b.fills_per_hour == null ? "—" : Number(b.fills_per_hour).toFixed(1));
+            set("order-actions", b.order_placements == null ? "—" : `${b.order_placements} / ${b.order_modifications} / ${b.order_cancellations}`);
+            set("actions-rate", b.order_actions_per_hour == null ? "—" : Number(b.order_actions_per_hour).toFixed(1));
             set("pos", formatUSD(b.position_usd));
             set("spread", formatBPS(b.spread_bps));
+            set("markout", `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
             set("action", b.error ? `⚠ ${b.error}` : (b.action || ""));
             const stopBtn = card.querySelector(".bot-card-stop");
             if (stopBtn) stopBtn.style.display = b.running ? "" : "none";
@@ -663,35 +657,47 @@
 
     async function startGridBot() {
         const token = $("#grid-token")?.value || selectedGridToken.key || "SP500";
-        const strategy = $("#grid-strategy")?.value || "obi";
-        if (strategy === "adaptive" && token !== "SP500") {
-            showToast("error", "Marché adaptatif", "Sélectionne SP500 pour ce mode.");
-            return;
-        }
+        const strategy = $("#grid-strategy")?.value || "bbo";
         const order_size_usd = Number.parseFloat($("#grid-order-size")?.value) || 15;
+        const offset_bps = Number.parseFloat($("#grid-offset-bps")?.value);
 
         if (!validateMin("grid", [
             { selector: "#grid-order-size", min: 10, fallback: order_size_usd, message: "Order USD must be at least 10." },
         ])) {
-            showToast("error", "Check OBI settings", "Correct the highlighted field before starting.");
+            showToast("error", "Check market making settings", "Correct the highlighted field before starting.");
+            return;
+        }
+        const offsetError = $("#grid-offset-error");
+        const offsetInput = $("#grid-offset-bps");
+        if (offsetError) offsetError.hidden = true;
+        offsetInput?.removeAttribute("aria-invalid");
+        if (strategy === "mid" && (!Number.isFinite(offset_bps) || offset_bps < 0 || offset_bps >= 10000)) {
+            if (offsetError) {
+                offsetError.textContent = "Saisis une distance entre 0 inclus et 10 000 bps exclus.";
+                offsetError.hidden = false;
+            }
+            offsetInput?.setAttribute("aria-invalid", "true");
+            offsetInput?.focus();
+            showToast("error", "Check MID offset", "Distance must be between 0 and 10,000 bps (exclusive).");
             return;
         }
 
         setBusy("grid-start-btn", true);
 
         try {
-            // Max position hardcodée côté bot: 1 x order (MAX_INVENTORY_ORDERS = 1).
+            const body = { token, strategy, mode: "live", order_size_usd };
+            if (strategy === "mid") body.offset_bps = offset_bps;
             await fetchJson(`${API_BASE}/api/grid/start`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ token, strategy, mode: strategy === "adaptive" ? "shadow" : "live", order_size_usd }),
+                body: JSON.stringify(body),
             });
             gridRunning = true;
             setText("grid-run-token", token);
             updateGridButtons();
-            showToast("success", `${strategy.toUpperCase()} bot started`, `${token} is now running.`);
+            showToast("info", "Connexion à Hyperliquid", `${token} · le démarrage est en cours. L'état et les erreurs restent visibles dans la carte.`);
         } catch (error) {
-            console.error("OBI start failed:", error);
+            console.error("Market maker start failed:", error);
             showToast("error", "Market maker start failed", error.message);
         } finally {
             setBusy("grid-start-btn", false);

@@ -1,7 +1,7 @@
 """
 Trading Bot Dashboard — FastAPI Backend Server
 ================================================
-Wraps two trading bots (OBI Volume Bot & WorldCup Spread) and exposes
+Wraps the BBO/MID Order Book market maker and WorldCup Spread and exposes
 REST API + WebSocket endpoints for a frontend dashboard.
 (L'onglet "Grid" du frontend pilote désormais OBI_VOLUME_BOT.)
 """
@@ -95,11 +95,10 @@ def _require_api_token(request: Request) -> None:
 # Pydantic request models
 # ---------------------------------------------------------------------------
 class GridStartRequest(BaseModel):
-    """Formulaire minimal: le marché et le notional par ordre. La stratégie
-    (spread 5 ticks du mid, reset 2 bps, cap 1 ordre) vit dans le bot."""
+    """Formulaire minimal: le marché, le notional, et pour MID l'offset au mid."""
     token: str = "SP500"
-    strategy: str = "obi"
-    mode: str = "shadow"
+    strategy: str = "bbo"
+    mode: str = "live"
     order_size_usd: float = 100
     # Champ legacy tolere: le Grid reste cape a 1 ordre max.
     max_position_usd: Optional[float] = None
@@ -107,7 +106,7 @@ class GridStartRequest(BaseModel):
     spread_ticks: Optional[float] = None
     offset_ticks: Optional[float] = None
     spread_bps: Optional[float] = None
-    offset_bps: Optional[float] = None
+    offset_bps: Optional[float] = None  # utilisé par strategy=mid (distance au mid)
     grid_reset_bps: Optional[float] = None
     num_levels: int = 1
 
@@ -252,28 +251,31 @@ class BotManager:
         self.lock = threading.Lock()
 
     # -----------------------------------------------------------------------
-    # Grid Adaptive Bot
+    # Market-making bots
     # -----------------------------------------------------------------------
     def start_grid(self, config: GridStartRequest) -> None:
         """Lance UN process enfant `python OBI_VOLUME_BOT.py --token X --live`
         par token — plusieurs tokens peuvent tourner en parallèle."""
         if config.mode not in ('shadow', 'live'):
             raise ValueError('mode must be shadow or live')
-        if config.strategy.strip().lower() == 'adaptive':
-            return self.start_adaptive(config)
         if config.mode != 'live':
-            raise ValueError('OBI/BBO legacy require explicit mode=live; shadow is available for adaptive')
+            raise ValueError('Market making requires mode=live')
+        token_key = (config.token or "SP500").strip().upper()
+        strategy = (config.strategy or "bbo").strip().lower()
+        if strategy not in ("bbo", "mid"):
+            raise ValueError(f"Unknown market making strategy: {config.strategy}")
+        offset_bps = None
+        if strategy == "mid":
+            offset_bps = float(config.offset_bps if config.offset_bps is not None else 1.0)
+            if not math.isfinite(offset_bps) or not 0 <= offset_bps < 10000:
+                raise ValueError("offset_bps must be finite, at least 0 and less than 10000")
+            offset_bps = max(0.0, offset_bps)
         obi_mod = _safe_import("OBI_VOLUME_BOT")
         if obi_mod is None:
             raise RuntimeError(
                 "Cannot import OBI_VOLUME_BOT — "
                 "make sure the file is in the same directory"
             )
-
-        token_key = (config.token or "SP500").strip().upper()
-        strategy = (config.strategy or "obi").strip().lower()
-        if strategy not in ("obi", "bbo"):
-            raise ValueError(f"Unknown market making strategy: {config.strategy}")
         try:
             symbol = obi_mod.resolve_token(token_key)
         except BaseException as exc:  # resolve_token lève SystemExit si inconnu
@@ -284,6 +286,8 @@ class BotManager:
             existing = self.obi_procs.get(token_key)
             if existing is not None and existing["proc"].poll() is None:
                 raise RuntimeError(f"Un bot tourne déjà sur {token_key}")
+            if existing is not None:
+                existing["log_f"].close()
 
             # Stopfile périmé d'un run précédent: le supprimer avant de lancer.
             stop_file = obi_mod.stop_file_path(symbol)
@@ -294,6 +298,7 @@ class BotManager:
 
             log_path = BASE_DIR / f"obi_{token_key}.log"
             log_f = open(log_path, "ab")
+            log_start = log_f.tell()
             env = os.environ.copy()
             env["OBI_HEADLESS"] = "1"   # pas de Rich Live dans un process enfant
             cmd = [
@@ -301,6 +306,8 @@ class BotManager:
                 "--token", token_key, "--live", "--notional", str(order_usd),
                 "--strategy", strategy,
             ]
+            if offset_bps is not None:
+                cmd.extend(["--offset-bps", str(offset_bps)])
             proc = subprocess.Popen(
                 cmd, cwd=str(BASE_DIR), env=env,
                 stdout=log_f, stderr=subprocess.STDOUT,
@@ -311,75 +318,33 @@ class BotManager:
                 "stats_file": obi_mod.stats_file_path(symbol),
                 "stop_file": stop_file,
                 "log": str(log_path),
+                "log_start": log_start,
                 "log_f": log_f,
                 "started": time.time(),
                 "config": {"token": token_key, "strategy": strategy, "mode": "live",
                            "order_size_usd": order_usd},
             }
+            if offset_bps is not None:
+                self.obi_procs[token_key]["config"]["offset_bps"] = offset_bps
             self.grid_config = config.model_dump()
 
         # Détection de crash immédiat (verrou d'instance déjà pris, etc.)
         time.sleep(1.5)
         if proc.poll() is not None:
-            with self.lock:
-                self.obi_procs.pop(token_key, None)
             try:
                 log_f.close()
             except Exception:
                 pass
             tail = ""
             try:
-                lines = log_path.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+                with open(log_path, "rb") as stream:
+                    stream.seek(log_start)
+                    lines = stream.read().decode("utf-8", errors="replace").strip().splitlines()
                 tail = lines[-1] if lines else ""
             except Exception:
                 pass
             raise RuntimeError(f"Le bot {token_key} s'est arrêté immédiatement: {tail}")
         logger.info("%s bot process started: %s (pid %s)", strategy.upper(), symbol, proc.pid)
-
-    def start_adaptive(self, config: GridStartRequest) -> None:
-        from adaptive_mm.core import Config
-        if config.mode != 'shadow':
-            raise ValueError('Adaptive live disabled: separate request after reviewed simulation required')
-        if config.token.strip().upper() not in ('SP500', 'XYZ:SP500'):
-            raise ValueError('Adaptive initially supports xyz:SP500 only')
-        cap = config.order_size_usd * float(os.getenv('OBI_MAX_INV_ORDERS', '2'))
-        if config.max_position_usd is not None:
-            cap = min(cap, config.max_position_usd)
-        Config(notional=config.order_size_usd, max_position=cap)
-        folder = BASE_DIR / 'data' / 'adaptive' / 'shadow'
-        folder.mkdir(parents=True, exist_ok=True)
-        stop, stats = folder / 'stop.flag', folder / 'stats.json'
-        with self.lock:
-            existing = self.obi_procs.get('SP500')
-            if existing and existing['proc'].poll() is None:
-                raise RuntimeError('Un bot tourne déjà sur SP500')
-            stop.unlink(missing_ok=True)
-            stats.unlink(missing_ok=True)
-            log_path = folder / 'runner.log'
-            log_f = open(log_path, 'ab')
-            # Signing credentials never enter the research child environment.
-            allowed = {'SYSTEMROOT', 'WINDIR', 'PATH', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA',
-                       'LOCALAPPDATA', 'PYTHONPATH', 'WALLET_ADDRESS', 'OBI_MAX_INV_ORDERS',
-                       'OBI_MAX_SESSION_LOSS_USD', 'OBI_HOURLY_LOSS_MULT'}
-            env = {k: v for k, v in os.environ.items() if k.upper() in allowed}
-            cmd = [sys.executable, '-u', '-m', 'adaptive_mm.runner', '--mode', 'shadow',
-                   '--notional', str(config.order_size_usd), '--max-position', str(cap),
-                   '--db', str(folder / 'events.db'), '--stats', str(stats), '--stop-file', str(stop)]
-            try:
-                proc = subprocess.Popen(cmd, cwd=str(BASE_DIR), env=env, stdout=log_f, stderr=subprocess.STDOUT)
-            except Exception:
-                log_f.close()
-                raise
-            self.obi_procs['SP500'] = dict(proc=proc, symbol='xyz:SP500', stats_file=str(stats),
-                stop_file=str(stop), log=str(log_path), log_f=log_f, started=time.time(),
-                config=dict(token='SP500', strategy='adaptive', mode='shadow', order_size_usd=config.order_size_usd))
-            self.grid_config = config.model_dump()
-        time.sleep(.5)
-        if proc.poll() is not None:
-            with self.lock:
-                self.obi_procs.pop('SP500', None)
-            log_f.close()
-            raise RuntimeError('Adaptive collector stopped; inspect data/adaptive/shadow/runner.log')
 
     def stop_grid(self, token: Optional[str] = None) -> None:
         """Arrêt PROPRE via stopfile (le bot fait cancel all + flatten avant
@@ -461,7 +426,8 @@ class BotManager:
                 try:
                     with open(info["stats_file"], encoding="utf-8") as f:
                         st = json.load(f)
-                    if st.get("symbol") != info["symbol"]:
+                    if (st.get("symbol") != info["symbol"]
+                            or float(st.get("start_time", 0) or 0) < info["started"] - 5):
                         st = {}   # fichier d'un autre run/token
                 except Exception:
                     st = {}
@@ -469,31 +435,56 @@ class BotManager:
                 fees_v = float(st.get("fees", 0) or 0)
                 rpnl = float(st.get("rpnl", 0) or 0)
                 start = float(st.get("start_time", info["started"]) or info["started"])
+                elapsed_hours = max((now - start) / 3600.0, 1.0 / 3600.0)
+                has_action_metrics = all(k in st for k in (
+                    "order_placements", "order_modifications", "order_cancellations"))
+                placements = int(st.get("order_placements", 0) or 0)
+                modifications = int(st.get("order_modifications", 0) or 0)
+                cancellations = int(st.get("order_cancellations", 0) or 0)
+                action_count = placements + modifications + cancellations
+                phase = str(st.get("phase") or ("running" if st else "connecting"))
+                error = str(st.get("error", ""))
+                if not alive and phase != "stopped":
+                    phase = "failed"
+                    if not error:
+                        try:
+                            with open(info["log"], "rb") as stream:
+                                stream.seek(info.get("log_start", 0))
+                                lines = stream.read().decode("utf-8", errors="replace").strip().splitlines()
+                            error = lines[-1] if lines else "Le processus s'est arrêté pendant le démarrage."
+                        except OSError:
+                            error = "Le processus s'est arrêté pendant le démarrage."
                 entry = {
                     "token": key,
-                    "strategy": info["config"].get("strategy", "obi"),
+                    "strategy": info["config"].get("strategy", "bbo"),
+                    "offset_bps": _json_float(info["config"].get("offset_bps", 0.0), 2),
                     "mode": info["config"].get("mode", "live"),
                     "symbol": info["symbol"],
                     "running": alive,
+                    "phase": phase,
                     "duration": _fmt_duration(max(0.0, now - start)),
                     "volume_usd": _json_float(vol, 2),
                     "net_pnl": _json_float(rpnl - fees_v, 4),
                     "fees": _json_float(fees_v, 4),
+                    "realized_pnl": _json_float(rpnl, 4),
                     "cost_per_1m": _json_float((fees_v - rpnl) / (vol / 1_000_000), 2) if vol > 0 else 0.0,
                     "fills": int(st.get("fills", 0) or 0),
+                    "order_placements": placements if has_action_metrics else None,
+                    "order_modifications": modifications if has_action_metrics else None,
+                    "order_cancellations": cancellations if has_action_metrics else None,
+                    "order_requests": int(st.get("order_requests", 0) or 0) if has_action_metrics else None,
+                    "order_actions_per_hour": _json_float(action_count / elapsed_hours, 1) if has_action_metrics else None,
+                    "fills_per_hour": _json_float(int(st.get("fills", 0) or 0) / elapsed_hours, 1),
                     "mid_price": _json_float(st.get("mid", 0), 4),
                     "spread_bps": _json_float(st.get("spread_bps", 0), 2),
+                    "markout_bid_bps": _json_float(st.get("markout_bid_bps", 0), 3),
+                    "markout_ask_bps": _json_float(st.get("markout_ask_bps", 0), 3),
+                    "mid_offset_bps": _json_float(st.get("mid_offset_bps", 0), 2),
                     "position_usd": _json_float(st.get("position_usd", 0), 2),
                     "upnl": _json_float(st.get("upnl", 0), 4),
                     "action": str(st.get("action", "")),
-                    "error": str(st.get("error", "")),
+                    "error": error,
                 }
-                if entry['strategy'] == 'adaptive':
-                    for field in ('cpm_realized', 'cpm_liquidated', 'volume_per_hour', 'fills_per_minute',
-                                  'maker_ratio', 'calibration', 'fees_verified', 'funding_verified', 'acceptance', 'funding'):
-                        entry[field] = st.get(field)
-                    entry['cost_per_1m'] = st.get('cpm_realized')
-                    entry['net_pnl'] = st.get('net_pnl')
                 bots.append(entry)
                 if alive and entry['mode'] == 'live':
                     tot_vol += vol
@@ -503,8 +494,8 @@ class BotManager:
                     tot_fills += entry["fills"]
                     earliest = start if earliest is None else min(earliest, start)
 
-            # Les process morts sortent du registre (leur dernier snapshot
-            # reste visible ce cycle-ci via `bots`).
+            # Garder le dernier échec affiché jusqu'au prochain lancement ou
+            # arrêt explicite: un crash ne doit pas disparaître du dashboard.
             if dead:
                 with self.lock:
                     for key in dead:
@@ -512,7 +503,6 @@ class BotManager:
                             self.obi_procs[key]["log_f"].close()
                         except Exception:
                             pass
-                        self.obi_procs.pop(key, None)
 
             alive_bots = [b for b in bots if b["running"]]
             single = alive_bots[0] if len(alive_bots) == 1 else None
@@ -826,7 +816,7 @@ async def start_grid(req: GridStartRequest, _: None = Depends(_require_api_token
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, manager.start_grid, req)
-        return {"status": "ok", "message": f"Bot started on {req.token}", "mode": req.mode}
+        return {"status": "starting", "message": f"Connexion Hyperliquid sur {req.token}", "mode": req.mode}
     except Exception as e:
         logger.exception("Failed to start OBI bot")
         return JSONResponse(

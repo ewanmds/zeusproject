@@ -1,42 +1,7 @@
-"""
-================================================================================
-OBI VOLUME BOT — Order-Book-Imbalance market maker  (Hyperliquid HIP-3)
-================================================================================
-Bot de volume maker-only qui se cale sur le DÉSÉQUILIBRE DU CARNET :
-
-    OBI = (Σ w_i·bid_sz_i − Σ w_i·ask_sz_i) / (Σ w_i·bid_sz_i + Σ w_i·ask_sz_i)
-
-sur les N premiers niveaux L2 (pondération décroissante), lissé en EWMA,
-combiné au flux agresseur (trades) sur fenêtre glissante :
-
-    signal = 0.65·OBI_ewma + 0.35·flow_imbalance          ∈ [−1, +1]
-
-Logique de quote (100% ALO / post-only, jamais taker en entrée) :
-  signal >> 0  (pression acheteuse, le prix va ticker UP)
-      → quoter le BID au meilleur bid (un fill = achat juste avant la hausse,
-        markout favorable) ; RETIRER l'ask (éviter d'être lifté avant la hausse)
-  signal << 0  → miroir : quoter l'ASK seulement
-  signal ~ 0   → quoter les DEUX côtés au BBO (volume max en carnet équilibré)
-  entre les deux → les deux côtés, le côté défavorisé reculé de quelques ticks
-
-Inventaire : cap à MAX_INV_ORDERS × taille ; le côté qui aggrave est supprimé,
-le côté qui débouche est reduce-only. Position trop vieille ou markout trop
-adverse → sortie passive forcée puis IOC borné.
-
-Sécurité (mêmes règles que les autres bots du projet) :
-  - sweep des ordres orphelins de NOTRE coin au démarrage
-  - sticky quotes (remplacement seulement si dérive > tolérance) → budget
-    rate-limit HL (10 000 + volume USDC) préservé, priorité de queue gardée
-  - STOP (Ctrl+C / SIGTERM) = cancel all + flatten market, toujours
-  - watchdog WS : fallback REST, reconnexion, flatten si feed mort avec position
-  - verrou d'instance par symbole (pas deux bots sur le même token)
-
-Lancement :
-    python OBI_VOLUME_BOT.py                # prompt token, DRY-RUN par défaut
-    python OBI_VOLUME_BOT.py --live         # ordres réels
-    python OBI_VOLUME_BOT.py --token SP500 --live
-Credentials : PRIVATE_KEY / WALLET_ADDRESS dans .env (partagé avec le grid).
-================================================================================
+"""Hyperliquid BBO / MID Order Book market maker.
+BBO quotes at best bid/ask. MID quotes at mid +/- a configurable bps distance
+(minimum one tick). Shared post-only execution, inventory and hard-risk limits.
+The historical filename is retained for existing deployment scripts.
 """
 
 import os
@@ -50,6 +15,7 @@ import tempfile
 import threading
 from collections import deque
 from typing import Optional, List, Dict, Any, Tuple, NamedTuple
+from startup_network import StartupNetworkError, post_info, retry_read
 
 # Windows: stdout redirigé = cp1252 → crash sur les emojis. Forcer UTF-8.
 try:
@@ -86,7 +52,8 @@ IS_CROSS  = True
 
 # --- Tokens presets (tick/min viennent du meta live si absent d'ici) ---
 DEFAULT_TOKEN = os.getenv("OBI_TOKEN", "SP500")
-STRATEGY = "obi"
+STRATEGY = "bbo"
+MID_OFFSET_BPS = max(0.0, float(os.getenv("OBI_MID_OFFSET_BPS", "1.0")))
 
 # --- Sizing ---
 ORDER_NOTIONAL_USD = max(10.5, float(os.getenv("OBI_ORDER_NOTIONAL_USD", "100")))
@@ -331,8 +298,34 @@ def px_up(px: float, tick: float) -> float:
     return round(math.ceil(round(px / tick, 9)) * tick, PRICE_DECIMALS)
 
 
+def fast_mm() -> bool:
+    """BBO + MID: requote rapide, pas de couches OBI."""
+    return STRATEGY in ("bbo", "mid")
+
+
+def touch_mm() -> bool:
+    """BBO only: snap des prix au meilleur bid/ask."""
+    return STRATEGY == "bbo"
+
+
 def round_sz(sz: float) -> float:
     return round(sz, SZ_DECIMALS)
+
+
+def order_book_prices(bb: float, ba: float, tick: float) -> Tuple[float, float]:
+    """Prices for both modes; bps are a half-spread from the current mid."""
+    if STRATEGY == "bbo":
+        return px_down(bb, tick), px_up(ba, tick)
+    if STRATEGY != "mid":
+        raise ValueError(f"Unsupported market making mode: {STRATEGY}")
+    if not math.isfinite(MID_OFFSET_BPS) or not 0 <= MID_OFFSET_BPS < 10000:
+        raise ValueError("MID distance must be finite and between 0 and 10000 bps (exclusive)")
+    mid = (bb + ba) / 2.0
+    distance = max(tick, mid * MID_OFFSET_BPS / 10000.0)
+    bid, ask = px_down(mid - distance, tick), px_up(mid + distance, tick)
+    if bid <= 0 or ask <= bid:
+        raise ValueError("MID distance produces invalid prices")
+    return bid, ask
 
 
 def session_state_utc(
@@ -376,6 +369,19 @@ def stats_file_path(symbol: str) -> str:
     """Fichier JSON de stats live, écrit ~1x/s par le bot et lu par le
     dashboard (bot_server) — c'est le canal de télémétrie inter-process."""
     return os.path.join(tempfile.gettempdir(), f"hl_obi_stats_{_safe_symbol(symbol)}.json")
+
+
+def write_startup_status(symbol, strategy, started, live, phase, error=""):
+    """Publish a current-run state before network initialization can fail."""
+    path = stats_file_path(symbol)
+    data = {"symbol": symbol, "strategy": strategy, "start_time": started,
+            "ts": time.time(), "live": live, "running": phase != "failed",
+            "phase": phase, "action": "Connexion à Hyperliquid" if phase == "connecting"
+            else "Démarrage impossible", "error": error}
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as stream:
+        json.dump(data, stream)
+    os.replace(temporary, path)
 
 
 def stop_file_path(symbol: str) -> str:
@@ -435,8 +441,7 @@ def fetch_token_meta(symbol: str) -> Dict[str, Any]:
     """szDecimals + mid live depuis metaAndAssetCtxs du dex concerné."""
     import requests
     dex, bare = symbol.split(":", 1)
-    data = requests.post(BASE_URL + "/info",
-                         json={"type": "metaAndAssetCtxs", "dex": dex}, timeout=15).json()
+    data = post_info(BASE_URL, {"type": "metaAndAssetCtxs", "dex": dex})
     universe = data[0].get("universe", [])
     ctxs = data[1] if len(data) > 1 else []
     for i, u in enumerate(universe):
@@ -1045,16 +1050,19 @@ class SignalEngine:
 # =============================================================================
 # LE BOT
 # =============================================================================
-class OBIVolumeBot:
+class OrderBookBot:
     def __init__(self, live: bool):
         self.live = live
         self.lock = threading.Lock()
         self.wallet = eth_account.Account.from_key(AGENT_PRIVATE_KEY)
         self.dex = SYMBOL.split(":", 1)[0]
         self.fixed_spot_meta = build_fixed_spot_meta()
-        self.info = Info(BASE_URL, skip_ws=True, spot_meta=self.fixed_spot_meta, perp_dexs=PERP_DEXS)
-        self.exchange = Exchange(self.wallet, base_url=BASE_URL, account_address=ACCOUNT_ADDRESS,
-                                 spot_meta=self.fixed_spot_meta, perp_dexs=PERP_DEXS)
+        self.info = retry_read("initialisation des marchés", lambda: Info(
+            BASE_URL, skip_ws=True, spot_meta=self.fixed_spot_meta,
+            perp_dexs=PERP_DEXS, timeout=10))
+        self.exchange = retry_read("initialisation du client", lambda: Exchange(
+            self.wallet, base_url=BASE_URL, account_address=ACCOUNT_ADDRESS,
+            spot_meta=self.fixed_spot_meta, perp_dexs=PERP_DEXS, timeout=10))
         self.signal = SignalEngine()
         self.macro = MacroContext()      # indicateurs sur vraies bougies HL
         self._macro = MACRO_NEUTRAL      # contexte caché 1×/cycle
@@ -1096,6 +1104,10 @@ class OBIVolumeBot:
         self.force_quote = False      # fill/régime → bypass du coalesce
         self.last_quote_bb = 0.0      # BBO au moment du dernier quote (urgence)
         self.last_quote_ba = 0.0
+        # Après un retrait d'urgence ou un filtre de risque, attendre avant de
+        # rouvrir le même côté. Les sorties reduce-only ne sont pas retenues.
+        self.side_rearm_until: Dict[str, float] = {"B": 0.0, "A": 0.0}
+        self.side_ready_since: Dict[str, float] = {"B": 0.0, "A": 0.0}
 
         # Cache des signaux calculés UNE fois par cycle (_refresh_signals):
         # regime() avance sa machine à états UNIQUEMENT là — tous les autres
@@ -1128,6 +1140,10 @@ class OBIVolumeBot:
         self.total_volume = 0.0
         self.fills_count = 0
         self.maker_fills = 0
+        self.order_placements = 0
+        self.order_modifications = 0
+        self.order_cancellations = 0
+        self.order_requests = 0
         self.hourly_net_events: deque = deque()  # (ts, closedPnl - fee)
         self.hourly_net_pnl = 0.0
         self.hourly_loss_latched = False
@@ -1202,7 +1218,14 @@ class OBIVolumeBot:
 
     # ------------------------------------------------------------------- ws io
     def start_ws(self):
-        self.ws_info = Info(BASE_URL, skip_ws=False, spot_meta=self.fixed_spot_meta, perp_dexs=PERP_DEXS)
+        # Load metadata before starting a WS thread, so a failed read cannot
+        # leave orphan websocket threads behind during a retry.
+        from hyperliquid.websocket_manager import WebsocketManager
+        self.ws_info = retry_read("initialisation du flux", lambda: Info(
+            BASE_URL, skip_ws=True, spot_meta=self.fixed_spot_meta,
+            perp_dexs=PERP_DEXS, timeout=10))
+        self.ws_info.ws_manager = WebsocketManager(BASE_URL)
+        self.ws_info.ws_manager.start()
         self.ws_info.subscribe({"type": "l2Book", "coin": SYMBOL}, self._on_l2)
         self.ws_info.subscribe({"type": "trades", "coin": SYMBOL}, self._on_trades)
         self.ws_info.subscribe({"type": "userFills", "user": ACCOUNT_ADDRESS}, self._on_user_fills)
@@ -1304,7 +1327,7 @@ class OBIVolumeBot:
         thread WS. Ne touche jamais aux sorties reduce-only (un dump qui
         remplit notre bid de rachat de short est un BON fill)."""
         now = time.time()
-        if not self.live or now - self._emerg_ts[side] < EMERG_COOLDOWN_SEC:
+        if fast_mm() or not self.live or now - self._emerg_ts[side] < EMERG_COOLDOWN_SEC:
             return
         with self.lock:
             # A4: pull tout ordre du côté menacé qui n'est PAS une sortie RO
@@ -1396,7 +1419,7 @@ class OBIVolumeBot:
         flip éclair + le re-peg d'urgence font le reste; si la perte creuse
         malgré tout, le hard-stop vol-scalé (taker, assumé) tranche."""
         now = time.time()
-        if not self.live or now - self._scratch_ts < SCRATCH_COOLDOWN_SEC:
+        if fast_mm() or not self.live or now - self._scratch_ts < SCRATCH_COOLDOWN_SEC:
             return
         with self.lock:
             pos = self.position
@@ -1548,10 +1571,15 @@ class OBIVolumeBot:
 
     # ------------------------------------------------------------- order mgmt
     def cancel_oids(self, oids: List[int]) -> bool:
+        if not self.live:
+            return True
         if not oids:
             return True
         try:
             with self.api_lock:
+                with self.lock:
+                    self.order_cancellations += len(oids)
+                    self.order_requests += 1
                 res = self.exchange.bulk_cancel([{"coin": SYMBOL, "oid": o} for o in oids])
             if isinstance(res, dict) and res.get("status") != "ok":
                 raise RuntimeError(str(res)[:150])
@@ -1588,6 +1616,8 @@ class OBIVolumeBot:
         return "post only" in e or "alo" in e or "immediately match" in e or "would have matched" in e
 
     def place_quotes(self, reqs: List[Dict[str, Any]]) -> None:
+        if not self.live:
+            return
         if not reqs:
             return
         pending = reqs
@@ -1596,17 +1626,20 @@ class OBIVolumeBot:
             with self.lock:
                 bb, ba = self.best_bid, self.best_ask
             tick = dyn_tick(self.mid)
+            if bb <= 0 or ba <= bb:
+                return
+            try:
+                bid_px, ask_px = order_book_prices(bb, ba, tick)
+            except ValueError as exc:
+                self.last_error = str(exc)
+                return
             for r in pending:
-                if STRATEGY == "bbo":
-                    if bb <= 0 or ba <= bb:
-                        return
-                    r["limit_px"] = px_down(bb, tick) if r["is_buy"] else px_up(ba, tick)
-                elif r["is_buy"] and ba > 0:
-                    r["limit_px"] = min(r["limit_px"], px_down(ba - tick, tick))
-                elif not r["is_buy"] and bb > 0:
-                    r["limit_px"] = max(r["limit_px"], px_up(bb + tick, tick))
+                r["limit_px"] = bid_px if r["is_buy"] else ask_px
             try:
                 with self.api_lock:
+                    with self.lock:
+                        self.order_placements += len(pending)
+                        self.order_requests += 1
                     res = self.exchange.bulk_orders(pending)
             except Exception as exc:
                 with self.lock:
@@ -1640,7 +1673,7 @@ class OBIVolumeBot:
                     else:
                         err = str(status.get("error", status) if isinstance(status, dict) else status)
                         self.last_error = err[:100]
-                        if STRATEGY != "bbo" and retry < POST_ONLY_MAX_RETRIES and self._is_post_only_error(err):
+                        if not fast_mm() and retry < POST_ONLY_MAX_RETRIES and self._is_post_only_error(err):
                             # A7: RECULER d'1 tick avant de retenter — resoumettre
                             # le même prix croisant se ferait rejeter en boucle.
                             rt = dyn_tick(self.mid if self.mid > 0 else req["limit_px"])
@@ -1659,22 +1692,23 @@ class OBIVolumeBot:
         réussi renvoie un NOUVEL oid → remplacé dans le tracking. Retourne
         False au moindre échec: l'appelant invalide last_intent et le cycle
         suivant repasse par le chemin cancel+place classique (anti-fantômes)."""
+        if not self.live:
+            return True
         if not pairs:
             return True
         with self.lock:
             bb, ba = self.best_bid, self.best_ask
         tick = dyn_tick(self.mid)
         modifies = []
+        if bb <= 0 or ba <= bb:
+            return False
+        try:
+            bid_px, ask_px = order_book_prices(bb, ba, tick)
+        except ValueError as exc:
+            self.last_error = str(exc)
+            return False
         for oid, r in pairs:
-            # Clamp de dernière milliseconde au BBO le plus frais (jamais croiser).
-            if STRATEGY == "bbo":
-                if bb <= 0 or ba <= bb:
-                    return False
-                r["limit_px"] = px_down(bb, tick) if r["is_buy"] else px_up(ba, tick)
-            elif r["is_buy"] and ba > 0:
-                r["limit_px"] = min(r["limit_px"], px_down(ba - tick, tick))
-            elif not r["is_buy"] and bb > 0:
-                r["limit_px"] = max(r["limit_px"], px_up(bb + tick, tick))
+            r["limit_px"] = bid_px if r["is_buy"] else ask_px
             modifies.append({"oid": oid, "order": {
                 "coin": SYMBOL, "is_buy": r["is_buy"], "sz": r["sz"],
                 "limit_px": r["limit_px"],
@@ -1683,6 +1717,9 @@ class OBIVolumeBot:
             }})
         try:
             with self.api_lock:
+                with self.lock:
+                    self.order_modifications += len(pairs)
+                    self.order_requests += 1
                 res = self.exchange.bulk_modify_orders_new(modifies)
         except Exception as exc:
             with self.lock:
@@ -1769,8 +1806,8 @@ class OBIVolumeBot:
         return min(fractions) if fractions else None
 
     # ---------------------------------------------------------------- quoting
-    def compute_bbo_intent(self):
-        """Touch quotes with inventory and hard risk limits, without OBI filters."""
+    def _fast_quote_gates(self):
+        """Book + inventory/risk gates shared by BBO and MID (no OBI filters)."""
         now = time.time()
         with self.lock:
             bb, ba = self.best_bid, self.best_ask
@@ -1778,11 +1815,11 @@ class OBIVolumeBot:
             risk_pause = now < self.pause_until
             exits_only = now < self.hourly_pause_until or now < self.bank_until
         if not all(math.isfinite(v) for v in (bb, ba, pos)) or bb <= 0 or ba <= bb:
-            return None, None, "no book"
+            return None, "no book"
         mid = (bb + ba) / 2.0
         tick = dyn_tick(mid)
         if (ba - bb) / tick > MAX_SPREAD_TICKS:
-            return None, None, "BBO | spread too wide"
+            return None, "spread too wide"
         self.session_mode = session_state_utc(SESSION_WINDOWS_UTC, now, OPEN_BLACKOUT_MIN)
         exits_only = exits_only or risk_pause or self.session_mode == "blackout"
         size = round_sz(max(MIN_SIZE, ORDER_NOTIONAL_USD * self.size_mult / mid))
@@ -1795,575 +1832,100 @@ class OBIVolumeBot:
         ask_size = round_sz(min(size, abs(pos))) if ask_ro else size
         bid_ok = bid_ro or (not exits_only and pos + bid_size <= cap + eps)
         ask_ok = ask_ro or (not exits_only and -pos + ask_size <= cap + eps)
-        bid = (px_down(bb, tick), bid_size, bid_ro) if bid_ok and bid_size >= MIN_SIZE else None
-        ask = (px_up(ba, tick), ask_size, ask_ro) if ask_ok and ask_size >= MIN_SIZE else None
+        return {
+            "bb": bb, "ba": ba, "mid": mid, "tick": tick, "pos": pos,
+            "bid_ro": bid_ro, "ask_ro": ask_ro,
+            "bid_size": bid_size, "ask_size": ask_size,
+            "bid_ok": bid_ok, "ask_ok": ask_ok,
+        }, None
+
+    def compute_bbo_intent(self):
+        """Touch quotes with inventory and hard risk limits, without OBI filters."""
+        st, err = self._fast_quote_gates()
+        if st is None:
+            return None, None, f"BBO | {err}"
+        tick, bb, ba = st["tick"], st["bb"], st["ba"]
+        bid = (px_down(bb, tick), st["bid_size"], st["bid_ro"]) if st["bid_ok"] and st["bid_size"] >= MIN_SIZE else None
+        ask = (px_up(ba, tick), st["ask_size"], st["ask_ro"]) if st["ask_ok"] and st["ask_size"] >= MIN_SIZE else None
         tag = "BBO | bid/ask" if bid and ask else "BBO | inventory/risk limit"
         return bid, ask, tag
 
-    def compute_intent(self) -> Tuple[Optional[Tuple[float, float, bool]],
-                                      Optional[Tuple[float, float, bool]], str]:
-        """Retourne (bid, ask, tag) où bid/ask = (px, sz, reduce_only) ou None.
+    def compute_mid_intent(self):
+        """Classic symmetric market making at a fixed distance from mid."""
+        st, err = self._fast_quote_gates()
+        if st is None:
+            return None, None, f"MID | {err}"
+        try:
+            bid_px, ask_px = order_book_prices(st["bb"], st["ba"], st["tick"])
+        except ValueError as exc:
+            return None, None, f"MID | {exc}"
+        bid = (bid_px, st["bid_size"], st["bid_ro"]) if st["bid_ok"] and st["bid_size"] >= MIN_SIZE else None
+        ask = (ask_px, st["ask_size"], st["ask_ro"]) if st["ask_ok"] and st["ask_size"] >= MIN_SIZE else None
+        return bid, ask, f"MID | mid +/- {MID_OFFSET_BPS:g}bps"
 
-        Empilement de couches, dans l'ordre:
-          1. RESERVATION PRICE (hftbacktest): z-score → fair → resa ± half,
-             skew d'inventaire continu; retrait d'un côté si |z| ≥ ZSCORE_PULL
-          1b. régime PUMP/DUMP: côtés ouvrants retirés; sortie en ride/flee
-          2. momentum court (openings)                       → pas de quote côté balayé
-          3. sweep breaker + cooldown post-fill (openings)   → retrait temporaire
-          4. probation markout (openings)                    → recul / retrait
-          5. EV gate (openings)                              → recule jusqu'à EV≥0 ou retire
-          6. vol widen (openings)                            → recul
-          7. inventaire: cap, reduce-only, sortie ancrée entry ± profit
-        """
+    def compute_intent(self):
+        if STRATEGY == "mid":
+            return self.compute_mid_intent()
         if STRATEGY == "bbo":
             return self.compute_bbo_intent()
-        now = time.time()
-        with self.lock:
-            bb, ba, mid = self.best_bid, self.best_ask, self.mid
-            pos = self.position
-            entry = self.entry_price
-            pos_since = self.pos_since
-            mo_b = self.markout_bps["B"]
-            mo_a = self.markout_bps["A"]
-            pause_b = self.side_pause_until["B"]
-            pause_a = self.side_pause_until["A"]
-            last_fill_b = self.last_side_fill_ts["B"]
-            last_fill_a = self.last_side_fill_ts["A"]
-        if bb <= 0 or ba <= bb or mid <= 0:
-            return None, None, "no book"
-        tick = dyn_tick(mid)
-        tick_bps = tick / mid * 10000.0
-        spread_bps = (ba - bb) / mid * 10000.0
-        if (ba - bb) / tick > MAX_SPREAD_TICKS:
-            return None, None, "spread too wide"
-        if now < self.pause_until:
-            return None, None, "risk pause"
-
-        session_mode = session_state_utc(
-            SESSION_WINDOWS_UTC, now, OPEN_BLACKOUT_MIN)
-        self.session_mode = session_mode
-        mom_f = self.signal.momentum_bps(MOM_FAST_SEC)
-        mom_s = self.signal.momentum_bps(MOM_SLOW_SEC)
-        # Signaux cachés (calculés 1×/cycle par _refresh_signals) — cohérents
-        # avec risk_checks du même cycle, pas de ré-avancement de regime().
-        with self.lock:
-            vol = self._sig_vol
-            z = self._sig_z
-            reg, reg_i = self._reg_now
-            cached_alpha = self._sig_alpha
-            early_now = self._early_now
-            touch_imb = self._sig_touch
-            macro = self._macro
-            qf_bid_c, qf_ask_c = self._qf_b, self._qf_a
-
-        order_sz = round_sz(max(MIN_SIZE, ORDER_NOTIONAL_USD * self.size_mult / mid))
-        if order_sz * mid < 10.0:
-            order_sz = round_sz(math.ceil((10.5 / mid) / (10 ** -SZ_DECIMALS)) * (10 ** -SZ_DECIMALS))
-        max_pos = MAX_INV_ORDERS * order_sz
-        eps = MIN_SIZE / 2
-
-        # ---- 1. Reservation price continu (hftbacktest):
-        #   fair = mid × (1 + C1×z/1e4)  — le z-score déplace la juste valeur
-        #   resa = fair − mid × SKEW/1e4 × (pos/order_sz)  — skew d'inventaire
-        #   cibles = resa ± half, clampées pour ne jamais améliorer le BBO.
-        inv_units = pos / max(order_sz, MIN_SIZE)
-        # Fair = micro-price de Stoikov ajustée par l'alpha OFI auto-calibré
-        # (beta appris en ligne × z de l'OFI, clampé) — plus de c1 en dur.
-        alpha_bps = 0.0 if STRATEGY == "bbo" else cached_alpha
-        if STRATEGY != "bbo" and session_mode == "off":
-            # Hors cash session: les signaux lead/lag sont moins fiables. On
-            # revient à une faible mean-reversion du momentum lent.
-            alpha_bps = max(-ALPHA_CAP_BPS, min(ALPHA_CAP_BPS, -0.25 * mom_s))
-        base_px = mid if STRATEGY == "bbo" else (self.signal.micro() or mid)
-        # Couche de contexte MACRO (indicateurs bougies) : petit biais de fair
-        # dans le sens de la tendance (EMA/MACD) + pull mean-reversion vers le
-        # VWAP, BORNÉ à ±MACRO_MAX_BPS. L'alpha OFI reste le terme dominant.
-        macro_bps = 0.0
-        if STRATEGY != "bbo" and macro.ready:
-            macro_bps = MACRO_TREND_W * macro.trend_dir * macro.trend_strength + macro.revert_bps
-            macro_bps = max(-MACRO_MAX_BPS, min(MACRO_MAX_BPS, macro_bps))
-        fair = base_px * (1.0 + (alpha_bps + macro_bps) / 10000.0)
-        resa = fair if STRATEGY == "bbo" else fair - mid * (SKEW_BPS / 10000.0) * inv_units
-        # Demi-spread de BASE (mode profit hftbacktest): on quote À DISTANCE
-        # du mid; seul un alpha/skew favorable ramène un côté vers le BBO
-        # (clamp min/max) — coller au BBO en continu = cost/M qui explose.
-        # Composante adaptative: sur un book à spread large (SKHX) on capture
-        # une fraction du spread live → quote proche du BBO et encaisse la
-        # fourchette; sur un book serré (SP500) elle est négligeable.
-        half_bps = max(HALF_SPREAD_BPS, MAKER_FEE_BPS + self._eff_min_ev(),
-                       SPREAD_CAPTURE_FRAC * spread_bps)
-        half_px = half_bps * mid / 10000.0
-        bid_t = bb if STRATEGY == "bbo" else min(resa - half_px, bb)
-        ask_t = ba if STRATEGY == "bbo" else max(resa + half_px, ba)
-        extra_bid = max(0.0, round((bb - bid_t) / tick))   # recul en ticks vs BBO
-        extra_ask = max(0.0, round((ask_t - ba) / tick))
-        quote_bid = True
-        quote_ask = True
-        tag = "BBO" if STRATEGY == "bbo" else f"z{z:+.1f}"
-        if session_mode != "open":
-            tag += f" | session:{session_mode}"
-        # B11: le z-pull s'applique AUSSI hors session — un z_OFI extrême signale
-        # un déséquilibre dangereux 24/7, pas seulement en cash session.
-        if STRATEGY != "bbo" and z >= ZSCORE_PULL:
-            quote_ask = False
-            tag += " | ask✗z"
-        elif STRATEGY != "bbo" and z <= -ZSCORE_PULL:
-            quote_bid = False
-            tag += " | bid✗z"
-
-        # Un côté est "ouvrant" s'il augmente l'exposition; le côté qui
-        # déboucle une position échappe aux couches 1b-6 (il DOIT rester).
-        bid_is_opening = pos > -eps
-        ask_is_opening = pos < eps
-
-        # Dix minutes autour de l'open configuré: sorties uniquement.
-        if session_mode == "blackout":
-            if bid_is_opening:
-                quote_bid = False
-            if ask_is_opening:
-                quote_ask = False
-            tag += " | open blackout"
-
-        # Le coupe-circuit horaire interdit les nouvelles expositions, mais ne
-        # supprime jamais la quote reduce-only qui permet de sortir proprement.
-        if now < self.hourly_pause_until:
-            if bid_is_opening:
-                quote_bid = False
-            if ask_is_opening:
-                quote_ask = False
-            tag += " | hourly pause"
-
-        # ---- 1b. Régime PUMP/DUMP: on ne pose AUCUN ordre ouvrant pendant
-        # l'événement (exception assumée au volume) — la sortie, elle, est
-        # gérée plus bas (ride/flee).
-        if reg:
-            tag += f" | {reg}{reg_i}"
-            if bid_is_opening:
-                quote_bid = False
-            if ask_is_opening:
-                quote_ask = False
-
-        # ---- 1c. EARLY WARNING (avant le move): le côté qui va se faire
-        # courir dessus est retiré PENDANT que le book bascule, pas après.
-        # Le côté favorable RESTE — être short avant un dump (ou long avant
-        # un pump), c'est là que la prédiction paie.
-        early_side, early_score = (None, 0)
-        if not reg:
-            early_side, early_score = early_now
-            if early_side == "DUMP" and bid_is_opening and quote_bid:
-                quote_bid = False
-                tag += f" | early↓{early_score}"
-            elif early_side == "PUMP" and ask_is_opening and quote_ask:
-                quote_ask = False
-                tag += f" | early↑{early_score}"
-
-        # ---- 2. Momentum: pas de quote ouvrante du côté qui se fait courir dessus
-        mom_gate = MOM_GATE_BPS * (2.0 if session_mode == "off" else 1.0)
-        if bid_is_opening and quote_bid and (
-                mom_f <= -mom_gate
-                or (mom_f <= -0.6 * mom_gate and mom_s <= -mom_gate)):
-            quote_bid = False
-            tag += " | mom↓"
-        if ask_is_opening and quote_ask and (
-                mom_f >= mom_gate
-                or (mom_f >= 0.6 * mom_gate and mom_s >= mom_gate)):
-            quote_ask = False
-            tag += " | mom↑"
-
-        # ---- 3. Sweep breaker + cooldown post-fill
-        if bid_is_opening and quote_bid and (
-                now < pause_b or now - last_fill_b < FILL_COOLDOWN_SEC):
-            quote_bid = False
-            tag += " | B pause"
-        if ask_is_opening and quote_ask and (
-                now < pause_a or now - last_fill_a < FILL_COOLDOWN_SEC):
-            quote_ask = False
-            tag += " | A pause"
-
-        # ---- 4. Probation markout
-        if bid_is_opening and quote_bid:
-            if mo_b <= MARKOUT_HARD_BPS:
-                quote_bid = False
-                tag += " | moB✗"
-            elif mo_b <= MARKOUT_SOFT_BPS:
-                extra_bid += MARKOUT_EXTRA_TICKS
-                tag += " | moB−"
-        if ask_is_opening and quote_ask:
-            if mo_a <= MARKOUT_HARD_BPS:
-                quote_ask = False
-                tag += " | moA✗"
-            elif mo_a <= MARKOUT_SOFT_BPS:
-                extra_ask += MARKOUT_EXTRA_TICKS
-                tag += " | moA−"
-
-        # ---- 5. EV gate: capture attendue ≥ frais + adverse prédit + marge.
-        # Reculer la quote augmente la capture d'autant; si le recul nécessaire
-        # dépasse le cap, le côté ne paie pas → retiré.
-        qf_bid, qf_ask = qf_bid_c, qf_ask_c   # fractions cachées (1×/cycle)
-
-        def queue_probs(qfrac: Optional[float]) -> Tuple[float, float]:
-            if qfrac is None:
-                return 1.0, 1.0  # comportement historique avant la première pose
-            q = max(0.0, min(1.0, qfrac))
-            return max(0.20, 1.0 - q), max(0.20, q)
-
-        # Coût adverse attendu par côté = historique (markout EWMA négatif)
-        # + instantané (queue au touch stackée CONTRE nous ⇒ fill traversant).
-        # Un fill sur notre BID quand les asks dominent (touch_imb<0) = vendeurs
-        # qui balaient = toxique ; symétrique pour l'ASK.
-        adv_touch_bid = TOUCH_ADVERSE_BPS * max(0.0, -touch_imb)
-        adv_touch_ask = TOUCH_ADVERSE_BPS * max(0.0, touch_imb)
-        # + contexte MACRO : quoter CONTRE une tendance confirmée est toxique
-        # (acheter en dump / vendre en rallye). L'EV gate recule/retire ce côté.
-        adv_trend_bid = adv_trend_ask = 0.0
-        if macro.ready and macro.trend_dir != 0:
-            _t = MACRO_TREND_ADVERSE_BPS * macro.trend_strength
-            if macro.trend_dir < 0:      # tendance baissière → acheter = toxique
-                adv_trend_bid = _t
-            else:                        # tendance haussière → vendre = toxique
-                adv_trend_ask = _t
-
-        if bid_is_opening and quote_bid:
-            adverse_pred = max(0.0, -mo_b) + adv_touch_bid + adv_trend_bid
-            p_good, p_toxic = queue_probs(qf_bid)
-            capture = spread_bps / 2 + extra_bid * tick_bps
-            need_bps = (self._eff_min_ev() + MAKER_FEE_BPS
-                        + adverse_pred * p_toxic) - capture * p_good
-            if need_bps > 0:
-                add = math.ceil(need_bps / max(tick_bps * p_good, 1e-9))
-                if extra_bid + add > EV_MAX_EXTRA_TICKS:
-                    quote_bid = False
-                    tag += " | EV✗bid"
-                else:
-                    extra_bid += add
-        if ask_is_opening and quote_ask:
-            adverse_pred = max(0.0, -mo_a) + adv_touch_ask + adv_trend_ask
-            p_good, p_toxic = queue_probs(qf_ask)
-            capture = spread_bps / 2 + extra_ask * tick_bps
-            need_bps = (self._eff_min_ev() + MAKER_FEE_BPS
-                        + adverse_pred * p_toxic) - capture * p_good
-            if need_bps > 0:
-                add = math.ceil(need_bps / max(tick_bps * p_good, 1e-9))
-                if extra_ask + add > EV_MAX_EXTRA_TICKS:
-                    quote_ask = False
-                    tag += " | EV✗ask"
-                else:
-                    extra_ask += add
-
-        # ---- 6. Vol widen (le skew d'inventaire est déjà continu via resa)
-        # Vol tick (|Δmid|) OU expansion des bandes de Bollinger (contexte macro)
-        # — on prend le max, pas un canal parallèle, plafonné à 4 ticks.
-        widen_bps = vol * VOL_WIDEN_MULT
-        if macro.ready and macro.widen_bps > 0:
-            widen_bps = max(widen_bps, spread_bps / 2 + macro.widen_bps)
-        vol_extra = int(min(4.0, max(0.0, (widen_bps - spread_bps / 2) / max(tick_bps, 1e-9))))
-        if vol_extra > 0:
-            if bid_is_opening:
-                extra_bid += vol_extra
-            if ask_is_opening:
-                extra_ask += vol_extra
-            tag += f" | vol+{vol_extra}"
-
-        # Prix ouvrants
-        bid_px = px_down(bb - extra_bid * tick, tick)
-        ask_px = px_up(ba + extra_ask * tick, tick)
-
-        # ---- 7. Inventaire: cap, reduce-only, sortie ancrée
-        bid_ro = False
-        ask_ro = False
-        bid_sz = order_sz
-        ask_sz = order_sz
-        # Sizing par conviction (étape 4, Kelly-lite): le côté favorisé par
-        # l'alpha grossit (jusqu'à ×2), le côté défavorisé maigrit (jusqu'à
-        # ×0.5) — l'exposition suit la probabilité que le fill soit bon.
-        # B10: hystérésis — n'appliquer l'asymétrie que si l'alpha est FRANC
-        # (≥ SIZING_MIN_ALPHA_BPS), sinon taille symétrique = pas de flip
-        # fav/unfav sur un alpha bruité qui oscille autour de 0.
-        if STRATEGY != "bbo" and SIZING_CONVICTION and ALPHA_CAP_BPS > 0 and abs(alpha_bps) >= SIZING_MIN_ALPHA_BPS:
-            conv = min(1.0, abs(alpha_bps) / ALPHA_CAP_BPS)
-            fav = round_sz(min(max_pos, order_sz * (1.0 + conv)))
-            unfav = round_sz(order_sz * (1.0 - 0.5 * conv))
-            if unfav * mid < 10.5:          # jamais sous le min notionnel HL
-                unfav = order_sz
-            if alpha_bps > 0:
-                bid_sz, ask_sz = fav, unfav
-            else:
-                bid_sz, ask_sz = unfav, fav
-        with self.lock:
-            banking = now < self.bank_until
-        if pos >= eps:                      # long → l'ask déboucle
-            ask_sz = round_sz(min(order_sz, abs(pos)))
-            ask_ro = ask_sz >= MIN_SIZE
-            quote_ask = ask_ro
-            # A2: pendant un bank (sortie urgente), NE PAS ajouter d'exposition
-            # — on retire le côté ouvrant, on ne garde que la sortie RO.
-            if banking:
-                quote_bid = False
-            age = now - pos_since if pos_since else 1e9
-            if STRATEGY == "bbo":
-                ask_px = px_up(ba, tick)
-                tag += " | exit@ask"
-            elif banking:
-                # BANK ALO: sortie maker LA PLUS AGRESSIVE possible — ask posé
-                # 1 tick au-dessus du best bid = tête de l'ask queue, re-peggé
-                # à chaque mouvement du BBO. Zéro frais taker.
-                ask_px = px_up(bb + tick, tick)
-                tag += " | bank-alo"
-            elif reg == "PUMP":
-                # Long dans le sens du move: RIDE — l'exit colle au BBO et
-                # trail le prix à chaque tick (tête de queue, bypass coalesce).
-                ask_px = px_up(ba, tick)
-                tag += " | ride"
-            elif reg == "DUMP":
-                # Long contre le move: FLEE — sortie au BBO immédiate (le
-                # hard-stop de risk_checks prend le relais si la perte creuse).
-                ask_px = px_up(ba, tick)
-                tag += " | flee"
-            elif age <= UNWIND_ANCHOR_MAX_SEC and entry > 0:
-                # Sortie ancrée: viser au moins entry + profit, pas un scratch.
-                ask_px = max(px_up(ba, tick), px_up(entry + PROFIT_TICKS * tick, tick))
-                tag += " | exit@entry+"
-            else:
-                ask_px = px_up(ba, tick)   # trop vieux: rejoint le BBO
-                if age > self._eff_max_hold():
-                    tag += " | forced unwind"
-            if pos + bid_sz > max_pos + eps:
-                quote_bid = False
-                tag += " | invcap"
-        elif pos <= -eps:                   # short → le bid déboucle
-            bid_sz = round_sz(min(order_sz, abs(pos)))
-            bid_ro = bid_sz >= MIN_SIZE
-            quote_bid = bid_ro
-            # A2: pendant un bank, retirer le côté ouvrant (ask), sortie seule.
-            if banking:
-                quote_ask = False
-            age = now - pos_since if pos_since else 1e9
-            if STRATEGY == "bbo":
-                bid_px = px_down(bb, tick)
-                tag += " | exit@bid"
-            elif banking:
-                # BANK ALO: rachat maker en tête de bid queue (ba − 1 tick).
-                bid_px = px_down(ba - tick, tick)
-                tag += " | bank-alo"
-            elif reg == "DUMP":
-                bid_px = px_down(bb, tick)
-                tag += " | ride"
-            elif reg == "PUMP":
-                bid_px = px_down(bb, tick)
-                tag += " | flee"
-            elif age <= UNWIND_ANCHOR_MAX_SEC and entry > 0:
-                bid_px = min(px_down(bb, tick), px_down(entry - PROFIT_TICKS * tick, tick))
-                tag += " | exit@entry-"
-            else:
-                bid_px = px_down(bb, tick)
-                if age > self._eff_max_hold():
-                    tag += " | forced unwind"
-            if -pos + ask_sz > max_pos + eps:
-                quote_ask = False
-                tag += " | invcap"
-
-        if STRATEGY == "bbo":
-            # Strict touch quoting: a risk filter may suppress an opening,
-            # but must never park it deeper in the book. Exits also follow touch.
-            if not bid_ro and extra_bid > 0:
-                quote_bid = False
-                tag += " | bid paused at touch"
-            if not ask_ro and extra_ask > 0:
-                quote_ask = False
-                tag += " | ask paused at touch"
-            bid_px, ask_px = px_down(bb, tick), px_up(ba, tick)
-
-        bid = (bid_px, bid_sz, bid_ro) if (quote_bid and bid_sz >= MIN_SIZE) else None
-        ask = (ask_px, ask_sz, ask_ro) if (quote_ask and ask_sz >= MIN_SIZE) else None
-        return bid, ask, tag
+        raise ValueError(f"Unsupported market making mode: {STRATEGY}")
 
     def apply_intent(self):
+        """Shared BBO/MID execution: change only a different price/size/flag."""
         now = time.time()
-        tick = dyn_tick(self.mid if self.mid > 0 else 1.0)
-
-        # --- Urgence: fill reçu / BBO qui a bougé / une de nos quotes
-        # traversée par le marché → on saute la fenêtre de coalesce.
-        with self.lock:
-            bb, ba = self.best_bid, self.best_ask
-            force = self.force_quote
-            self.force_quote = False
-            lqbb, lqba = self.last_quote_bb, self.last_quote_ba
-            crossed = any(
-                (d["side"] == "B" and ba > 0 and d["px"] >= ba)
-                or (d["side"] == "A" and bb > 0 and d["px"] <= bb)
-                for d in self.orders.values()
-            )
-        mid_now = (bb + ba) / 2.0 if bb > 0 and ba > bb else self.mid
-        # Tolérance sticky en bps (hystérésis): la reservation price flotte en
-        # continu, on ne bouge un ordre que si la cible a VRAIMENT dérivé.
-        tol = max(REPLACE_TOL_TICKS * tick,
-                  mid_now * REQUOTE_TOL_BPS / 10000.0) + 1e-12
-        if STRATEGY == "bbo":
-            tol = tick / 2.0
-        urgent = (force or crossed
-                  or (lqbb > 0 and abs(bb - lqbb) > tol)
-                  or (lqba > 0 and abs(ba - lqba) > tol))
-        if (STRATEGY == "bbo" or not urgent) and now - self.last_action_ts < ACTION_COALESCE_SEC:
+        if now - self.last_action_ts < ACTION_COALESCE_SEC:
             return
-
         bid, ask, tag = self.compute_intent()
-        # Intent quantifié pour la comparaison sticky
-        intent = (
-            None if bid is None else (round(bid[0], PRICE_DECIMALS), bid[1], bid[2]),
-            None if ask is None else (round(ask[0], PRICE_DECIMALS), ask[1], ask[2]),
-        )
+        intent = (bid, ask)
+        tick = dyn_tick(self.mid if self.mid > 0 else 1.0)
         with self.lock:
-            resting_bids = {o: d for o, d in self.orders.items() if d["side"] == "B"}
-            resting_asks = {o: d for o, d in self.orders.items() if d["side"] == "A"}
-            last_intent = self.last_intent
-
-        # Queue position model (étape 3): fractions cachées (1×/cycle), même
-        # alpha que le sizing de compute_intent → adv_b/adv_a cohérents.
-        with self.lock:
-            alpha_now = 0.0 if STRATEGY == "bbo" else self._sig_alpha
-            qf_b, qf_a = self._qf_b, self._qf_a
-        adv_b = alpha_now < -QUEUE_ADV_ALPHA_BPS   # alpha baissier → bid en danger
-        adv_a = alpha_now > QUEUE_ADV_ALPHA_BPS
-
-        # Fond de file + alpha adverse ET ordre PROCHE du BBO: viser le niveau
-        # suivant. Restreint aux quotes à ≤QUEUE_NEAR_TICKS du BBO — un ordre
-        # parké loin (poussé par le half-spread) ne file pas de toute façon,
-        # le glisser d'un tick ne ferait que churner sans jamais remplir.
-        near_b = intent[0] is not None and bb - intent[0][0] <= QUEUE_NEAR_TICKS * tick + 1e-9
-        near_a = intent[1] is not None and intent[1][0] - ba <= QUEUE_NEAR_TICKS * tick + 1e-9
-        if (intent[0] is not None and not intent[0][2] and near_b
-                and qf_b is not None and qf_b >= QUEUE_DEEP_FRAC and adv_b):
-            intent = ((px_down(intent[0][0] - tick, tick), intent[0][1], False), intent[1])
-            tag += " | own-next B"
-        if (intent[1] is not None and not intent[1][2] and near_a
-                and qf_a is not None and qf_a >= QUEUE_DEEP_FRAC and adv_a):
-            intent = (intent[0], (px_up(intent[1][0] + tick, tick), intent[1][1], False))
-            tag += " | own-next A"
-
-        def side_ok(want, resting: Dict[int, Dict], qfrac=None, adverse=False) -> bool:
-            """Sticky queue-aware: front de file → tolérance doublée (le fill
-            imminent est bénin, ne surtout pas perdre la place); fond de file
-            + alpha contre nous → replace 'gratuit' (on ne perd rien)."""
-            if want is None:
-                return not resting
-            if len(resting) != 1:
-                return False
-            d = next(iter(resting.values()))
-            diff = abs(d["px"] - want[0])
-            if STRATEGY == "bbo":
-                return diff < tick / 2.0 and abs(d["sz"] - want[1]) < MIN_SIZE / 2 and d.get("ro") == want[2]
-            if qfrac is not None and not want[2]:
-                if qfrac >= QUEUE_DEEP_FRAC and adverse and diff >= tick - 1e-12:
-                    return False
-                if qfrac <= QUEUE_FRONT_FRAC:
-                    return diff <= tol * 2.0
-            return diff <= tol
-
-        def must_act(want, resting: Dict[int, Dict], side: str) -> bool:
-            """Repos minimal ABSOLU: un ordre OUVRANT qui vient d'être posé ne
-            bouge pas avant MIN_REST_SEC — c'est en REPOSANT qu'on se fait
-            remplir et qu'on gagne la priorité de queue. Le plancher n'est
-            JAMAIS court-circuité par `force`/`urgent` pour un remplacement
-            d'ordre ouvrant (sinon early-warning/bank qui flottent = churn
-            place/cancel sans aucun fill). Seuls bypassent le plancher:
-              - retrait complet (want None) → on pull immédiatement
-              - rien au repos → on pose
-              - sortie reduce-only (want[2]) → suit la position en continu
-              - ordre traversé par le BBO (fill maker imminent raté)"""
-            if want is None or not resting:
-                return True
-            if STRATEGY == "bbo":
-                return True
-            if want[2]:
-                return True
-            for d in resting.values():
-                if side == "B" and ba > 0 and d["px"] >= ba:
-                    return True
-                if side == "A" and bb > 0 and d["px"] <= bb:
-                    return True
-            newest = max(d.get("ts", 0.0) for d in resting.values())
-            return now - newest >= MIN_REST_SEC
-
-        bid_ok = side_ok(intent[0], resting_bids, qf_b, adv_b) \
-            or not must_act(intent[0], resting_bids, "B")
-        ask_ok = side_ok(intent[1], resting_asks, qf_a, adv_a) \
-            or not must_act(intent[1], resting_asks, "A")
-        if bid_ok and ask_ok and last_intent == intent:
-            with self.lock:
-                self.last_quote_bb, self.last_quote_ba = bb, ba
-            return
-
-        def req_for(want, is_buy: bool) -> Dict[str, Any]:
-            return {"coin": SYMBOL, "is_buy": is_buy, "sz": want[1],
-                    "limit_px": want[0],
-                    "order_type": {"limit": {"tif": "Alo"}},
-                    "reduce_only": want[2]}
-
-        # Décision par côté: 1 ordre au repos → 1 ordre voulu = batchModify
-        # (UN round-trip, moitié du budget rate-limit); sinon cancel+place.
-        # Le modify n'est PAS éligible si le flag reduce-only change (HL
-        # rejette "invalid new order" sur cette transition — ex: l'ordre
-        # ouvrant qui doit devenir la sortie RO après un fill) ou si le flag
-        # de l'ordre au repos est inconnu (découvert via WS/réconciliation).
+            resting_by_side = {
+                side: {oid: dict(d) for oid, d in self.orders.items() if d["side"] == side}
+                for side in ("B", "A")
+            }
+            self.force_quote = False
+        to_cancel, place_reqs, modify_pairs = [], [], []
         allow_modify = now >= getattr(self, "_modify_block_until", 0.0)
-
-        def modifiable(want, resting: Dict[int, Dict]) -> bool:
-            # Uniquement les quotes OUVRANTES (non reduce-only, flag connu et
-            # inchangé): les sorties RO changent de taille avec la position et
-            # HL rejette trop de transitions ("invalid new order").
-            if want is None or want[2] or len(resting) != 1 or not allow_modify:
-                return False
-            d = next(iter(resting.values()))
-            return d.get("ro") is False
-
-        to_cancel: List[int] = []
-        place_reqs: List[Dict[str, Any]] = []
-        modify_pairs: List[Tuple[int, Dict[str, Any]]] = []
-        if not bid_ok:
-            if modifiable(intent[0], resting_bids):
-                modify_pairs.append((next(iter(resting_bids)), req_for(intent[0], True)))
+        for side, want in zip(("B", "A"), intent):
+            resting = resting_by_side[side]
+            if want is None:
+                to_cancel.extend(resting)
+                continue
+            if len(resting) == 1:
+                oid, old = next(iter(resting.items()))
+                if (abs(old["px"] - want[0]) < tick / 2.0
+                        and abs(old["sz"] - want[1]) < MIN_SIZE / 2.0
+                        and old.get("ro") == want[2]):
+                    continue
+            req = {"coin": SYMBOL, "is_buy": side == "B", "sz": want[1],
+                   "limit_px": want[0], "order_type": {"limit": {"tif": "Alo"}},
+                   "reduce_only": want[2]}
+            if (len(resting) == 1 and allow_modify and not want[2]
+                    and next(iter(resting.values())).get("ro") is False):
+                modify_pairs.append((next(iter(resting)), req))
             else:
-                to_cancel += list(resting_bids.keys())
-                if intent[0] is not None:
-                    place_reqs.append(req_for(intent[0], True))
-        if not ask_ok:
-            if modifiable(intent[1], resting_asks):
-                modify_pairs.append((next(iter(resting_asks)), req_for(intent[1], False)))
-            else:
-                to_cancel += list(resting_asks.keys())
-                if intent[1] is not None:
-                    place_reqs.append(req_for(intent[1], False))
-
-        self.last_action_ts = now
+                to_cancel.extend(resting)
+                place_reqs.append(req)
         self.last_action = tag
-        with self.lock:
-            self.last_quote_bb, self.last_quote_ba = bb, ba
+        if not (to_cancel or place_reqs or modify_pairs):
+            return
+        self.last_action_ts = now
         if not self.live:
             with self.lock:
                 self.last_intent = intent
             return
-
         if modify_pairs and not self.modify_quotes(modify_pairs):
-            # Modify raté (ordre disparu entre-temps, etc.): invalider et
-            # forcer le chemin cancel+place pendant 1.5s — la réconciliation
-            # et orderUpdates remettent le tracking d'équerre.
             self._modify_block_until = now + 1.5
             with self.lock:
                 self.last_intent = None
             return
         if to_cancel and not self.cancel_oids(to_cancel):
-            return  # cancel raté: ne PAS reposer par-dessus (anti-doublons)
-        # Vérifier qu'aucun fantôme du même côté ne reste avant de reposer
+            return
         if place_reqs:
             with self.lock:
-                still_b = any(d["side"] == "B" for d in self.orders.values())
-                still_a = any(d["side"] == "A" for d in self.orders.values())
-            # Un côté passé par modify garde légitimement son ordre: ne
-            # filtrer que les côtés qu'on s'apprête à POSER.
-            modified_sides = {("B" if r["is_buy"] else "A") for _, r in modify_pairs}
+                occupied = {d["side"] for d in self.orders.values()}
             place_reqs = [r for r in place_reqs
-                          if not (r["is_buy"] and still_b and "B" not in modified_sides)
-                          and not (not r["is_buy"] and still_a and "A" not in modified_sides)]
+                          if ("B" if r["is_buy"] else "A") not in occupied]
             if place_reqs:
                 self.place_quotes(place_reqs)
         with self.lock:
@@ -2557,7 +2119,7 @@ class OBIVolumeBot:
         except Exception:
             pass
 
-    def write_stats(self, running: bool = True):
+    def write_stats(self, running: bool = True, phase: Optional[str] = None):
         """Snapshot JSON atomique pour le dashboard (multi-process)."""
         try:
             with self.lock:
@@ -2567,6 +2129,8 @@ class OBIVolumeBot:
                 data = {
                     "symbol": SYMBOL,
                     "running": running,
+                    "phase": phase or ("running" if running and self.ws_ready
+                                       else "connecting" if running else "stopped"),
                     "live": self.live,
                     "ts": time.time(),
                     "start_time": self.start_time,
@@ -2580,8 +2144,15 @@ class OBIVolumeBot:
                     "volume": self.total_volume,
                     "fees": self.total_fees,
                     "rpnl": self.session_pnl,
+                    "cost_per_1m": ((self.total_fees - self.session_pnl) * 1_000_000 / self.total_volume
+                                    if self.total_volume > 0 else None),
                     "fills": self.fills_count,
                     "maker_fills": self.maker_fills,
+                    "order_placements": self.order_placements,
+                    "order_modifications": self.order_modifications,
+                    "order_cancellations": self.order_cancellations,
+                    "order_requests": self.order_requests,
+                    "strategy": STRATEGY,
                     "notional": ORDER_NOTIONAL_USD,
                     "action": self.last_action,
                     "error": self.last_error,
@@ -2589,6 +2160,9 @@ class OBIVolumeBot:
                     "hourly_net": self.hourly_net_pnl,
                     "hourly_pause_until": self.hourly_pause_until,
                     "session_mode": self.session_mode,
+                    "markout_bid_bps": self.markout_bps["B"],
+                    "markout_ask_bps": self.markout_bps["A"],
+                    "mid_offset_bps": MID_OFFSET_BPS if STRATEGY == "mid" else 0.0,
                 }
             with self.lock:
                 reg = self._reg_now[0]
@@ -2632,7 +2206,7 @@ class OBIVolumeBot:
             mo_b, mo_a = self.markout_bps["B"], self.markout_bps["A"]
             macro = self._macro
         net = rpnl + upnl - fees
-        # Même métrique que MM_GRID_ADAPTIVE: (fees − PnL réalisé) / M de volume,
+        # Même métrique que le market maker: (fees − PnL réalisé) / M de volume,
         # uPnL exclu — chiffres comparables entre les deux dashboards.
         cost_m = ((fees - rpnl) / (vol / 1_000_000)) if vol > 0 else 0.0
         maker_pct = (makers / fills * 100) if fills else 100.0
@@ -2683,7 +2257,11 @@ class OBIVolumeBot:
         sub = f"{mode} | {action}"
         if err:
             sub += f" | [red]{err}[/]"
-        title = "BBO ORDER BOOK" if STRATEGY == "bbo" else "OBI VOLUME BOT"
+        title = (
+            "BBO ORDER BOOK" if STRATEGY == "bbo"
+            else "MID ORDER BOOK" if STRATEGY == "mid"
+            else "BBO ORDER BOOK"
+        )
         return Panel(t, title=f"{title} — {SYMBOL}", subtitle=sub, box=box.ROUNDED)
 
     # -------------------------------------------------------------------- run
@@ -2693,10 +2271,10 @@ class OBIVolumeBot:
         sa machine à états (sinon 4-5 avancées/cycle depuis 2 threads = état
         instable) et où _queue_fraction() décrémente queue_ahead. Réactivité:
         supprime ~15-20 acquisitions de lock redondantes par cycle."""
-        reg = self.signal.regime()          # unique point d'avancement machine
-        early = self.signal.early_warning()
-        alpha = 0.0 if STRATEGY == "bbo" else self.signal.alpha_bps()
-        z = 0.0 if STRATEGY == "bbo" else self.signal.zscore()
+        reg = (None, 0) if fast_mm() else self.signal.regime()          # unique point d'avancement machine
+        early = (None, 0) if fast_mm() else self.signal.early_warning()
+        alpha = 0.0 if fast_mm() else self.signal.alpha_bps()
+        z = 0.0 if fast_mm() else self.signal.zscore()
         vol = self.signal.vol_bps()
         touch = self.signal.touch_imbalance()   # déséquilibre au touch (toxicité)
         macro = self.macro.context()            # indicateurs bougies (contexte)
@@ -2767,7 +2345,15 @@ class OBIVolumeBot:
                     print(f"📊 Macro: {n} bougies {MACRO_INTERVAL} chargées (EMA/MACD/RSI/BB/VWAP)")
             except Exception as exc:
                 self.last_error = f"backfill macro: {str(exc)[:60]}"
-        self.start_ws()
+        try:
+            self.start_ws()
+        except StartupNetworkError as exc:
+            self.last_error = str(exc)
+            self.last_action = "Connexion Hyperliquid impossible"
+            self.running = False
+            print(str(exc), flush=True)
+            self.write_stats(running=False, phase="failed")
+            return
         deadline = time.time() + 15
         while not self.ws_ready and time.time() < deadline:
             time.sleep(0.2)
@@ -2818,14 +2404,20 @@ def resolve_token(name: str) -> str:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="OBI volume bot (HIP-3)")
+    parser = argparse.ArgumentParser(description="BBO / MID Order Book market maker (HIP-3)")
     parser.add_argument("--token", default=None, help="ex: SP500, XYZ100, SPCX")
     parser.add_argument("--live", action="store_true", help="ordres réels (défaut: dry-run)")
     parser.add_argument("--notional", type=float, default=None, help="USD par ordre")
-    parser.add_argument("--strategy", choices=("obi", "bbo"), default="obi",
-                        help="OBI Volume ou BBO Order Book")
+    parser.add_argument("--strategy", choices=("bbo", "mid"), default="bbo",
+                        help="BBO Order Book ou MID Order Book")
+    parser.add_argument("--offset-bps", type=float, default=None,
+                        help="distance symétrique au mid pour strategy=mid")
     args = parser.parse_args()
     STRATEGY = args.strategy
+    if args.offset_bps is not None:
+        if not math.isfinite(args.offset_bps) or not 0 <= args.offset_bps < 10000:
+            parser.error("--offset-bps doit être fini, entre 0 inclus et 10000 bps exclus")
+        MID_OFFSET_BPS = args.offset_bps
 
     if args.notional:
         ORDER_NOTIONAL_USD = max(10.5, args.notional)
@@ -2844,15 +2436,23 @@ if __name__ == "__main__":
     OPEN_BLACKOUT_MIN = int(_tok_cfg.get("open_blackout_min", 10))
     if "half_spread_bps" in _tok_cfg and "OBI_HALF_SPREAD_BPS" not in os.environ:
         HALF_SPREAD_BPS = float(_tok_cfg["half_spread_bps"])
-    meta = fetch_token_meta(SYMBOL)
-    SZ_DECIMALS = meta["szDecimals"]
-    MIN_SIZE = 10.0 ** (-SZ_DECIMALS) if SZ_DECIMALS > 0 else 1.0
-    PRICE_DECIMALS = max(0, 6 - SZ_DECIMALS)
-    LEVERAGE = min(LEVERAGE, meta.get("maxLeverage", LEVERAGE))
-
     if not acquire_instance_lock(SYMBOL):
         sys.exit(f"❌ Un bot tourne déjà sur {SYMBOL} (verrou d'instance)")
 
+    startup_started = time.time()
+    write_startup_status(SYMBOL, STRATEGY, startup_started, args.live, "connecting")
+    try:
+        meta = fetch_token_meta(SYMBOL)
+        SZ_DECIMALS = meta["szDecimals"]
+        MIN_SIZE = 10.0 ** (-SZ_DECIMALS) if SZ_DECIMALS > 0 else 1.0
+        PRICE_DECIMALS = max(0, 6 - SZ_DECIMALS)
+        LEVERAGE = min(LEVERAGE, meta.get("maxLeverage", LEVERAGE))
+        bot = OrderBookBot(live=args.live)
+    except Exception as exc:
+        message = str(exc) if isinstance(exc, StartupNetworkError) else f"Démarrage impossible : {type(exc).__name__}: {exc}"
+        write_startup_status(SYMBOL, STRATEGY, startup_started, args.live, "failed", message)
+        print(message, flush=True)
+        sys.exit(1)
     mode = "LIVE" if args.live else "DRY-RUN (aucun ordre envoyé — ajoute --live)"
     print(f"🚀 {STRATEGY.upper()} BOT | {SYMBOL} | {LEVERAGE}x | ~${ORDER_NOTIONAL_USD:.0f}/ordre | {mode}")
-    OBIVolumeBot(live=args.live).run()
+    bot.run()

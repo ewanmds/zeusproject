@@ -376,6 +376,10 @@ main {
   margin-bottom: 14px;
 }
 
+.field[hidden] {
+  display: none;
+}
+
 .field-head {
   display: flex;
   align-items: center;
