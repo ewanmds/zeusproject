@@ -57,7 +57,7 @@ MID_OFFSET_BPS = max(0.0, float(os.getenv("OBI_MID_OFFSET_BPS", "1.0")))
 
 # --- Sizing ---
 ORDER_NOTIONAL_USD = max(10.5, float(os.getenv("OBI_ORDER_NOTIONAL_USD", "100")))
-MAX_INV_ORDERS     = max(1, int(float(os.getenv("OBI_MAX_INV_ORDERS", "2"))))
+MAX_INV_ORDERS     = 1  # One opening size; a filled side must unwind before reopening.
 
 # --- Signal ---
 OBI_DEPTH_LEVELS   = 5      # niveaux L2 par côté
@@ -1629,15 +1629,22 @@ class OrderBookBot:
             if bb <= 0 or ba <= bb:
                 return
             try:
-                bid_px, ask_px = order_book_prices(bb, ba, tick)
+                for r in pending:
+                    r["limit_px"] = self._execution_price(
+                        r["is_buy"], r["reduce_only"], bb, ba, tick)
             except ValueError as exc:
                 self.last_error = str(exc)
                 return
-            for r in pending:
-                r["limit_px"] = bid_px if r["is_buy"] else ask_px
             try:
                 with self.api_lock:
                     with self.lock:
+                        # A fill can arrive after compute_intent(). Do not add
+                        # exposure from a stale opening request in that case.
+                        if abs(self.position) >= MIN_SIZE / 2:
+                            pending = [r for r in pending if r["reduce_only"]]
+                        if not pending:
+                            self.force_quote = True
+                            return
                         self.order_placements += len(pending)
                         self.order_requests += 1
                     res = self.exchange.bulk_orders(pending)
@@ -1703,12 +1710,13 @@ class OrderBookBot:
         if bb <= 0 or ba <= bb:
             return False
         try:
-            bid_px, ask_px = order_book_prices(bb, ba, tick)
+            for _, r in pairs:
+                r["limit_px"] = self._execution_price(
+                    r["is_buy"], r["reduce_only"], bb, ba, tick)
         except ValueError as exc:
             self.last_error = str(exc)
             return False
         for oid, r in pairs:
-            r["limit_px"] = bid_px if r["is_buy"] else ask_px
             modifies.append({"oid": oid, "order": {
                 "coin": SYMBOL, "is_buy": r["is_buy"], "sz": r["sz"],
                 "limit_px": r["limit_px"],
@@ -1718,6 +1726,9 @@ class OrderBookBot:
         try:
             with self.api_lock:
                 with self.lock:
+                    if abs(self.position) >= MIN_SIZE / 2 and any(not r["reduce_only"] for _, r in pairs):
+                        self.force_quote = True
+                        return False
                     self.order_modifications += len(pairs)
                     self.order_requests += 1
                 res = self.exchange.bulk_modify_orders_new(modifies)
@@ -1806,6 +1817,16 @@ class OrderBookBot:
         return min(fractions) if fractions else None
 
     # ---------------------------------------------------------------- quoting
+    def _execution_price(self, is_buy, reduce_only, bb, ba, tick):
+        """Urgent MID exits join touch, without moving an inside quote away."""
+        bid_px, ask_px = order_book_prices(bb, ba, tick)
+        with self.lock:
+            urgent = time.time() < self.bank_until or getattr(self, "_hard_exit_at", 0.0) > 0
+        if STRATEGY == "mid" and reduce_only and urgent:
+            bid_px = max(bid_px, px_down(bb, tick))
+            ask_px = min(ask_px, px_up(ba, tick))
+        return bid_px if is_buy else ask_px
+
     def _fast_quote_gates(self):
         """Book + inventory/risk gates shared by BBO and MID (no OBI filters)."""
         now = time.time()
@@ -1830,8 +1851,9 @@ class OrderBookBot:
         bid_ro, ask_ro = pos <= -eps, pos >= eps
         bid_size = round_sz(min(size, abs(pos))) if bid_ro else size
         ask_size = round_sz(min(size, abs(pos))) if ask_ro else size
-        bid_ok = bid_ro or (not exits_only and pos + bid_size <= cap + eps)
-        ask_ok = ask_ro or (not exits_only and -pos + ask_size <= cap + eps)
+        flat = abs(pos) < eps
+        bid_ok = bid_ro or (flat and not exits_only and pos + bid_size <= cap + eps)
+        ask_ok = ask_ro or (flat and not exits_only and -pos + ask_size <= cap + eps)
         return {
             "bb": bb, "ba": ba, "mid": mid, "tick": tick, "pos": pos,
             "bid_ro": bid_ro, "ask_ro": ask_ro,
@@ -1856,7 +1878,8 @@ class OrderBookBot:
         if st is None:
             return None, None, f"MID | {err}"
         try:
-            bid_px, ask_px = order_book_prices(st["bb"], st["ba"], st["tick"])
+            bid_px = self._execution_price(True, st["bid_ro"], st["bb"], st["ba"], st["tick"])
+            ask_px = self._execution_price(False, st["ask_ro"], st["bb"], st["ba"], st["tick"])
         except ValueError as exc:
             return None, None, f"MID | {exc}"
         bid = (bid_px, st["bid_size"], st["bid_ro"]) if st["bid_ok"] and st["bid_size"] >= MIN_SIZE else None
