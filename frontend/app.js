@@ -998,9 +998,9 @@
         bots.forEach((b) => {
             const card = Array.from(container.children).find((item) => item.dataset.token === String(b.token));
             if (!card) return;
-            const drawdownNotice = /^max drawdown exceeded\b/i.test(String(b.error || "").trim());
+            const riskNotice = /^(?:max drawdown exceeded|session stop-loss triggered)\b/i.test(String(b.error || "").trim());
             card.classList.toggle("stopped", !b.running);
-            card.classList.toggle("failed", Boolean(b.error) && !drawdownNotice);
+            card.classList.toggle("failed", Boolean(b.error) && !riskNotice);
             const set = (f, v) => {
                 const el = card.querySelector(`[data-f="${f}"]`);
                 if (el && el.textContent !== v) el.textContent = v;
@@ -1027,7 +1027,7 @@
             set("spread", formatBPS(b.spread_bps));
             set("markout", `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
             set("edge", b.edge_required_bps ? `${formatBPS(b.edge_required_bps)} / ${formatBPS(b.quote_half_spread_bps)}` : "—");
-            set("action", b.error ? `${drawdownNotice ? "" : "⚠ "}${b.error}` : (b.action || ""));
+            set("action", b.error ? `${riskNotice ? "" : "⚠ "}${b.error}` : (b.action || ""));
             const stopBtn = card.querySelector(".bot-card-stop");
             if (stopBtn) {
                 if (!b.running && document.activeElement === stopBtn) {

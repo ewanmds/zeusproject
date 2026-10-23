@@ -73,8 +73,9 @@ Net après frais : **−0,96 $**, soit **−1,2 bps du volume**. Les frais réel
   funding urgency, price-shock + shock-chain, trend/flow/regime gates, VPIN.
   Volume-burst, wall-fronting, optimizer v2, adaptive notional et schedule
   restent désactivés (preset agressif séparé).
-- Risque : drawdown 2,5 %, cooldown 120 s, reprise 97 %, session stop-loss
-  −150 bps (warn −75, pause 120 s, recovery 50 % / 300 s), tolérance de halt 10 %.
+- Risque Zeus généré : drawdown global neutralisé à 100 %, sans escalade par
+  halts consécutifs, et stop-loss de session désactivé à 0 bps. Les limites de
+  position et la tolérance de halt restent actives.
 - `session_config` : **100 % du montant par côté**, un seul ordre par côté,
   `max_open_orders = 4`, exposition 1,1 × montant, minimum 40 USD.
 - **Filtre de marché** : lecture `l2Book` au lancement ; refus si le demi-spread

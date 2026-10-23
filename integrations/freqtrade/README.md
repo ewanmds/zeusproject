@@ -45,10 +45,11 @@ Bureau, et les protections de données, compte, budget API et pertes restent
 actives. Le levier provient de `OBI_LEVERAGE` (30 par défaut, comme
 `config.live.yaml`), plafonné au contrat.
 
-Dans le mode Zeus, la garde de drawdown global du compte ne stoppe pas la
-session (`max_drawdown_pct: 100`, sans escalade par halts consécutifs). Les
-limites de position, le stop-loss de session, les contrôles de données et de
-compte, l'arrêt manuel et la mise à plat restent actifs.
+Dans le mode Zeus, ni la garde de drawdown global du compte ni le stop-loss de
+session ne stoppent le bot (`max_drawdown_pct: 100`, sans escalade par halts
+consécutifs, et `session_stop_loss_bps: 0`). Les limites de position, les
+contrôles de données et de compte, l'arrêt manuel et la mise à plat restent
+actifs.
 
 ### Économie et edge gate
 

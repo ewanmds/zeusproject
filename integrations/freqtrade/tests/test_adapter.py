@@ -38,7 +38,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(config['risk']['max_open_orders'], 4)
         self.assertEqual(config['risk']['max_drawdown_pct'], 100)
         self.assertEqual(config['risk']['max_consecutive_halts'], 0)
-        self.assertLess(config['risk']['session_stop_loss_bps'], 0)
+        self.assertEqual(config['risk']['session_stop_loss_bps'], 0)
         self.assertEqual(config['execution']['leverage'], 6)
         self.assertTrue(config['rate_limit']['disabled'])
         self.assertEqual(config['risk']['fail_closed_cooldown_sec'], 15)

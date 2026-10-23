@@ -258,9 +258,10 @@ def session_config(symbol, amount, metadata):
                           max_aggregate_exposure=round(amount * 1.1, 2),
                           max_open_orders=2 * levels + 2,
                           # Zeus must not cancel a live session for account-level
-                          # equity drawdown. Position, session-loss, data-health,
+                          # equity drawdown or session PnL. Position, data-health,
                           # account and manual-stop protections remain active.
                           max_drawdown_pct=100.0, max_consecutive_halts=0,
+                          session_stop_loss_bps=0.0,
                           session_flatten_on_shutdown=True, session_flatten_timeout_sec=15,
                           # A transient API/order-state race must not end the Zeus
                           # session permanently. Recovery is bounded and cancels
