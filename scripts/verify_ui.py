@@ -5,6 +5,7 @@ Run: python scripts/verify_ui.py [--screenshots DIRECTORY]
 import argparse
 import functools
 import json
+import runpy
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
@@ -24,6 +25,7 @@ def main():
     if args.screenshots:
         args.screenshots.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parents[1]
+    catalog = runpy.run_path(str(root / "market_catalog.py"))["TOKENS"]
     handler = functools.partial(QuietHandler, directory=str(root / "frontend"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -46,8 +48,7 @@ def main():
         if protected and request.headers.get("x-api-token") != "test-only":
             status = 401
         elif path == "grid/tokens":
-            data = {"tokens": [{"key": "SP500", "symbol": "xyz:SP500"},
-                                 {"key": "GOLD", "symbol": "xyz:GOLD"}]}
+            data = {"tokens": [{"key": key, "symbol": config["symbol"]} for key, config in catalog.items()]}
         elif path == "grid/status":
             data = grid
         elif path == "worldcup/status":
@@ -82,7 +83,14 @@ def main():
                 if args.screenshots:
                     page.screenshot(path=str(args.screenshots / f"empty-{width}.png"), full_page=True)
             page.set_viewport_size({"width": 1440, "height": 1000})
+            for token in ("CL", "BRENTOIL", "AAPL", "NVDA", "JPY", "XYZ100", "SP500"):
+                page.locator("#grid-token-trigger").click()
+                page.locator("#grid-token-search").fill(token)
+                page.locator(f'#grid-token-options [data-token="{token}"]').click()
+                assert page.locator("#grid-token").input_value() == token
+                assert f"xyz:{token}" in page.locator("#grid-token-symbol").inner_text()
             page.locator("#grid-token-trigger").click()
+            page.locator("#grid-token-search").fill("")
             page.locator("#grid-token-search").press("ArrowDown")
             page.keyboard.press("End")
             assert page.locator("#grid-token-options .token-option").last.evaluate("el=>el===document.activeElement")

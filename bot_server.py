@@ -793,6 +793,8 @@ async def get_grid_tokens(_: None = Depends(_require_api_token)):
         fallback = {
             "SP500": "xyz:SP500", "US500": "mkts:US500",
             "XYZ100": "xyz:XYZ100", "SKHX": "xyz:SKHX",
+            "CL": "xyz:CL", "BRENTOIL": "xyz:BRENTOIL",
+            "AAPL": "xyz:AAPL", "JPY": "xyz:JPY",
             "SPCX": "xyz:SPCX", "GOLD": "xyz:GOLD",
             "SILVER": "xyz:SILVER", "NVDA": "xyz:NVDA",
             "TSLA": "xyz:TSLA", "IO_SNDK": "io:SNDK",
