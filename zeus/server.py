@@ -325,7 +325,7 @@ class BotManager:
         if strategy == "freqtrade":
             order_usd = float(config.order_size_usd)
             if not math.isfinite(order_usd) or order_usd < 40:
-                raise ValueError("Montant Freqtrade minimal : 40 USD (25 % par côté, ordre minimum 10 USD), valeur finie requise")
+                raise ValueError("Montant Freqtrade minimal : 40 USD (100 % par côté, un ordre par côté), valeur finie requise")
             obi_mod.require_binary()
 
         with self.lock:

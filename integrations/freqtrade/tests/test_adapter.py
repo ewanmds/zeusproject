@@ -26,7 +26,7 @@ class AdapterTests(unittest.TestCase):
         self.assertNotIn('env', config)
         self.assertNotIn('wallet_address', config)
         self.assertEqual(config['strategy']['assets'], ['xyz:SP500'])
-        self.assertEqual(config['market_making']['quote_notional'], 10)  # 25% of 40
+        self.assertEqual(config['market_making']['quote_notional'], 40)
         self.assertEqual(config['market_making']['ladder_levels'], 1)
         self.assertFalse(config['market_making']['adaptive_notional_enabled'])
         self.assertTrue(config['market_making']['edge_gate_enabled'])
@@ -36,25 +36,27 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(config['risk']['max_position_notional'], 40)
         self.assertEqual(config['risk']['max_spread_exposure'], 44)
         self.assertEqual(config['risk']['max_open_orders'], 4)
+        self.assertEqual(config['risk']['max_drawdown_pct'], 100)
+        self.assertEqual(config['risk']['max_consecutive_halts'], 0)
         self.assertLess(config['risk']['session_stop_loss_bps'], 0)
         self.assertEqual(config['execution']['leverage'], 6)
         self.assertTrue(config['rate_limit']['disabled'])
         self.assertEqual(config['risk']['fail_closed_cooldown_sec'], 15)
         self.assertEqual(config['risk']['max_fail_closed_retries'], 5)
 
-    def test_quarter_sizing_scales_ladder_with_budget(self):
+    def test_full_budget_uses_one_order_per_side(self):
         config = ft.session_config('xyz:SP500', 100, META)
-        self.assertEqual(config['market_making']['quote_notional'], 25)
-        self.assertEqual(config['market_making']['ladder_levels'], 2)
-        self.assertEqual(config['risk']['max_open_orders'], 6)
-        config = ft.session_config('xyz:SP500', 400, META)
         self.assertEqual(config['market_making']['quote_notional'], 100)
-        self.assertEqual(config['market_making']['ladder_levels'], 3)
-        self.assertEqual(config['risk']['max_open_orders'], 8)
+        self.assertEqual(config['market_making']['ladder_levels'], 1)
+        self.assertEqual(config['risk']['max_open_orders'], 4)
+        config = ft.session_config('xyz:SP500', 400, META)
+        self.assertEqual(config['market_making']['quote_notional'], 400)
+        self.assertEqual(config['market_making']['ladder_levels'], 1)
+        self.assertEqual(config['risk']['max_open_orders'], 4)
 
     def test_invalid_and_unexecutable_budget_is_rejected(self):
         for amount in (float('nan'), float('inf'), 9, 10.01, 39.99):
-            # 25% per side must clear the exchange's 10 USD minimum order.
+            # Zeus retains a conservative 40 USD minimum for full-budget quotes.
             meta = [{'universe': [{'name': 'xyz:SP500', 'szDecimals': 0, 'maxLeverage': 6}]}, [{'midPx': '100'}]]
             with self.subTest(amount=amount), self.assertRaises(ValueError):
                 ft.session_config('xyz:SP500', amount, meta)

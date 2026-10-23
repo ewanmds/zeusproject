@@ -36,14 +36,19 @@ Dans Zeus, choisir **Freqtrade**, le marché et le montant, puis **Lancer**.
 Ce mode est réel uniquement ; cette action autorise la validation du compte
 puis les ordres. Aucune stratégie n'est lancée par l'installation ou les tests.
 
-Le montant est un plafond de position. **25 % de ce montant est coté par côté**
-(ordre minimum Hyperliquid : 10 USD), donc le minimum utilisable est **40 USD**.
-Le nombre de niveaux est déduit de cette taille : 1 niveau de 40 à 79 USD,
-2 niveaux de 80 à 159 USD, 3 niveaux dès 160 USD. Les tailles sont arrondies vers
-le bas et les sorties sont reduce-only. Les suspensions sur signaux sont conservées comme sur le
+Le montant est un plafond de position et **100 % de ce montant est coté dans un
+seul ordre par côté**. Le minimum utilisable reste **40 USD**. Une exécution
+complète d'un côté peut donc atteindre immédiatement le plafond de position. Les
+tailles sont arrondies vers le bas et les sorties sont reduce-only. Les
+suspensions sur signaux sont conservées comme sur le
 Bureau, et les protections de données, compte, budget API et pertes restent
 actives. Le levier provient de `OBI_LEVERAGE` (30 par défaut, comme
 `config.live.yaml`), plafonné au contrat.
+
+Dans le mode Zeus, la garde de drawdown global du compte ne stoppe pas la
+session (`max_drawdown_pct: 100`, sans escalade par halts consécutifs). Les
+limites de position, le stop-loss de session, les contrôles de données et de
+compte, l'arrêt manuel et la mise à plat restent actifs.
 
 ### Économie et edge gate
 

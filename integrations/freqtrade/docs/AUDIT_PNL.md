@@ -75,8 +75,8 @@ Net après frais : **−0,96 $**, soit **−1,2 bps du volume**. Les frais réel
   restent désactivés (preset agressif séparé).
 - Risque : drawdown 2,5 %, cooldown 120 s, reprise 97 %, session stop-loss
   −150 bps (warn −75, pause 120 s, recovery 50 % / 300 s), tolérance de halt 10 %.
-- `session_config` : **25 % du montant par côté**, niveaux 1/2/3 selon la taille,
-  `max_open_orders = 2 × niveaux + 2`, exposition 1,1 × montant, minimum 40 USD.
+- `session_config` : **100 % du montant par côté**, un seul ordre par côté,
+  `max_open_orders = 4`, exposition 1,1 × montant, minimum 40 USD.
 - **Filtre de marché** : lecture `l2Book` au lancement ; refus si le demi-spread
   venu est inférieur au quart de l'edge requis. Vérifié sur les données live :
   SP500 et SNDK refusés, ANTH et CL acceptés.
@@ -89,14 +89,14 @@ Net après frais : **−0,96 $**, soit **−1,2 bps du volume**. Les frais réel
 - `go test ./...` : toutes les packages OK.
 - `go vet ./...` : OK.
 - `python -B -m unittest discover -s integrations/freqtrade/tests` : 18 tests OK.
-- Configuration générée (100 USD, `xyz:CL`) validée par le binaire reconstruit :
-  `config ...: OK` ; sizing 25 USD/côté, 2 niveaux, 6 ordres max.
+- Configuration générée (100 USD, `xyz:CL`) : sizing 100 USD/côté, un niveau,
+  4 ordres max (quotes et ordres de sortie compris).
 - Filtre live : `xyz:SP500` et `io:SNDK` refusés, `io:ANTH` et `xyz:CL` acceptés.
 
 ## 5. Effet attendu
 
 Avec 2 bps de demi-spread, un aller-retour capture ~4 bps ; coûts ~0,6 bps de
-frais + ~1 bps d'adverse + décote d'inventaire réduite (taille 25 %) laissent
+frais + ~1 bps d'adverse laissent
 environ **+1,5 à +2 bps nets par aller-retour** si l'adverse ne s'aggrave pas.
 Le CPM viserait −150 à −200 $/M au lieu de +120. En dollars, cela reste petit :
 ~0,02–0,05 $/h sur 40 $, ~0,15–0,40 $/h sur 1 000 $. L'objectif réaliste est un

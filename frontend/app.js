@@ -229,7 +229,7 @@
         if (offsetField) offsetField.hidden = strategy !== "mid";
         if (strategy === "freqtrade") {
             setText("grid-heading", "Freqtrade");
-            setText("grid-description", "Market making au VWAP avec spread indexé sur le coût réel. 25 % du montant coté par côté (40 USD minimum). Ordres réels sur démarrage explicite.");
+            setText("grid-description", "Market making au VWAP avec spread indexé sur le coût réel. 100 % du montant coté dans un ordre par côté (40 USD minimum). Ordres réels sur démarrage explicite.");
             return;
         }
         if (strategy === "mid") {
@@ -998,8 +998,9 @@
         bots.forEach((b) => {
             const card = Array.from(container.children).find((item) => item.dataset.token === String(b.token));
             if (!card) return;
+            const drawdownNotice = /^max drawdown exceeded\b/i.test(String(b.error || "").trim());
             card.classList.toggle("stopped", !b.running);
-            card.classList.toggle("failed", Boolean(b.error));
+            card.classList.toggle("failed", Boolean(b.error) && !drawdownNotice);
             const set = (f, v) => {
                 const el = card.querySelector(`[data-f="${f}"]`);
                 if (el && el.textContent !== v) el.textContent = v;
@@ -1026,7 +1027,7 @@
             set("spread", formatBPS(b.spread_bps));
             set("markout", `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
             set("edge", b.edge_required_bps ? `${formatBPS(b.edge_required_bps)} / ${formatBPS(b.quote_half_spread_bps)}` : "—");
-            set("action", b.error ? `⚠ ${b.error}` : (b.action || ""));
+            set("action", b.error ? `${drawdownNotice ? "" : "⚠ "}${b.error}` : (b.action || ""));
             const stopBtn = card.querySelector(".bot-card-stop");
             if (stopBtn) {
                 if (!b.running && document.activeElement === stopBtn) {

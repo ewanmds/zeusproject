@@ -220,11 +220,10 @@ def publish(path, state):
 
 
 def session_config(symbol, amount, metadata):
-    # 25% per side with the exchange's 10 USD minimum order means 40 USD is
-    # the smallest budget that can quote even one level without betting the
-    # whole stake on a single fill.
+    # Zeus keeps a conservative 40 USD minimum even though the generated
+    # single order quotes the full configured budget on each side.
     if not math.isfinite(amount) or amount < 40:
-        raise ValueError('Montant minimal Freqtrade : 40 USD (25 % par côté, ordre minimum 10 USD)')
+        raise ValueError('Montant minimal Freqtrade : 40 USD (100 % par côté, un ordre par côté)')
     dex, bare = symbol.split(':', 1)
     universe, contexts = metadata
     selected = next(((i, row) for i, row in enumerate(universe['universe'])
@@ -247,11 +246,10 @@ def session_config(symbol, amount, metadata):
     config['strategy']['spread_engine_enabled'] = False
     for section in ('market_making', 'execution', 'risk'):
         config[section].pop('per_asset', None)
-    # Quote a quarter of the budget per side so a fill does not consume the
-    # whole position cap and leave the bot exit-only. Keep at least one ladder
-    # level per side above the exchange minimum order value.
-    quote_notional = max(10.0, round(amount * 0.25, 2))
-    levels = 1 if quote_notional < 20 else 2 if quote_notional < 40 else 3
+    # The dashboard amount is both the position cap and the notional quoted on
+    # each side. A single fill may therefore consume the full position budget.
+    quote_notional = round(amount, 2)
+    levels = 1
     config['market_making'].update(quote_notional=quote_notional, ladder_levels=levels,
                                   adaptive_notional_enabled=False, trading_schedule_enabled=False,
                                   volume_burst_enabled=False, wall_front_enabled=False)
@@ -259,6 +257,10 @@ def session_config(symbol, amount, metadata):
                           max_spread_exposure=round(amount * 1.1, 2),
                           max_aggregate_exposure=round(amount * 1.1, 2),
                           max_open_orders=2 * levels + 2,
+                          # Zeus must not cancel a live session for account-level
+                          # equity drawdown. Position, session-loss, data-health,
+                          # account and manual-stop protections remain active.
+                          max_drawdown_pct=100.0, max_consecutive_halts=0,
                           session_flatten_on_shutdown=True, session_flatten_timeout_sec=15,
                           # A transient API/order-state race must not end the Zeus
                           # session permanently. Recovery is bounded and cancels
