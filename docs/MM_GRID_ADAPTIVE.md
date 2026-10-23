@@ -43,6 +43,12 @@ en tendance ; il conserve l'ATR et l'élargissement selon le score.
 `grid_adaptive/runtime.py` ajoute le fichier d'arrêt, les statistiques JSON
 atomiques et les compteurs d'actions réellement soumises, y compris les tentatives
 échouées. Le moteur original fait des annulations/placements, sans modifications.
+Sous Windows, chaque snapshot utilise un fichier temporaire unique, fermé avant
+le remplacement. Un verrou de lecture déclenche au maximum trois tentatives
+(30 ms d'attente cumulée). Si l'écriture reste impossible, le snapshot précédent
+est conservé et le prochain cycle de télémétrie réessaie : cette erreur de
+statistiques ne déclenche ni arrêt ni clôture de position. L'avertissement de
+journal est limité à un toutes les 30 secondes par fichier.
 Le verrou par symbole est partagé avec BBO/MID ; le verrou du bot original
 est également pris. Les deux modes existants ne sont pas modifiés.
 
@@ -67,6 +73,7 @@ Le mode n'est pas démarré par l'installation ni par la vérification du code.
 
 ```text
 python -m compileall -q grid_adaptive ADAPTIVE_GRID_BOT.py bot_server.py
+python -m unittest discover -s ./tests -p test_stats_io.py -v
 node --check frontend/app.js
 ```
 

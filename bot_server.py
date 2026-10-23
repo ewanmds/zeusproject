@@ -433,8 +433,9 @@ class BotManager:
                     dead.append(key)
                 st: Dict[str, Any] = {}
                 try:
-                    with open(info["stats_file"], encoding="utf-8") as f:
-                        st = json.load(f)
+                    # Close the Windows file handle before parsing the JSON,
+                    # so the publisher can replace the snapshot immediately.
+                    st = json.loads(Path(info["stats_file"]).read_bytes())
                     if (st.get("symbol") != info["symbol"]
                             or float(st.get("start_time", 0) or 0) < info["started"] - 5):
                         st = {}   # fichier d'un autre run/token

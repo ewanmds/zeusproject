@@ -9,6 +9,7 @@ import time
 
 from market_catalog import TOKENS
 from startup_network import post_info
+from stats_io import write_json_snapshot
 from . import original as engine
 
 _locks = []
@@ -151,9 +152,7 @@ class ZeusGrid(engine.GridMarketMaker):
                         grid_half_spread_bps=self.cur_half_spread / self.mid * 10000 if self.mid else 0,
                         grid_maker_fee_bps=engine.MAKER_FEE_BPS, funding_included=False,
                         maker_volume=self.maker_volume, taker_volume=self.taker_volume)
-        temporary = self.stats_path.with_suffix('.json.tmp')
-        temporary.write_text(json.dumps(data, allow_nan=False), encoding='utf-8')
-        os.replace(temporary, self.stats_path)
+        return write_json_snapshot(self.stats_path, data)
 
     def control(self):
         if self.stop_path.exists():
@@ -219,16 +218,17 @@ def run(args):
         data = dict(symbol=symbol, strategy='grid_adaptive', start_time=started,
                     ts=time.time(), live=True, running=phase != 'failed', phase=phase,
                     action='Connexion à Hyperliquid', error=error)
-        temporary = stats_path.with_suffix('.json.tmp')
-        temporary.write_text(json.dumps(data), encoding='utf-8')
-        os.replace(temporary, stats_path)
+        return write_json_snapshot(stats_path, data)
     startup('connecting')
     try:
         configure(args)
         ZeusGrid().run()
     except Exception as exc:
         # Preserve final accounting/error if run() already wrote it.
-        current = json.loads(stats_path.read_text(encoding='utf-8'))
+        try:
+            current = json.loads(stats_path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            current = {}
         if current.get('phase') != 'failed':
             startup('failed', f'{type(exc).__name__}: {exc}')
         raise
