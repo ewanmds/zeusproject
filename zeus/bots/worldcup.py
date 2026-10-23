@@ -17,6 +17,8 @@ Install deps if needed:
 
 from __future__ import annotations
 
+from zeus import PROJECT_ROOT
+
 import argparse
 import math
 import os
@@ -67,7 +69,7 @@ WORLDCUP_DESCRIPTION_NEEDLE = "officially declared the 2026 FIFA World Cup champ
 OUTCOME_ASSET_OFFSET = 100_000_000
 
 
-def load_dotenv_light(path: str = ".env") -> None:
+def load_dotenv_light(path: str = str(PROJECT_ROOT / ".env")) -> None:
     """Tiny .env loader so the bot does not require python-dotenv."""
     if not os.path.exists(path):
         return

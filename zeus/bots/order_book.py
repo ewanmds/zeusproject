@@ -1,7 +1,7 @@
 """Hyperliquid BBO / MID Order Book market maker.
 BBO quotes at best bid/ask. MID quotes at mid +/- a configurable bps distance
 (minimum one tick). Shared post-only execution, inventory and hard-risk limits.
-The historical filename is retained for existing deployment scripts.
+CLI: python -m zeus.bots.order_book (dry-run unless --live is supplied).
 """
 
 import os
@@ -15,7 +15,8 @@ import tempfile
 import threading
 from collections import deque
 from typing import Optional, List, Dict, Any, Tuple, NamedTuple
-from startup_network import StartupNetworkError, post_info, retry_read
+from zeus import PROJECT_ROOT
+from zeus.network import StartupNetworkError, post_info, retry_read
 
 # Windows: stdout redirigé = cp1252 → crash sur les emojis. Forcer UTF-8.
 try:
@@ -28,7 +29,7 @@ import eth_account
 from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
-from market_catalog import PERP_DEXS, TOKENS
+from zeus.markets import PERP_DEXS, TOKENS
 
 from rich.console import Console
 from rich.table import Table
@@ -40,7 +41,7 @@ from rich import box
 # CONFIGURATION
 # =============================================================================
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(PROJECT_ROOT / ".env")
 AGENT_PRIVATE_KEY = os.getenv("PRIVATE_KEY", "")
 ACCOUNT_ADDRESS   = os.getenv("WALLET_ADDRESS", "")
 if not AGENT_PRIVATE_KEY or not ACCOUNT_ADDRESS:

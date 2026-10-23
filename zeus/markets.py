@@ -1,4 +1,4 @@
-"""HIP-3 markets shared by the OBI bot and its dashboard."""
+"""Credential-free HIP-3 catalog shared by BBO/MID and the dashboard."""
 
 from typing import Any, Dict
 
