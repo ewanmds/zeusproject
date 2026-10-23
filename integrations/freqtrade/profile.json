@@ -1,0 +1,90 @@
+{
+  "data_source": "public",
+  "strategy": {
+    "assets": [
+      "xyz:SP500"
+    ],
+    "lookback_window": 500,
+    "spread_engine_enabled": false
+  },
+  "market_making": {
+    "quote_spread_bps": 0.7,
+    "quote_notional": 40,
+    "ladder_levels": 1,
+    "ladder_spacing_bps": 3,
+    "ladder_size_graduation": 1.0,
+    "refresh_interval_ms": 1500,
+    "requote_threshold_bps": 1.0,
+    "size_requote_pct": 0.15,
+    "max_quote_age_ms": 10000,
+    "fill_refresh_cooldown_ms": 2000,
+    "inventory_skew_factor": 0.7,
+    "inventory_skew_gamma": 1.5,
+    "inventory_skew_asymmetry": 0.8,
+    "inventory_skew_exit_preserve": true,
+    "max_book_staleness_ms": 5000,
+    "max_fv_deviation_pct": 0.5,
+    "max_no_book_update_ms": 0,
+    "vwap_short_window_minutes": 3,
+    "vwap_long_window_minutes": 15,
+    "vwap_alpha": 0.1,
+    "wick_size_multiplier": 1.0,
+    "wick_dev_threshold_pct": 0.1,
+    "microprice_levels": 1,
+    "min_crossing_spread_bps": 1.0,
+    "regime_window": 120,
+    "dynamic_width": true,
+    "width_vol_window": 60,
+    "width_max_multiplier": 2.0,
+    "max_total_spread_multiplier": 3.0,
+    "maker_fee_bps": 3.0,
+    "builder_fee_bps": 0,
+    "fee_floor_enabled": false,
+    "warmup_duration_sec": 30,
+    "warmup_notional_pct": 0.75,
+    "warmup_spread_multiplier": 1.25,
+    "toxicity_per_side": true,
+    "toxicity_warmup_fills": 10,
+    "toxicity_half_life_sec": 120,
+    "toxicity_max_widen": 1.5,
+    "fill_burst_threshold": 3,
+    "fill_burst_window_sec": 5,
+    "fill_burst_spread_mult": 1.5,
+    "fill_burst_size_factor": 0.75,
+    "fill_burst_decay_sec": 15,
+    "quote_attribution_enabled": true,
+    "quote_attribution_min_interval_sec": 30,
+    "adaptive_notional_enabled": false,
+    "trading_schedule_enabled": false
+  },
+  "risk": {
+    "max_position_notional": 100,
+    "max_spread_exposure": 160,
+    "max_aggregate_exposure": 160,
+    "max_open_orders": 2,
+    "max_drawdown_pct": 3.0,
+    "drawdown_cooldown_sec": 180,
+    "max_consecutive_halts": 3,
+    "min_resume_equity_pct": 98.0,
+    "max_close_slippage_bps": 10,
+    "fail_closed_cooldown_sec": 0,
+    "max_fail_closed_retries": 0,
+    "absolute_equity_floor": 0
+  },
+  "execution": {
+    "live_mode": true,
+    "paper_starting_equity": 200,
+    "leverage": 30,
+    "poll_equity_sec": 15,
+    "poll_open_orders_sec": 15,
+    "poll_fills_sec": 10,
+    "poll_rate_limit_sec": 30
+  },
+  "logging": {
+    "verbose": false,
+    "status_interval_sec": 15
+  },
+  "rate_limit": {
+    "disabled": true
+  }
+}

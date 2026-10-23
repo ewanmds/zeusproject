@@ -225,6 +225,14 @@
         const strategy = $("#grid-strategy")?.value || "bbo";
         const offsetField = $("#grid-offset-field");
         if (offsetField) offsetField.hidden = strategy !== "mid";
+        if (strategy === "freqtrade") {
+            setText("grid-heading", "Freqtrade");
+            setText("grid-description", "Market making au VWAP, spread adaptatif et inventaire plafonné. Ordres réels sur démarrage explicite.");
+            setText("grid-strategy-hint", "Un niveau par côté · plafond égal au montant par ordre · sans pauses de signal. Les protections de risque et d’exécution restent actives.");
+            setText("grid-size-help", "Montant maximal par ordre et plafond d’inventaire. Les tailles sont arrondies sans dépasser ce budget.");
+            return;
+        }
+        setText("grid-size-help", "Inventaire limité à une taille d'ordre. Retour à plat avant une nouvelle entrée.");
         if (strategy === "mid") {
             setText("grid-heading", "MID Order Book");
             setText("grid-description", "Market making classique : achat et vente à une distance fixe du mid, réglable en bps.");
@@ -620,7 +628,7 @@
         setText("overview-volume", formatUSD(volume));
         setText("overview-pnl", formatUSD(net, true));
         setPnLColor($("#overview-pnl"), net);
-        setText("overview-cost", volume > 0 && net != null ? formatUSD(-net / volume * 1e6) : "—");
+        setText("overview-cost", volume > 0 && net != null && active.every((bot) => bot.accounting_complete !== false) ? formatUSD(-net / volume * 1e6) : "—");
         setText("session-count", `${active.length} active${active.length === 1 ? "" : "s"} · ${bots.length} au total`);
         $("#grid-empty-state").hidden = bots.length > 0;
         const runningTokens = bots.filter((b) => b.running).map((b) => b.token);
@@ -695,6 +703,7 @@
                 if (el && el.textContent !== v) el.textContent = v;
             };
             const modeLabel = b.strategy === "mid" ? `MID · ${Number(b.offset_bps || 0).toFixed(1)} BPS`
+                : b.strategy === "freqtrade" ? "FREQTRADE"
                 : b.strategy === "bbo" ? "BBO" : "ANCIEN MODE";
             const stateLabel = b.phase === "failed" ? "ÉCHEC" : !b.running ? "ARRÊTÉ" : b.phase === "connecting" ? "CONNEXION" : "LIVE";
             set("title", `${b.token} · ${modeLabel} · ${stateLabel}`);
@@ -713,7 +722,7 @@
             set("actions-rate", b.order_actions_per_hour == null ? "—" : Number(b.order_actions_per_hour).toFixed(1));
             set("pos", formatUSD(b.position_usd));
             set("spread", formatBPS(b.spread_bps));
-            set("markout", `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
+            set("markout", b.strategy === "freqtrade" ? "—" : `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
             set("action", b.error ? `⚠ ${b.error}` : (b.action || ""));
             const stopBtn = card.querySelector(".bot-card-stop");
             if (stopBtn) {

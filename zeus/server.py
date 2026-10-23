@@ -251,7 +251,7 @@ class BotManager:
             raise ValueError('Market making requires mode=live')
         token_key = (config.token or "SP500").strip().upper()
         strategy = (config.strategy or "bbo").strip().lower()
-        if strategy not in ("bbo", "mid"):
+        if strategy not in ("bbo", "mid", "freqtrade"):
             raise ValueError(f"Unknown market making strategy: {config.strategy}")
         offset_bps = None
         if strategy == "mid":
@@ -259,18 +259,35 @@ class BotManager:
             if not math.isfinite(offset_bps) or not 0 <= offset_bps < 10000:
                 raise ValueError("offset_bps must be finite, at least 0 and less than 10000")
             offset_bps = max(0.0, offset_bps)
-        obi_mod = _safe_import("zeus.bots.order_book")
+        module_name = "zeus.bots.freqtrade" if strategy == "freqtrade" else "zeus.bots.order_book"
+        obi_mod = _safe_import(module_name)
         if obi_mod is None:
             raise RuntimeError(
-                "Cannot import zeus.bots.order_book — check the Zeus installation"
+                f"Cannot import {module_name} — check the Zeus installation"
             )
         try:
             symbol = obi_mod.resolve_token(token_key)
         except BaseException as exc:  # resolve_token lève SystemExit si inconnu
             raise ValueError(f"Unknown token '{config.token}': {exc}")
         order_usd = max(10.5, float(config.order_size_usd))
+        if strategy == "freqtrade":
+            order_usd = float(config.order_size_usd)
+            if not math.isfinite(order_usd) or order_usd < 10:
+                raise ValueError("Montant Freqtrade minimal : 10 USD, valeur finie requise")
+            obi_mod.require_binary()
 
         with self.lock:
+            needs_confirmation = any(info["symbol"] == symbol and info.get("stop_unconfirmed") for info in self.obi_procs.values())
+        confirmed_flat = False
+        if needs_confirmation:
+            from zeus.bots.freqtrade import confirm_flat
+            confirmed_flat = confirm_flat(symbol, os.getenv("WALLET_ADDRESS", ""))
+
+        with self.lock:
+            if any(info["symbol"] == symbol and info["proc"].poll() is None for info in self.obi_procs.values()):
+                raise RuntimeError(f"Un bot tourne déjà sur {symbol}")
+            if not confirmed_flat and any(info["symbol"] == symbol and info.get("stop_unconfirmed") for info in self.obi_procs.values()):
+                raise RuntimeError("La mise à plat précédente n'est pas confirmée ; aucun nouveau bot lancé")
             existing = self.obi_procs.get(token_key)
             if existing is not None and existing["proc"].poll() is None:
                 raise RuntimeError(f"Un bot tourne déjà sur {token_key}")
@@ -285,7 +302,7 @@ class BotManager:
             env = os.environ.copy()
             env["OBI_HEADLESS"] = "1"   # pas de Rich Live dans un process enfant
             cmd = [
-                sys.executable, "-u", "-m", "zeus.bots.order_book",
+                sys.executable, "-u", "-m", module_name,
                 "--token", token_key, "--live", "--notional", str(order_usd),
                 "--strategy", strategy,
             ]
@@ -341,20 +358,35 @@ class BotManager:
                 pass
 
         # Laisser le temps du cancel all + flatten market avant d'escalader.
-        deadline = time.time() + 30
+        stop_started = time.time()
+        unconfirmed = []
         for key, info in targets:
+            deadline = stop_started + (95 if info["config"].get("strategy") == "freqtrade" else 30)
             proc = info["proc"]
             while proc.poll() is None and time.time() < deadline:
                 time.sleep(0.4)
             if proc.poll() is None:
                 proc.terminate()
+            if info["config"].get("strategy") == "freqtrade":
+                try:
+                    status = json.loads(Path(info["stats_file"]).read_bytes())
+                    confirmed = (status.get("symbol") == info["symbol"] and status.get("start_time", 0) >= info["started"] - 5
+                                 and status.get("phase") == "stopped" and status.get("position_known") is True)
+                except (OSError, ValueError):
+                    confirmed = False
+                if not confirmed:
+                    info["stop_unconfirmed"] = True
+                    unconfirmed.append(key)
             try:
                 os.remove(info["stop_file"])
             except OSError:
                 pass
         with self.lock:
             for key, _ in targets:
-                self.obi_procs.pop(key, None)
+                if key not in unconfirmed:
+                    self.obi_procs.pop(key, None)
+        if unconfirmed:
+            raise RuntimeError(f"Arrêt Freqtrade non confirmé : {', '.join(unconfirmed)} ; état à vérifier")
 
     def get_grid_stats(self) -> Dict[str, Any]:
         default = {
@@ -411,10 +443,14 @@ class BotManager:
                 action_count = placements + modifications + cancellations
                 phase = str(st.get("phase") or ("running" if st else "connecting"))
                 error = str(st.get("error", ""))
+                if info.get("stop_unconfirmed"):
+                    phase = "failed"
+                    error = error or "Arrêt non confirmé ; ordres ou position à vérifier"
                 if not alive and phase != "stopped":
                     phase = "failed"
                     if not error:
                         error = f"Le processus s'est arrêté (code {info['proc'].returncode})."
+                position_known = (st.get("position_known") is True and not info.get("stop_unconfirmed") and (alive or phase == "stopped")) if info["config"].get("strategy") == "freqtrade" else True
                 entry = {
                     "token": key,
                     "strategy": info["config"].get("strategy", "bbo"),
@@ -428,7 +464,9 @@ class BotManager:
                     "net_pnl": _json_float(rpnl - fees_v, 4),
                     "fees": _json_float(fees_v, 4),
                     "realized_pnl": _json_float(rpnl, 4),
-                    "cost_per_1m": _json_float((fees_v - rpnl) / (vol / 1_000_000), 2) if vol > 0 else 0.0,
+                    "accounting_complete": st.get("accounting_complete") is not False,
+                    "cost_per_1m": (_json_float((fees_v - rpnl) / (vol / 1_000_000), 2)
+                                    if vol > 0 and st.get("accounting_complete") is not False else None),
                     "fills": int(st.get("fills", 0) or 0),
                     "order_placements": placements if has_action_metrics else None,
                     "order_modifications": modifications if has_action_metrics else None,
@@ -441,7 +479,8 @@ class BotManager:
                     "markout_bid_bps": _json_float(st.get("markout_bid_bps", 0), 3),
                     "markout_ask_bps": _json_float(st.get("markout_ask_bps", 0), 3),
                     "mid_offset_bps": _json_float(st.get("mid_offset_bps", 0), 2),
-                    "position_usd": _json_float(st.get("position_usd", 0), 2),
+                    "position_known": position_known,
+                    "position_usd": _json_float(st.get("position_usd", 0), 2) if position_known else None,
                     "upnl": _json_float(st.get("upnl", 0), 4),
                     "action": str(st.get("action", "")),
                     "error": error,
@@ -464,11 +503,13 @@ class BotManager:
                 "volume_usd": _json_float(tot_vol, 2),
                 "net_pnl": _json_float(tot_rpnl - tot_fees, 4),
                 "fees": _json_float(tot_fees, 4),
-                "cost_per_1m": _json_float((tot_fees - tot_rpnl) / (tot_vol / 1_000_000), 2) if tot_vol > 0 else 0.0,
+                "cost_per_1m": (_json_float((tot_fees - tot_rpnl) / (tot_vol / 1_000_000), 2)
+                                if tot_vol > 0 and all(b["accounting_complete"] for b in alive_bots) else None),
                 "fills": tot_fills,
                 "mid_price": single["mid_price"] if single else 0.0,
                 "spread_bps": single["spread_bps"] if single else 0.0,
-                "position_usd": _json_float(tot_pos, 2),
+                "position_known": all(b["position_known"] for b in alive_bots),
+                "position_usd": _json_float(tot_pos, 2) if all(b["position_known"] for b in alive_bots) else None,
                 "net_passive_capture": 0.0,
                 "net_adverse_lost": 0.0,
                 "adverse_halt": False,

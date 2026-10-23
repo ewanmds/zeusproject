@@ -9,3 +9,6 @@ __pycache__/
 .venv/
 frontend/dist/
 frontend/node_modules/
+integrations/freqtrade/local/
+integrations/freqtrade/bin/
+integrations/freqtrade/.build/

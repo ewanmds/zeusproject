@@ -1,0 +1,28 @@
+# Binaries (built by `make build` / `go build` into bin/)
+/bin/
+
+# Config with real credentials (use config.example.yaml as template)
+# its fine to commit this for now, its not public
+# config.yaml
+/config.yaml
+/config.live.yaml
+/logs/
+
+# Environment / secrets
+.env
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Go
+vendor/

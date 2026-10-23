@@ -1,0 +1,556 @@
+# Single-asset market-making config template.
+#
+# This template targets ONE asset. The bot does support multi-asset / spread-
+# pair mode in code, but the user-facing docs (README, GETTING_STARTED, CONFIG)
+# and this template focus on the single-asset case to keep the surface area
+# small for new operators.
+#
+# To run: copy to config.yaml, then `./bin/bot -config config.yaml`.
+#
+# Sections:
+#   strategy        — asset selection + (optional) spread-engine knobs
+#   market_making   — quoting, sizing, signals, guards, optimizer
+#   risk            — position / drawdown / session-loss limits
+#   execution       — paper vs. live, leverage, polling cadence
+#   logging         — verbosity + status cadence
+#   rate_limit      — API-budget circuit breaker (optional, advanced)
+#   postmortem      — JSON snapshot dumps on halt (optional, advanced)
+#
+# Convention: required fields are uncommented with sane defaults.
+# Advanced / optional fields are commented with "field: default # description".
+# Uncomment + tune only when live stats justify the change.
+
+strategy:
+  assets: ["xyz:CL"] # exactly one asset; "xyz:" prefix = HIP-3 dex, bare = standard perp
+  lookback_window: 500 # required field; unused in single-asset mode (spread engine off)
+
+  # --- Multi-asset spread engine (off by default in single-asset mode) ---
+  # spread_engine_enabled: false  # nil = auto (on with 2+ assets); set false to force off
+  # spread_type: "difference"     # "difference" or "ratio"; required only with 2+ assets
+  # use_beta_hedge: false         # enable beta hedging across legs
+  # z_min_stddev: 0               # floor for spread stddev before z-score; 0 = no floor
+  # beta_min: 0.5                 # lower OLS beta clamp
+  # beta_max: 1.8                 # upper OLS beta clamp
+
+market_making:
+  # --- Core quoting ---
+  quote_spread_bps: 20 # half-spread in bps; start wider until live stats justify tightening
+  quote_notional: 50 # $/side initial size
+  refresh_interval_ms: 800 # base cancel-and-replace cadence; balance edge vs. API churn
+  ladder_levels: 4 # orders per side
+  ladder_spacing_bps: 5 # bps between rungs
+  ladder_size_graduation: 1.5 # geometric size ratio per level; 1.0 = uniform, >1.0 = larger outer levels
+
+  # --- Inventory skew (shift quotes toward reducing position) ---
+  inventory_skew_factor: 0.7 # 0-1; higher = more aggressive inventory reduction
+  inventory_skew_gamma: 1.5 # convex exponent: 1.0 = linear, >1.0 = gentle low / aggressive high
+  inventory_skew_asymmetry: 0.5 # 0-1; 0.5 = symmetric, >0.5 = larger shift on aggressive (entry) side
+
+  # --- Requote thresholds (avoid pointless cancel/replace churn) ---
+  requote_threshold_bps: 2 # min price delta before replacing quotes
+  size_requote_pct: 0.10 # min size delta fraction before replacing
+  max_quote_age_ms: 3000 # force refresh after this age regardless of delta
+  fill_refresh_cooldown_ms: 2000 # min ms between fill-triggered refreshes
+
+  # --- Feed staleness / fair value sanity ---
+  max_book_staleness_ms: 2000 # stop quoting if book data is stale; -1 = disabled
+  max_fv_deviation_pct: 10.0 # clamp fair value if it deviates >X% from book mid; 0 = disabled
+  max_no_book_update_ms: 0 # cancel + close if no book update for this long; 0 = disabled
+
+  # --- VWAP fair value (primary anchor for fair value) ---
+  vwap_short_window_minutes: 5 # short VWAP for fair value centering
+  vwap_long_window_minutes: 30 # long VWAP for wick mean-reversion sizing
+  vwap_alpha: 0.40 # blend: 0 = raw mid, 1 = pure short VWAP
+
+  # --- Wick mean-reversion sizing (lean into deviations from short VWAP) ---
+  wick_size_multiplier: 2.0 # max sizing increase on fresh wicks
+  wick_dev_threshold_pct: 0.10 # min % deviation from short VWAP to trigger wick logic
+
+  # --- Adverse selection / fill decay ---
+  fill_decay_half_life_ms: 2000 # half-life for post-fill FV decay
+  microprice_levels: 1 # book levels for weighted microprice; 1 = BBO-only
+
+  # --- Crossing protection (don't accidentally cross book) ---
+  min_crossing_spread_bps: 2.0 # minimum spread maintained when both sides clamp toward mid
+
+  # --- Regime detection (used by optimizer + several gates) ---
+  regime_window: 120 # rolling window for autocorrelation
+
+  # =========================================================================
+  # ADVANCED FIELDS — uncomment + tune only when live stats justify it.
+  # Order roughly: per-side overrides → microstructure → guards → optimizer.
+  # =========================================================================
+
+  # --- Per-side spread overrides ---
+  # quote_spread_bps_buy: 20       # buy half-spread in bps; defaults to quote_spread_bps
+  # quote_spread_bps_sell: 20      # sell half-spread in bps; defaults to quote_spread_bps
+
+  # --- Dynamic width (microstructure-aware spread scaling) ---
+  # dynamic_width: false           # enable microstructure-aware quote width scaling
+  # width_vol_window: 60           # samples for realized vol rolling window
+  # width_max_multiplier: 3.0      # hard cap on width scaling per side
+  # width_imbalance_levels: 5      # depth levels used for imbalance calculation
+
+  # --- Dynamic ladder spacing ---
+  # ladder_spacing_dynamic: false  # vol-scale inter-level spacing (widens when vol > baseline)
+  # ladder_spacing_exponent: 1.0   # power-law: 1.0 = linear, 1.3 = dense inner / sparse outer
+
+  # --- Wall-fronting (snap nearest level in front of large resting orders) ---
+  # wall_front_enabled: false                  # snap nearest ladder level in front of book walls
+  # wall_min_size_multiplier: 3.0              # wall must be Nx avg book level size to qualify
+
+  # --- Wall-fronting quality scoring (per-side disable when snapped fills go adverse) ---
+  # wall_quality_enabled: false                # disable wall-fronting per side when snapped fills go adverse
+  # wall_quality_half_life_sec: 300            # EWMA half-life for wall-front quality score
+  # wall_quality_min_score: 0.35               # score below which a side is disabled temporarily
+  # wall_quality_disable_sec: 120              # disable duration after poor wall-front score
+  # wall_quality_hysteresis_sec: 30            # min continuous hold time before allowing state flip
+  # wall_quality_reenable_threshold_bps: 2.0   # asymmetric re-enable score bar (>= wall_quality_min_score)
+
+  # --- VWAP alpha drift scaling (fade VWAP weight when short/long diverge) ---
+  # vwap_alpha_drift_scaling_enabled: false  # master toggle
+  # vwap_alpha_drift_k: 3.0                  # sigma multiplier for divergence fade
+  # vwap_alpha_floor: 0.10                   # min effective alpha after fade (must be <= vwap_alpha)
+  # vwap_alpha_trend_boost_enabled: false    # boost alpha toward ceiling during trends
+  # vwap_alpha_trend_boost_ceiling: 0.70     # boost alpha up to this value (must be >= vwap_alpha)
+
+  # --- Trend-direction FV drift (shift FV with autocorrelation signal) ---
+  # trend_fv_drift_bps: 0                    # max FV shift per autocorr unit; 0 = disabled
+  # trend_fv_drift_autocorr_min: 0.10        # min |autocorr| to trigger FV shift
+
+  # --- Wick logic (advanced thresholds) ---
+  # wick_long_dev_threshold_pct: 0.20    # min % deviation from long VWAP (second condition for wick logic)
+  # wick_max_inventory_util: 0           # disable wick amplification above this inv util; 0 = always allow
+  # wick_trend_suppress_enabled: false   # suppress entry-side wick boost while trend/flow/shock guards active
+  # wick_trend_suppress_threshold: 0.50  # guard suppression threshold for wick suppression
+
+  # --- Trade-flow imbalance (FV shift from buy/sell pressure) ---
+  # trade_imbalance_window_sec: 3        # rolling window for buy/sell imbalance (seconds)
+  # trade_imbalance_max_shift_bps: 0     # max FV shift from trade imbalance in bps; 0 = disabled
+  # trade_imbalance_size_exponent: 1.0   # power-law size weight; <1.0 dampens whales, >1.0 amplifies
+  # trade_imbalance_mode: "time"         # "time" (rolling window) or "volume" (VPIN-lite volume-clock)
+  # trade_imbalance_bucket_size: 5000.0  # $ per volume bucket (volume mode only)
+  # trade_imbalance_bucket_count: 20     # completed buckets to keep (volume mode only)
+  # fill_adverse_shift_bps: 0            # post-fill FV shift in bps; 0 = disabled
+
+  # --- Refresh interval scaling (context-aware refresh timing) ---
+  # refresh_post_fill_ms: 0              # faster refresh after fills; 0 = disabled
+  # refresh_adverse_ms: 0                # slower refresh when toxicity tracker shows adverse markout; 0 = disabled
+  # refresh_quiet_ms: 0                  # slower refresh during quiet book periods; 0 = disabled
+  # refresh_quiet_threshold_ms: 30000    # book silence threshold for quiet mode
+
+  # --- Fees ---
+  # maker_fee_bps: 1               # maker fee in bps
+  # builder_fee_bps: 0             # builder fee in bps
+  # fee_floor_enabled: false       # widen quotes to cover round-trip maker + builder fees
+
+  # --- Trade-feed staleness ---
+  # trade_stale_degraded_sec: 30   # degrade quoting after this many seconds without trades
+  # trade_stale_halt_sec: 180      # halt quoting after this many seconds without trades
+
+  # --- Inventory exit-preserve / entry-side reduction ---
+  # inventory_skew_exit_preserve: false  # never skew AWAY from exit; widens entry side only
+  # entry_size_reduction_rate: 0         # linear entry-side size reduction by inv util; 0 = disabled
+  # entry_size_reduction_floor: 0.2      # min entry-side fraction (never goes to zero)
+  # entry_accel_threshold: 0             # util above which acceleration kicks in; 0 = disabled
+  # entry_accel_exponent: 0              # power-law exponent applied above threshold; 0 = disabled
+  # entry_reduction_trend_k: 0           # scale reduction rate by (1 + |adverse_autocorr| × k); 0 = disabled
+
+  # --- Adaptive notional (target $/min via fill-rate EWMA) ---
+  # adaptive_notional_enabled: false      # adjust quote notional based on EWMA fill rate
+  # adaptive_notional_target_per_min: 0   # target filled $/min (must set when enabled)
+  # adaptive_notional_min: 0              # floor notional $ (must set when enabled)
+  # adaptive_notional_max: 0              # ceiling notional $ (must set when enabled)
+  # adaptive_notional_half_life_sec: 60   # EWMA smoothing half-life
+
+  # --- Markout tracking + FV feedback ---
+  # markout_enabled: false           # measure adverse selection by tracking mid post-fill
+  # markout_ewma_half_life_sec: 300  # EWMA smoothing half-life in seconds
+  # markout_fv_scale: 0.5            # fraction of markout EWMA applied as FV shift; 0 = disabled
+  # markout_fv_max_shift_bps: 3.0    # max FV shift magnitude from markout feedback (bps)
+
+  # --- Toxicity tracker (per-side adverse selection scoring) ---
+  # toxicity_half_life_sec: 90              # EWMA half-life in seconds
+  # toxicity_max_widen: 1.3                 # max spread multiplier from toxicity
+  # toxicity_baseline_bps: 0                # expected capture bps; 0 = auto (half of quote_spread_bps)
+  # toxicity_idle_decay_half_lives: 7.0     # grace period before idle decay (in half-lives); <0 = disabled
+  # toxicity_per_side: false                # track buy/sell markout EWMAs separately
+  # toxicity_size_reduce_threshold: 0       # markout bps below which to reduce size on toxic side; 0 = disabled
+  # toxicity_size_reduce_max: 0             # max size reduction factor (0-1); 0 = disabled
+  # toxicity_size_exponent: 1.0             # power-law exponent for size reduction; 1.0 = linear
+  # toxicity_t5s_weight: 0.4                # weight of 5s markout in per-side composite
+  # toxicity_warmup_fills: 5                # suppress per-side multiplier until N fills
+
+  # --- Inventory half-life controller (PID skew toward target half-life) ---
+  # inventory_half_life_minutes: 0          # target half-life for inventory decay; 0 = disabled
+  # inventory_controller_skew_min: 1.0      # min skew multiplier from controller
+  # inventory_controller_skew_max: 5.0      # max skew multiplier from controller
+  # inventory_controller_gain_p: 0.020      # proportional gain
+  # inventory_controller_gain_i: 0.02       # integral gain
+  # inventory_controller_gain_d: 0.05       # derivative gain
+
+  # --- Position-age exit tightening ---
+  # position_age_tighten_min_sec: 300       # seconds before tightening starts; 0 = disabled
+  # position_age_tighten_bps: 0.5           # bps/min of exit-side tightening once active
+
+  # --- Idle-fill circuit breaker (one-shot exit-side tighten when stuck) ---
+  # idle_fill_detector_enabled: false       # master toggle
+  # idle_fill_threshold_sec: 300            # seconds since last fill before breaker can fire
+  # idle_fill_min_inv_util: 0.30            # |inv_util| threshold for activation
+  # idle_exit_tighten_bps: 1.5              # exit-side tighten amount in bps
+  # idle_exit_size_multiplier: 1.5          # exit-side size multiplier (>= 1.0)
+  # idle_fill_retry_interval_sec: 120       # cooldown between consecutive triggers
+
+  # --- Time-of-day spread widening (overnight UTC window) ---
+  # tod_spread_start_hour_utc: 4            # start hour (UTC, 0-23)
+  # tod_spread_end_hour_utc: 6              # end hour (UTC, 0-23)
+  # tod_spread_extra_bps: 1.5               # extra bps during overnight window
+
+  # --- Per-side win-rate / profit-factor optimizer gate ---
+  # When enabled, widens the offending side's spread if its win rate OR profit factor
+  # falls below threshold over the rolling fill window.
+  # per_side_winrate_enabled: false
+  # per_side_winrate_window_fills: 50              # rolling fill window per side (10..500)
+  # per_side_winrate_threshold: 0.35               # win rate below this widens that side
+  # per_side_profit_factor_threshold: 0.9          # profit factor below this widens that side
+  # per_side_winrate_widen_bps: 0.5                # additional spread when gate fires
+
+  # --- Time-of-day trading schedule (notional multiplier per window) ---
+  # Scales global notional inside configured windows (most-conservative wins on overlap).
+  # trading_schedule_enabled: false
+  # trading_schedule:
+  #   - { label: "cme_open",         start: "09:00", end: "10:00", tz: "America/New_York", notional_multiplier: 0.3 }
+  #   - { label: "inventory_report", start: "10:30", end: "11:00", tz: "America/New_York", notional_multiplier: 0.2 }
+  #   - { label: "settlement",       start: "14:30", end: "15:00", tz: "America/New_York", notional_multiplier: 0.4 }
+
+  # --- Funding-rate session-end urgency ---
+  # Amplifies inventory skew near funding resets when paying funding (accelerates exit).
+  # Reduces skew when receiving funding (holds position).
+  # funding_urgency_enabled: false           # master toggle
+  # funding_urgency_scale: 1.5               # max skew multiplier boost
+  # funding_urgency_horizon_minutes: 30      # minutes before reset where urgency ramps
+  # funding_poll_interval_sec: 60            # seconds between funding rate API polls
+  # funding_interval_hours: 0                # per-asset funding interval; 0 = auto (1h HIP-3, 8h perps)
+
+  # --- Warmup protection (reduced size + wider spread on startup) ---
+  # warmup_notional_pct: 0.10                # fraction of base notional during warmup
+  # warmup_spread_multiplier: 1.8            # spread multiplier during warmup
+  # warmup_duration_sec: 60                  # warmup duration in seconds
+
+  # --- Fill burst circuit breaker (widen + reduce on rapid consecutive fills) ---
+  # fill_burst_window_sec: 30.0              # rolling window to count fills
+  # fill_burst_threshold: 3                  # fills in window to trigger burst mode
+  # fill_burst_spread_mult: 2.0              # spread multiplier during burst (>= 1.0)
+  # fill_burst_size_factor: 0.3              # size factor during burst (0, 1.0]
+  # fill_burst_decay_sec: 15.0               # seconds for burst to decay
+
+  # --- Volume burst ladders (multiply ladder levels during trade-velocity spikes) ---
+  # volume_burst_enabled: false              # master switch
+  # burst_velocity_threshold: 2.5            # fast/slow EWMA ratio to trigger burst
+  # burst_velocity_fast_sec: 5               # fast EWMA window (seconds)
+  # burst_velocity_slow_sec: 60              # slow EWMA window (seconds)
+  # burst_velocity_min_floor: 1.0            # minimum slow EWMA floor (trades/sec)
+  # burst_level_multiplier: 3                # ladder level multiplier during burst
+  # burst_decay_sec: 15                      # seconds for burst to decay
+
+  # --- Trend Guard (VWAP momentum entry gate) ---
+  # trend_guard_enabled: false               # suppress entry-side notional when mid deviates from long VWAP
+  # trend_guard_threshold_pct: 0.15          # long VWAP deviation % to start suppression
+  # trend_guard_saturation_pct: 0.80         # deviation % for max suppression (must be > threshold)
+  # trend_guard_max_suppress: 0.90           # max entry notional reduction (0.90 = reduce to 10% of base)
+  # trend_guard_spread_widen_bps: 0          # widen entry side by this many bps when suppress >= 0.5
+  # trend_guard_spread_widen_asymmetry: 0    # entry-side widening multiplier; 2.0 = entry gets 2× widen
+  # trend_guard_freeze_threshold: 0          # zero entry side when suppress reaches this threshold; 0 = disabled
+
+  # --- Regime-gated quoting (suppress trend-aligned entry side during sustained trends) ---
+  # regime_gate_enabled: false               # master toggle
+  # regime_gate_mode: "exit_only"            # only accepted value; "directional" reserved for future
+  # regime_autocorr_threshold: 0.35          # |autocorr| required to qualify (0, 1)
+  # regime_vwap_divergence_sigma: 2.0        # |shortV - longV| / sigma required to qualify
+  # regime_gate_min_duration_sec: 30         # min seconds qualified before activation
+  # regime_gate_max_suppression: 0.80        # fraction of entry-side notional to remove
+
+  # --- Price Shock Guard (fast mid-price move protection) ---
+  # price_shock_enabled: false                          # master toggle
+  # price_shock_window_ms: 5000                         # rolling mid-price window
+  # price_shock_threshold_bps: 35.0                     # absolute move threshold over the window
+  # price_shock_cooldown_ms: 15000                      # guard active duration after trigger
+  # price_shock_freeze_entry: true                      # zero/cancel the inventory-increasing side while active
+  # price_shock_exit_size_factor: 0.50                  # exit-side size factor during adverse shock; 1.0 = disabled
+  # price_shock_favorable_exit_factor: 1.75             # exit-side boost when shock direction favors inventory; 1.0 = disabled
+  # price_shock_favorable_exit_tighten_bps: 2.0         # absolute bps tightening on profit-taking side; 0 = disabled
+  # price_shock_favorable_ioc_frac: 0.25                # fraction of position to IOC-close on favorable shock; 0 = disabled
+  # price_shock_favorable_ioc_min_inv_util: 0.20        # min inv util to fire IOC
+  # price_shock_favorable_ioc_min_capture_bps: 10       # min shock |move_bps| to fire IOC (should exceed 2× taker fee)
+  # price_shock_favorable_ioc_slippage_bps: 5.0         # slippage past best-opposite when pricing the IOC
+
+  # --- Shock-Chain Detector (cascade pause after multiple shocks in window) ---
+  # shock_chain_enabled: false               # master toggle
+  # shock_chain_window_sec: 300              # rolling window
+  # shock_chain_threshold: 3                 # shocks in window to trigger escalation
+  # shock_chain_pause_sec: 600               # pause duration after cascade
+  # shock_chain_recovery_sec: 3600           # recovery mode duration after pause
+
+  # --- Directional Flow Gate (suppress entry on adverse trade flow) ---
+  # flow_gate_enabled: false                 # master toggle
+  # flow_gate_threshold: 0.50                # imbalance magnitude [0, 1) to start gating
+  # flow_gate_max_suppress: 0.70             # max entry notional reduction from flow
+  # flow_gate_min_util: 0.25                 # scale suppression by inv_util below this; 0 = full suppress at any util
+
+  # --- Spread stack cap (cap on cumulative widening across all sources) ---
+  # max_total_spread_multiplier: 3.0         # hard cap on cumulative per-side spread; 0 = disabled
+
+  # --- Multi-asset rate-limit allocator (ROI-based budget allocation) ---
+  # rate_limit_allocator_enabled: false        # master toggle
+  # rate_limit_roi_ewma_half_life_sec: 300     # EWMA half-life for per-asset ROI tracking
+  # rate_limit_min_refresh_multiplier: 0.7     # min refresh multiplier for low-ROI assets
+  # rate_limit_max_refresh_multiplier: 3.0     # max refresh multiplier for high-ROI assets
+
+  # --- Cross-leg / pair-reduce (multi-asset only) ---
+  # cross_leg_skew_enabled: false              # cross-leg inventory awareness
+  # cross_leg_skew_factor: 0.3                 # max cross-leg skew as fraction of spread
+  # max_cross_leg_skew_ms: 150                 # max arrival-time skew between spread legs
+  # pair_reduce_entry_fraction: 0.40           # combined exposure fraction to enter pair-reduce
+  # pair_reduce_exit_fraction: 0.25            # exit pair-reduce (hysteresis)
+  # pair_reduce_tighten_factor: 0.75           # exit-side tightening in pair-reduce
+  # pair_reduce_max_duration_sec: 0            # max seconds in pair-reduce; 0 = no timeout
+
+  # --- Spread-engine extras (z-score widening; only meaningful with spread engine) ---
+  # spread_bias_scale: 2.0                # tanh denominator for spread bias
+  # spread_bias_max_bps: 8.0              # max bias in bps
+  # spread_bias_max_fraction: 0           # max bias as fraction of half-spread; 0 = legacy mode
+  # spread_bias_asymmetry: 0.70           # 0.5 = symmetric, 1.0 = all tighten convergence side
+  # z_widening_threshold: 4.0             # start widening at this |z|
+  # z_widening_rate: 0.15                 # width multiplier per z above threshold
+  # z_max_width_multiplier: 3.0           # cap on widening
+  # z_widening_asymmetry: 0.5             # 0.5 = symmetric, 0.7 = 70% adverse side
+  # adaptive_z_enabled: false             # self-calibrating z-score
+  # z_calibration_window: 2000            # number of z-score samples for calibration
+
+  # --- Hardcoded value overrides (rarely needed) ---
+  # markout_composite_weights: [0.20, 0.40, 0.25, 0.15]  # weights for 500ms/1s/2s/5s composite
+  # microprice_decay: 0.7                  # geometric decay for multi-level microprice weighting
+  # emergency_widen_threshold_bps: -3.0    # markout below this triggers emergency spread widening
+  # emergency_widen_amount_bps: 2.0        # extra spread added on emergency widen
+  # quiet_ladder_reduce_sec: 30            # reduce ladder levels after this many quiet (no-fill) seconds
+  # lazy_ladder_enabled: false             # start at 1 level/side, expand on fill
+  # lazy_ladder_decay_sec: 30              # seconds after fill before decaying back to 1 level
+  # toxicity_size_weight_cap: 3.0          # max allowed toxicity-based size scaling factor
+  # velocity_initial_seed: 1.0             # initial value for trade velocity EWMA at startup
+  # quote_attribution_enabled: false       # sampled per-layer quote attribution logs
+  # quote_attribution_min_interval_sec: 30 # min seconds between sampled attribution logs
+
+  # =========================================================================
+  # OPTIMIZER V2 — unified utility-driven controller (4D state model).
+  # Tunes 8 quoting knobs (spread, notional, skew, alpha, etc.) each eval cycle
+  # using proportional control with momentum + counterfactual rollback.
+  # =========================================================================
+  # optimizer_v2:
+  #   enabled: false                     # master switch
+  #   shadow_mode: false                 # true = evaluate but return neutral overlay (log-only)
+  #   eval_interval_sec: 60              # seconds between evaluation cycles
+  #   warmup_evals: 15                   # number of evals before v2 starts acting
+  #   min_fill_samples: 10               # minimum fills required in window before v2 acts
+  #   min_fill_sample_window_sec: 0      # rolling window for fill counting; 0 = per-eval
+  #   momentum: 0.7                      # smoothing for knob updates (0 = none, 1 = full)
+  #   learning_rate: 0.3                 # step size for proportional control
+  #   max_knob_changes_per_eval: 2       # max knobs adjusted per cycle
+  #   emergency_toxicity_threshold: 0.9  # toxicity above this triggers emergency widening
+  #
+  #   # Rollback
+  #   rollback_window_evals: 5             # evals to look back for utility decline
+  #   rollback_rate: 0.3                   # fraction to revert knobs by per rollback
+  #   rollback_cooldown_sec: 120           # directional cooldown after rollback to prevent cycles
+  #   rollback_absolute_floor_bps: -0.20   # force rollback when composite_markout below floor; 0 = disabled (Δ-only). Must be <= 0.
+  #
+  #   # Burst eval (run extra eval on volume-burst activation)
+  #   burst_eval_enabled: false
+  #   burst_eval_min_interval_sec: 15           # throttle for burst-triggered evals
+  #   burst_eval_all_negative_cooldown_sec: 45  # extended cooldown while utility is all-negative
+  #
+  #   # Force refresh on emergency overlay change
+  #   force_refresh_on_emergency: false
+  #   force_refresh_min_interval_ms: 3000       # throttle forced emergency refreshes
+  #   force_refresh_min_spread_delta_bps: 0.5   # material overlay threshold for forced refresh
+  #
+  #   # Composite-score weights (each block must sum to ~1.0)
+  #   toxicity_weights:
+  #     markout_ewma: 0.5
+  #     fill_burst: 0.2
+  #     emergency_count: 0.3
+  #   opportunity_weights:
+  #     fill_rate_ratio: 0.3
+  #     regime_signal: 0.2
+  #     vwap_deviation: 0.3
+  #     spread_bbo_ratio: 0.2
+  #   inventory_stress_weights:
+  #     position_util: 0.5
+  #     controller_adj: 0.3
+  #     same_side_duration: 0.2
+  #
+  #   # Policy thresholds
+  #   policy_thresholds:
+  #     toxicity_high: 0.6
+  #     toxicity_medium: 0.5             # triggers notional reduction + refresh slowdown
+  #     toxicity_low: 0.3
+  #     opportunity_high: 0.5
+  #     opportunity_low: 0.3
+  #     inventory_high: 0.4
+  #     inventory_low: 0.15
+  #     budget_high: 0.7
+  #     budget_medium: 0.5               # refresh-opportunity gate
+  #     autocorr_threshold: 0.1
+  #     fill_rate_delta: 0.5
+  #     imbalance_sat_high: 0.6
+  #     imbalance_sat_low: 0.2
+  #     peer_inventory_min: 0.2          # min peer util for cross-asset signals (multi-asset only)
+  #     # Asymmetric gating: when blocked AND carrying inventory, exit-side tighten still applies.
+  #     opp_tighten_inv_util_gate: 0.40             # block opp_tighten when |inv_util| > gate AND unrealized < 0; 0 = disabled
+  #     opp_tighten_session_pnl_floor_bps: -10.0    # block opp_tighten when session PnL below this floor; 0 = disabled (must be < 0)
+  #     # skew_relax_on_adverse — turns skewMult into adverse-markout feedback
+  #     skew_relax_adverse_markout_bps: -0.2        # markout threshold; 0 = disabled (must be < 0)
+  #     skew_relax_inv_util_min: 0.15               # |inv_util| floor for rule to fire
+  #     skew_relax_floor: 0.6                       # minimum skewMult when floored; 0 = disabled
+  #     skew_relax_divisor: 2.0                     # bps-of-adversity-per-full-range
+  #     regime_widen_entry_mult: 1.0                # entry asymmetry in regime_widen
+  #
+  #   # Knob bounds
+  #   spread_bps:           { min: 4.0, max: 12.0 }
+  #   notional_mult:        { min: 0.70, max: 1.30 }
+  #   skew_mult:            { min: 0.80, max: 1.50 }
+  #   vwap_alpha:           { min: 0.28, max: 0.48 }
+  #   imbalance_shift_mult: { min: 0.5, max: 1.5 }
+  #   fill_decay_mult:      { min: 0.5, max: 1.5 }
+  #   refresh_mult:         { min: 0.6, max: 1.5 }
+  #
+  #   # Deadbands (skip noisy small updates)
+  #   spread_delta_deadband_bps: 0.10
+  #   skew_delta_deadband: 0.02
+  #   notional_delta_deadband: 0.05
+  #
+  #   # Sub-dimension normalization
+  #   subdim_normalization: "linear"        # "linear" or "empirical_quantile"
+  #   subdim_quantile_window_evals: 500     # rolling window size for quantile estimation (>= 100)
+  #   subdim_quantile_low_pct: 5            # low quantile pct [1, 25]
+  #   subdim_quantile_high_pct: 95          # high quantile pct [75, 99]; must be > low
+  #
+  #   # Fourth-dimension swap for 4D policy table
+  #   fourth_dimension: "budget_pressure"               # "budget_pressure" (default) or "session_pnl"
+  #   session_pnl_bucket_edges_bps: [-20, -10, 10, 20]  # ascending length-4; active when fourth_dimension="session_pnl"
+  #   fourth_dim_defensive_floor: 0.75                  # when 4th dim >= this AND policy would net-tighten spread, clamp to 0
+
+  # =========================================================================
+  # PER-ASSET OVERRIDES — only meaningful in multi-asset mode.
+  # Each section's per_asset map overrides specific fields for individual coins.
+  # Unspecified fields inherit from the global (top-level) config.
+  # =========================================================================
+  # per_asset:
+  #   "xyz:CL":
+  #     quote_spread_bps: 25
+  #     quote_notional: 100
+  #     # ...any other market_making field
+
+risk:
+  max_position_notional: 200 # position cap
+  max_spread_exposure: 400 # open-order notional cap
+  max_drawdown_pct: 5.0 # hard stop
+  max_open_orders: 16 # 4 levels × 2 sides × 2 (ladder + safety headroom)
+  drawdown_cooldown_sec: 180 # seconds before auto-resume after halt
+  max_consecutive_halts: 3 # permanent halt after N consecutive halts
+  min_resume_equity_pct: 90.0 # must recover to N% of high-water to resume
+  max_close_slippage_bps: 50 # IOC slippage limit before market close fallback; -1 = market close
+  fail_closed_cooldown_sec: 0 # seconds before auto-recovery from fail-closed halt; 0 = permanent halt
+  max_fail_closed_retries: 0 # max recovery attempts before permanent halt; 0 = unlimited
+  absolute_equity_floor: 0 # permanent halt if equity drops below this; 0 = disabled
+
+  # --- Drawdown smoothing & recovery mode (post-halt reduced quoting) ---
+  # drawdown_smoothing_samples: 10   # EMA samples for drawdown equity smoothing
+  # recovery_duration_sec: 300       # seconds of recovery mode after drawdown halt
+  # recovery_notional_pct: 0.50      # notional fraction during recovery
+  # recovery_spread_multiplier: 1.50 # spread widening during recovery
+
+  # --- Aggregate exposure (multi-asset portfolio cap) ---
+  # max_aggregate_exposure: 0        # total portfolio cap; 0 = use max_spread_exposure
+
+  # --- Session PnL window ---
+  # session_pnl_window_minutes: 60   # rolling window (minutes) for session_pnl_bps; 0 = default 60
+
+  # --- Session stop-loss (PnL-relative floor; distinct from equity drawdown path) ---
+  # Triggers flatten-and-pause when session PnL drops to floor; resumes in reduced-size recovery.
+  # session_stop_loss_bps: 0                       # 0 = disabled; suggested -40 when active (must be <= 0)
+  # session_stop_loss_pause_sec: 600               # pause duration after stop triggers (>= 60)
+  # session_stop_loss_recovery_notional_pct: 0.5   # notional fraction during recovery (0, 1]
+  # session_stop_loss_recovery_duration_sec: 1800  # recovery mode duration after resume (>= 60)
+  # session_stop_loss_warn_bps: 0                  # early-warn level (0 > warn > stop_loss_bps); 0 = disabled
+  # session_stop_loss_warn_spread_mult: 1.60       # spread multiplier in warn zone; >= 1.0
+  # session_stop_loss_warn_notional_pct: 0         # notional multiplier in warn zone; 0 or 1 = disabled
+
+  # --- Session flatten on shutdown (market-close residual position on SIGINT/SIGTERM) ---
+  # session_flatten_on_shutdown: false  # cancel orders, then market-close any residual position
+  # session_flatten_timeout_sec: 15     # per-asset close timeout when session_flatten_on_shutdown is true
+
+  # --- Per-asset risk overrides ---
+  # per_asset:
+  #   "xyz:CL":
+  #     max_position_notional: 500
+  #     max_spread_exposure: 1000
+  #     max_open_orders: 24
+
+execution:
+  live_mode: false # paper (false) vs. live (true) trading
+  paper_starting_equity: 150 # starting equity for paper mode
+  leverage: 5 # account leverage [1..50]
+
+  # --- Reconciliation grace periods ---
+  # recon_grace_period_ms: 3000          # post-fill sign-flip grace period (ms)
+  # recon_empty_exchange_grace_ms: 5000  # shorter grace for tracked>0 && exchange=0 desync (silent cancel/ALO reject)
+
+  # --- Polling intervals (seconds) ---
+  # poll_equity_sec: 15                  # equity polling interval
+  # poll_open_orders_sec: 15             # open orders polling interval
+  # poll_fills_sec: 10                   # REST fill poller interval
+  # poll_rate_limit_sec: 30              # rate limit polling interval
+
+  # --- Reconciliation diagnostic dump (tracked vs. exchange OID symmetric difference) ---
+  # recon_mismatch_diagnostic_enabled: false    # master toggle
+  # recon_mismatch_diagnostic_max_per_hour: 20  # per-coin rate limit on diagnostic emission
+
+  # --- Per-asset execution overrides ---
+  # per_asset:
+  #   "xyz:CL":
+  #     leverage: 10
+
+logging:
+  verbose: false # enable verbose / debug logging
+  # status_interval_sec: 15  # periodic status log interval (seconds)
+
+# =========================================================================
+# Rate limit circuit breaker — proactively reacts as API rate limit depletes.
+# Uses time-to-exhaustion (TTE) computed from depletion rate, not cumulative usage.
+# All fields are optional; section can be omitted entirely.
+# =========================================================================
+# rate_limit:
+#   absolute_floor: 300            # remaining below this = immediate critical (cancel all + close all)
+#   tte_caution_minutes: 60        # suppress volume burst, 1.5x refresh throttle
+#   tte_degraded_minutes: 30       # collapse to 1 ladder level, 2x throttle, 0.5x notional
+#   tte_critical_minutes: 15       # cancel all orders + close all positions + enter dormant
+#   tte_recovery_minutes: 45       # exit dormant when TTE above this AND remaining > 2×floor
+#   ewma_half_life_minutes: 10     # EWMA half-life for depletion-rate smoothing
+#   remaining_pct_warn: 5          # warn when remaining rate limit below this % of capacity
+#   remaining_pct_critical: 2      # critical when remaining below this %
+#   pct_critical_grace_sec: 120    # skip pct-based critical check for this many sec after startup
+#   budget_pressure_pct_start: 20  # ramp budget pressure to optimizer starts at this remaining/cap %; 0 = disable
+
+# =========================================================================
+# Auto post-mortem dump on halt/stop — writes a structured JSON snapshot per-asset
+# on RiskHalt, rate-limit critical, feed-death, or graceful shutdown.
+# All fields are optional; section can be omitted entirely.
+# =========================================================================
+# postmortem:
+#   enabled: false                                                # master toggle
+#   output_dir: "postmortem/"                                     # output directory (auto-created)
+#   filename_format: "{coin}-{YYYYMMDD}-{HHMMSS}-{reason}.json"   # placeholders: {coin},{YYYYMMDD},{HHMMSS},{reason}
+#   include_last_n_evals: 20                                      # most-recent optimizer eval snapshots
+#   include_last_n_refreshes: 20                                  # most-recent refresh attributions
+#   include_all_fills: true                                       # include all session fills (false = none)
+#   rotate_keep_count: 200                                        # keep N most-recent files in output_dir, rotate older
