@@ -225,6 +225,17 @@
         const strategy = $("#grid-strategy")?.value || "bbo";
         const offsetField = $("#grid-offset-field");
         if (offsetField) offsetField.hidden = strategy !== "mid";
+        const adaptiveField = $("#grid-adaptive-field");
+        if (adaptiveField) adaptiveField.hidden = strategy !== "grid_adaptive";
+        setText("grid-size-help", strategy === "grid_adaptive"
+            ? "Inventaire limité à une taille d’ordre. Quantité fixée au lancement et arrondie au lot supérieur. Les fills partiels peuvent être complétés jusqu’au plafond."
+            : "Inventaire limité à une taille d'ordre. Retour à plat avant une nouvelle entrée.");
+        if (strategy === "grid_adaptive") {
+            setText("grid-heading", "MM Grid Adaptive");
+            setText("grid-description", "Moteur original : grille adaptative au régime, à la volatilité et à l’inventaire.");
+            setText("grid-strategy-hint", "Safe BBO : spread protégé par les frais + 0,35 bp et l’ATR. La tendance adapte le spread sans couper les quotes. Pause de clôture 15 h 25–16 h 45, heure de Paris, lun–ven.");
+            return;
+        }
         if (strategy === "mid") {
             setText("grid-heading", "MID Order Book");
             setText("grid-description", "Market making classique : achat et vente à une distance fixe du mid, réglable en bps.");
@@ -697,7 +708,11 @@
                 const el = card.querySelector(`[data-f="${f}"]`);
                 if (el && el.textContent !== v) el.textContent = v;
             };
-            set("title", `${b.token} · ${b.strategy === "mid" ? `MID · ${Number(b.offset_bps || 0).toFixed(1)} BPS` : b.strategy === "bbo" ? "BBO" : "ANCIEN MODE"} · ${!b.running ? "ARRÊTÉ" : b.phase === "connecting" ? "CONNEXION" : "LIVE"}`);
+            const modeLabel = b.strategy === "mid" ? `MID · ${Number(b.offset_bps || 0).toFixed(1)} BPS`
+                : b.strategy === "grid_adaptive" ? `GRID ADAPTIVE${b.grid_regime ? ` · ${String(b.grid_regime).toUpperCase()}` : ""}`
+                : b.strategy === "bbo" ? "BBO" : "ANCIEN MODE";
+            const stateLabel = b.phase === "failed" ? "ÉCHEC" : !b.running ? "ARRÊTÉ" : b.phase === "connecting" ? "CONNEXION" : "LIVE";
+            set("title", `${b.token} · ${modeLabel} · ${stateLabel}`);
             set("duration", b.duration || "00:00:00");
             set("mid", formatPrice(b.mid_price));
             set("vol", formatUSD(b.volume_usd));
@@ -713,7 +728,7 @@
             set("actions-rate", b.order_actions_per_hour == null ? "—" : Number(b.order_actions_per_hour).toFixed(1));
             set("pos", formatUSD(b.position_usd));
             set("spread", formatBPS(b.spread_bps));
-            set("markout", `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
+            set("markout", b.strategy === "grid_adaptive" ? "—" : `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
             set("action", b.error ? `⚠ ${b.error}` : (b.action || ""));
             const stopBtn = card.querySelector(".bot-card-stop");
             if (stopBtn) {
@@ -783,6 +798,23 @@
         try {
             const body = { token, strategy, mode: "live", order_size_usd };
             if (strategy === "mid") body.offset_bps = offset_bps;
+            if (strategy === "grid_adaptive") {
+                const input = $("#grid-maker-fee-bps");
+                const fee = Number.parseFloat(input?.value);
+                const error = $("#grid-adaptive-error");
+                if (error) error.hidden = true;
+                input?.removeAttribute("aria-invalid");
+                if (!Number.isFinite(fee) || fee < 0 || fee >= 10000) {
+                    if (error) {
+                        error.textContent = "Saisis des frais entre 0 inclus et 10 000 bps exclus.";
+                        error.hidden = false;
+                    }
+                    input?.setAttribute("aria-invalid", "true");
+                    input?.focus();
+                    return;
+                }
+                body.grid_maker_fee_bps = fee;
+            }
             await fetchJson(`${API_BASE}/api/grid/start`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },

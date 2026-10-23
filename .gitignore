@@ -9,3 +9,4 @@ __pycache__/
 frontend/dist/
 frontend/node_modules/
 .zeus_experimental/
+logs/mm_grid/

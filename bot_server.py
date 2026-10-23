@@ -107,6 +107,7 @@ class GridStartRequest(BaseModel):
     offset_ticks: Optional[float] = None
     spread_bps: Optional[float] = None
     offset_bps: Optional[float] = None  # utilisé par strategy=mid (distance au mid)
+    grid_maker_fee_bps: float = 0.288  # estimation explicite pour le plancher de spread
     grid_reset_bps: Optional[float] = None
     num_levels: int = 1
 
@@ -262,9 +263,13 @@ class BotManager:
             raise ValueError('Market making requires mode=live')
         token_key = (config.token or "SP500").strip().upper()
         strategy = (config.strategy or "bbo").strip().lower()
-        if strategy not in ("bbo", "mid"):
+        if strategy not in ("bbo", "mid", "grid_adaptive"):
             raise ValueError(f"Unknown market making strategy: {config.strategy}")
         offset_bps = None
+        if strategy == "grid_adaptive" and (
+            not math.isfinite(config.grid_maker_fee_bps) or not 0 <= config.grid_maker_fee_bps < 10000
+        ):
+            raise ValueError("grid_maker_fee_bps must be finite, at least 0 and less than 10000")
         if strategy == "mid":
             offset_bps = float(config.offset_bps if config.offset_bps is not None else 1.0)
             if not math.isfinite(offset_bps) or not 0 <= offset_bps < 10000:
@@ -302,12 +307,14 @@ class BotManager:
             env = os.environ.copy()
             env["OBI_HEADLESS"] = "1"   # pas de Rich Live dans un process enfant
             cmd = [
-                sys.executable, "-u", str(BASE_DIR / "OBI_VOLUME_BOT.py"),
+                sys.executable, "-u", str(BASE_DIR / ("ADAPTIVE_GRID_BOT.py" if strategy == "grid_adaptive" else "OBI_VOLUME_BOT.py")),
                 "--token", token_key, "--live", "--notional", str(order_usd),
                 "--strategy", strategy,
             ]
             if offset_bps is not None:
                 cmd.extend(["--offset-bps", str(offset_bps)])
+            if strategy == "grid_adaptive":
+                cmd.extend(["--grid-maker-fee-bps", str(config.grid_maker_fee_bps)])
             proc = subprocess.Popen(
                 cmd, cwd=str(BASE_DIR), env=env,
                 stdout=log_f, stderr=subprocess.STDOUT,
@@ -326,6 +333,8 @@ class BotManager:
             }
             if offset_bps is not None:
                 self.obi_procs[token_key]["config"]["offset_bps"] = offset_bps
+            if strategy == "grid_adaptive":
+                self.obi_procs[token_key]["config"]["grid_maker_fee_bps"] = config.grid_maker_fee_bps
             self.grid_config = config.model_dump()
 
         # Détection de crash immédiat (verrou d'instance déjà pris, etc.)
@@ -480,6 +489,10 @@ class BotManager:
                     "markout_bid_bps": _json_float(st.get("markout_bid_bps", 0), 3),
                     "markout_ask_bps": _json_float(st.get("markout_ask_bps", 0), 3),
                     "mid_offset_bps": _json_float(st.get("mid_offset_bps", 0), 2),
+                    "grid_regime": str(st.get("grid_regime", "")),
+                    "grid_trend_score": _json_float(st.get("grid_trend_score", 0), 3),
+                    "grid_atr": _json_float(st.get("grid_atr", 0), 6),
+                    "grid_half_spread_bps": _json_float(st.get("grid_half_spread_bps", 0), 3),
                     "position_usd": _json_float(st.get("position_usd", 0), 2),
                     "upnl": _json_float(st.get("upnl", 0), 4),
                     "action": str(st.get("action", "")),
