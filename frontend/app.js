@@ -30,7 +30,7 @@
     let ws = null;
     let reconnectTimer = null;
     let gridRunning = false;
-    let wcRunning = false;
+    let outcomeRunning = false;
     let gridTokens = [];
     let selectedGridToken = normalizeToken({ key: "SP500", symbol: "xyz:SP500" });
 
@@ -224,32 +224,29 @@
     function updateGridStrategy() {
         const strategy = $("#grid-strategy")?.value || "bbo";
         const offsetField = $("#grid-offset-field");
+        const amountInput = $("#grid-order-size");
+        if (amountInput) amountInput.min = strategy === "freqtrade" ? "40" : "10";
         if (offsetField) offsetField.hidden = strategy !== "mid";
         if (strategy === "freqtrade") {
             setText("grid-heading", "Freqtrade");
-            setText("grid-description", "Market making au VWAP, spread adaptatif et inventaire plafonné. Ordres réels sur démarrage explicite.");
-            setText("grid-strategy-hint", "Un niveau par côté · plafond égal au montant par ordre · sans pauses de signal. Les protections de risque et d’exécution restent actives.");
-            setText("grid-size-help", "Montant maximal par ordre et plafond d’inventaire. Les tailles sont arrondies sans dépasser ce budget.");
+            setText("grid-description", "Market making au VWAP avec spread indexé sur le coût réel. 25 % du montant coté par côté (40 USD minimum). Ordres réels sur démarrage explicite.");
             return;
         }
-        setText("grid-size-help", "Inventaire limité à une taille d'ordre. Retour à plat avant une nouvelle entrée.");
         if (strategy === "mid") {
             setText("grid-heading", "MID Order Book");
             setText("grid-description", "Market making classique : achat et vente à une distance fixe du mid, réglable en bps.");
-            setText("grid-strategy-hint", "Même exécution que BBO. Prix = mid ± distance, arrondis au tick, en post-only.");
             return;
         }
         setText("grid-heading", "BBO Order Book");
         setText("grid-description", "Quotes au meilleur bid et ask du carnet, avec contrôles de risque et d'inventaire.");
-        setText("grid-strategy-hint", "Achat au meilleur bid, vente au meilleur ask. Suivi à chaque tick; suspension si un contrôle de risque bloque.");
     }
 
-    function updateWcButtons() {
-        const startBtn = $("#wc-start-btn");
-        const stopBtn = $("#wc-stop-btn");
-        if (startBtn) startBtn.disabled = wcRunning || startBtn.getAttribute("aria-busy") === "true";
-        if (stopBtn) stopBtn.disabled = !wcRunning || stopBtn.getAttribute("aria-busy") === "true";
-        setRunState("wc", wcRunning);
+    function updateOutcomeButtons() {
+        const startBtn = $("#outcome-start-btn");
+        const stopBtn = $("#outcome-stop-btn");
+        if (startBtn) startBtn.disabled = outcomeRunning || startBtn.getAttribute("aria-busy") === "true";
+        if (stopBtn) stopBtn.disabled = !outcomeRunning || stopBtn.getAttribute("aria-busy") === "true";
+        setRunState("outcome", outcomeRunning);
     }
 
     function switchPage(pageName) {
@@ -264,6 +261,7 @@
             page.classList.toggle("active", active);
             page.hidden = !active;
         });
+        window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
     async function fetchJson(url, options = {}) {
@@ -286,67 +284,166 @@
         return data;
     }
 
-    function logoText(key) {
-        const cleaned = String(key || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const DEX_ORDER = ["xyz", "para", "mkts", "io"];
+    let activeGridDex = "all";
+
+    function logoText(ticker) {
+        const cleaned = String(ticker || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
         return (cleaned.slice(0, 2) || "?").padEnd(2, " ");
+    }
+
+    function stripAccents(value) {
+        return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    }
+
+    function formatCompactUSD(value) {
+        const num = Number(value || 0);
+        if (!Number.isFinite(num) || num <= 0) return "—";
+        if (num >= 1e9) return `$${(num / 1e9).toFixed(1)}B`;
+        if (num >= 1e6) return `$${(num / 1e6).toFixed(1)}M`;
+        if (num >= 1e3) return `$${(num / 1e3).toFixed(0)}K`;
+        return `$${num.toFixed(0)}`;
+    }
+
+    function paintTokenLogo(box, token) {
+        if (!box) return;
+        box.replaceChildren();
+        if (!token.logoUrl) {
+            box.textContent = token.logo;
+            return;
+        }
+        const img = document.createElement("img");
+        img.alt = "";
+        img.loading = "lazy";
+        img.decoding = "async";
+        img.addEventListener("error", () => {
+            img.remove();
+            box.textContent = token.logo;
+        }, { once: true });
+        img.src = token.logoUrl;
+        box.append(img);
+    }
+
+    function tokenLogoNode(token, className = "token-logo") {
+        const box = document.createElement("span");
+        box.className = className;
+        paintTokenLogo(box, token);
+        return box;
     }
 
     function normalizeToken(raw) {
         if (typeof raw === "string") {
             return {
-                key: raw,
+                key: raw.toUpperCase(),
                 symbol: `xyz:${raw}`,
+                dex: "xyz",
+                ticker: raw.toUpperCase(),
+                name: `xyz:${raw}`,
                 logo: logoText(raw),
+                logoUrl: "",
                 mid: 0,
                 maxLeverage: null,
                 isCross: true,
+                dayVolume: 0,
             };
         }
-        const key = String(raw?.key || raw?.symbol || "SP500").split(":").pop().toUpperCase();
+        const symbol = String(raw?.symbol || "").trim();
+        const symbolParts = symbol.includes(":") ? symbol.split(":", 2) : ["xyz", symbol];
+        const key = String(raw?.key || symbol || "SP500").trim().toUpperCase();
+        const dex = String(raw?.dex || symbolParts[0] || "xyz").toLowerCase();
+        const ticker = String(raw?.ticker || symbolParts[1] || key.split(":").pop() || key).toUpperCase();
         return {
             key,
-            symbol: raw?.symbol || `xyz:${key}`,
-            logo: raw?.logo || logoText(key),
+            symbol: symbol || `${dex}:${ticker}`,
+            dex,
+            ticker,
+            name: String(raw?.name || symbol || `${dex}:${ticker}`),
+            logo: raw?.logo || logoText(ticker),
+            logoUrl: raw?.logo_url || raw?.logoUrl || "",
             mid: Number(raw?.mid || 0),
             maxLeverage: raw?.max_leverage || raw?.maxLeverage || null,
             isCross: raw?.is_cross !== false,
+            dayVolume: Number(raw?.day_volume || 0),
         };
     }
 
     function tokenSubtitle(token) {
-        const parts = [token.symbol];
+        const parts = [token.dex || "xyz"];
+        if (token.dayVolume > 0) parts.push(`${formatCompactUSD(token.dayVolume)} vol`);
         if (token.mid) parts.push(formatPrice(token.mid));
         if (token.maxLeverage) parts.push(`${token.maxLeverage}x`);
         if (!token.isCross) parts.push("isolated");
-        return parts.join(" / ");
+        return parts.join(" · ");
     }
 
     function setSelectedGridToken(token) {
         selectedGridToken = normalizeToken(token);
         const hidden = $("#grid-token");
         if (hidden) hidden.value = selectedGridToken.key;
-        setText("grid-token-logo", selectedGridToken.logo);
-        setText("grid-token-name", selectedGridToken.key);
+        paintTokenLogo($("#grid-token-logo"), selectedGridToken);
+        setText("grid-token-name", selectedGridToken.ticker);
         setText("grid-token-symbol", tokenSubtitle(selectedGridToken));
         setText("grid-run-token", selectedGridToken.key);
         renderTokenOptions($("#grid-token-search")?.value || "");
     }
 
+    function gridDexCounts() {
+        const counts = new Map();
+        gridTokens.forEach((token) => counts.set(token.dex, (counts.get(token.dex) || 0) + 1));
+        const ordered = [
+            ...DEX_ORDER.filter((dex) => counts.has(dex)),
+            ...Array.from(counts.keys()).filter((dex) => !DEX_ORDER.includes(dex)).sort(),
+        ];
+        return { counts, ordered };
+    }
+
+    function renderDexChips() {
+        const container = $("#grid-token-dexes");
+        if (!container) return;
+        const { counts, ordered } = gridDexCounts();
+        if (activeGridDex !== "all" && !counts.has(activeGridDex)) activeGridDex = "all";
+        const entries = [["all", "Tous", gridTokens.length],
+            ...ordered.map((dex) => [dex, dex, counts.get(dex)])];
+        container.replaceChildren(...entries.map(([dex, label, count]) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "dex-chip";
+            button.dataset.dex = dex;
+            button.setAttribute("aria-pressed", activeGridDex === dex ? "true" : "false");
+            button.textContent = `${label} ${count}`;
+            button.addEventListener("click", (event) => {
+                event.stopPropagation();
+                activeGridDex = dex;
+                renderDexChips();
+                renderTokenOptions($("#grid-token-search")?.value || "");
+                $("#grid-token-search")?.focus();
+            });
+            return button;
+        }));
+    }
+
     function renderTokenOptions(filter = "") {
         const container = $("#grid-token-options");
         if (!container) return;
-        const needle = filter.trim().toLowerCase();
-        const shown = gridTokens
-            .filter((token) => {
-                if (!needle) return true;
-                return `${token.key} ${token.symbol}`.toLowerCase().includes(needle);
-            })
-            .slice(0, 140);
+        const terms = stripAccents(filter).toLowerCase().split(/\s+/).filter(Boolean);
+        const shown = gridTokens.filter((token) => {
+            if (activeGridDex !== "all" && token.dex !== activeGridDex) return false;
+            if (terms.length === 0) return true;
+            const haystack = stripAccents(
+                `${token.ticker} ${token.name} ${token.symbol} ${token.dex} ${token.key}`
+            ).toLowerCase();
+            return terms.every((term) => haystack.includes(term));
+        });
+
+        const filtering = terms.length > 0 || activeGridDex !== "all";
+        setText("grid-token-results", filtering
+            ? `${shown.length} résultat${shown.length > 1 ? "s" : ""}`
+            : `${shown.length} marché${shown.length > 1 ? "s" : ""}`);
 
         if (shown.length === 0) {
             const empty = document.createElement("div");
             empty.className = "empty-option";
-            empty.textContent = "Aucun token trouvé";
+            empty.textContent = "Aucun marché trouvé";
             container.replaceChildren(empty);
             return;
         }
@@ -360,23 +457,34 @@
                 button.tabIndex = index === 0 ? 0 : -1;
                 button.setAttribute("aria-selected", token.key === selectedGridToken.key ? "true" : "false");
                 button.dataset.token = token.key;
+                button.dataset.dex = token.dex;
 
-                const logo = document.createElement("span");
-                logo.className = "token-logo";
-                logo.textContent = token.logo;
+                const logo = tokenLogoNode(token);
 
                 const meta = document.createElement("span");
                 meta.className = "token-meta";
 
+                const title = document.createElement("span");
+                title.className = "token-title";
                 const name = document.createElement("strong");
-                name.textContent = token.key;
+                name.textContent = token.ticker;
+                const dex = document.createElement("span");
+                dex.className = "token-dex";
+                dex.textContent = token.dex;
+                title.append(name, dex);
 
                 const subtitle = document.createElement("span");
+                subtitle.className = "token-subtitle";
                 subtitle.textContent = tokenSubtitle(token);
 
-                meta.append(name, subtitle);
-                button.append(logo, meta);
-                button.addEventListener("click", () => {
+                const volume = document.createElement("span");
+                volume.className = "token-vol";
+                volume.textContent = token.dayVolume > 0 ? formatCompactUSD(token.dayVolume) : "";
+
+                meta.append(title, subtitle);
+                button.append(logo, meta, volume);
+                button.addEventListener("click", (event) => {
+                    event.stopPropagation();
                     setSelectedGridToken(token);
                     closeTokenPicker(true);
                 });
@@ -392,6 +500,7 @@
         picker.classList.add("open");
         $("#grid-token-menu").hidden = false;
         trigger.setAttribute("aria-expanded", "true");
+        renderDexChips();
         renderTokenOptions($("#grid-token-search")?.value || "");
         requestAnimationFrame(() => $("#grid-token-search")?.focus());
     }
@@ -406,43 +515,174 @@
         if (restoreFocus) trigger.focus();
     }
 
-    /* --------- WorldCup market picker (même composant que le token picker) --------- */
-    const WC_MARKETS = [
-        { key: "ALL", label: "Tous les marchés", logo: "WC", subtitle: "panier HIP-4 · outcome NO" },
-        { key: "France", label: "France", logo: "FR", subtitle: "2026 champion · NO" },
-        { key: "Argentina", label: "Argentina", logo: "AR", subtitle: "2026 champion · NO" },
-        { key: "Spain", label: "Spain", logo: "ES", subtitle: "2026 champion · NO" },
-        { key: "England", label: "England", logo: "EN", subtitle: "2026 champion · NO" },
-        { key: "Portugal", label: "Portugal", logo: "PT", subtitle: "2026 champion · NO" },
-        { key: "Germany", label: "Germany", logo: "DE", subtitle: "2026 champion · NO" },
-        { key: "Brazil", label: "Brazil", logo: "BR", subtitle: "2026 champion · NO" },
-        { key: "Netherlands", label: "Netherlands", logo: "NL", subtitle: "2026 champion · NO" },
-        { key: "USA", label: "USA", logo: "US", subtitle: "2026 champion · NO" },
-        { key: "Norway", label: "Norway", logo: "NO", subtitle: "2026 champion · NO" },
-        { key: "Morocco", label: "Morocco", logo: "MA", subtitle: "2026 champion · NO" },
-    ];
-    let selectedWcMarket = WC_MARKETS[0];
+    /* --------- Outcome market picker (catalogue HIP-4 dynamique) --------- */
+    const OUTCOME_ALL_MARKET = {
+        key: "ALL",
+        name: "Tous les marchés",
+        logo: "OU",
+        logoUrl: "",
+        category: "all",
+        categoryLabel: "Out",
+        questionTitle: "",
+        subcategory: "",
+        sides: [],
+        sideIndex: 1,
+        sideName: "No",
+        mid0: 0,
+        mid1: 0,
+        underlying: "",
+        isFallback: false,
+    };
+    let outcomeMarkets = [];
+    let outcomeCategories = [];
+    let outcomeCatalogLoaded = false;
+    let outcomeCatalogPromise = null;
+    let selectedOutcomeMarket = OUTCOME_ALL_MARKET;
+    let activeOutcomeCategory = "all";
 
-    function setSelectedWcMarket(market) {
-        selectedWcMarket = market;
-        const hidden = $("#wc-market");
-        if (hidden) hidden.value = market.key;
-        setText("wc-market-logo", market.logo);
-        setText("wc-market-name", market.label);
-        setText("wc-market-symbol", market.subtitle);
-        renderWcMarketOptions($("#wc-market-search")?.value || "");
+    function normalizeOutcome(raw) {
+        const sides = Array.isArray(raw?.sides) && raw.sides.length > 0
+            ? raw.sides.map((side) => String(side))
+            : ["Yes", "No"];
+        const id = Number(raw?.id || 0) || null;
+        return {
+            id,
+            key: String(raw?.key || (id ? `#${id}1` : "")),
+            name: String(raw?.name || (id ? `Outcome ${id}` : "Outcome")),
+            questionTitle: String(raw?.question_title || ""),
+            category: String(raw?.category || "other").toLowerCase(),
+            categoryLabel: String(raw?.category_label || raw?.category || "Autres"),
+            subcategory: String(raw?.subcategory || ""),
+            sides,
+            sideIndex: Number(raw?.side_index ?? 1),
+            sideName: String(raw?.side_name || sides[1] || "No"),
+            mid0: Number(raw?.mid0 || 0),
+            mid1: Number(raw?.mid1 || 0),
+            underlying: String(raw?.underlying || ""),
+            isFallback: Boolean(raw?.is_fallback),
+            logo: String(raw?.logo || logoText(raw?.name || "")),
+            logoUrl: String(raw?.logo_url || ""),
+        };
     }
 
-    function renderWcMarketOptions(filter = "") {
-        const container = $("#wc-market-options");
-        if (!container) return;
-        const needle = filter.trim().toLowerCase();
-        const shown = WC_MARKETS.filter((market) => {
-            if (!needle) return true;
-            return `${market.key} ${market.label}`.toLowerCase().includes(needle);
-        });
+    function outcomeProbability(market, sideIndex) {
+        if (!market || market.key === "ALL") return "—";
+        const value = sideIndex === 0 ? market.mid0 : market.mid1;
+        const other = sideIndex === 0 ? market.mid1 : market.mid0;
+        if ((!Number.isFinite(value) || value <= 0) && (!Number.isFinite(other) || other <= 0)) return "—";
+        const pct = Math.max(0, value || 0) * 100;
+        return `${pct.toFixed(pct >= 10 ? 1 : 2)}%`;
+    }
 
-        if (shown.length === 0) {
+    function outcomeTriggerSubtitle(market) {
+        if (!market || market.key === "ALL") {
+            return outcomeMarkets.length > 0
+                ? `${outcomeMarkets.length} marchés · deployer out`
+                : "catalogue HIP-4 · out";
+        }
+        const parts = [];
+        if (market.questionTitle) parts.push(market.questionTitle);
+        else if (market.categoryLabel) parts.push(market.categoryLabel);
+        const prob = outcomeProbability(market, market.sideIndex);
+        if (prob !== "—") parts.push(`${market.sideName} ${prob}`);
+        return parts.join(" · ") || "marché HIP-4";
+    }
+
+    function outcomeOptionSubtitle(market) {
+        if (market.key === "ALL") return "Panier complet du deployer out";
+        if (market.questionTitle) return market.questionTitle;
+        const parts = [];
+        if (market.underlying) parts.push(market.underlying);
+        if (market.subcategory && market.subcategory.toLowerCase() !== "n/a") {
+            parts.push(market.subcategory);
+        }
+        if (parts.length === 0) parts.push(market.categoryLabel);
+        return parts.filter(Boolean).join(" · ");
+    }
+
+    function paintOutcomeLogo(box, market) {
+        paintTokenLogo(box, { logo: market.logo || "?", logoUrl: market.logoUrl || "" });
+    }
+
+    function outcomeCategoryLabel(key) {
+        const declared = outcomeCategories.find((category) => category.key === key);
+        if (declared?.label) return declared.label;
+        const row = outcomeMarkets.find((market) => market.category === key);
+        return row?.categoryLabel || key;
+    }
+
+    function renderOutcomeCategoryChips() {
+        const container = $("#outcome-market-categories");
+        if (!container) return;
+        const counts = new Map();
+        outcomeMarkets.forEach((market) => {
+            counts.set(market.category, (counts.get(market.category) || 0) + 1);
+        });
+        if (activeOutcomeCategory !== "all" && !counts.has(activeOutcomeCategory)) {
+            activeOutcomeCategory = "all";
+        }
+        const keys = ["all"];
+        outcomeCategories.forEach((category) => {
+            if (counts.has(category.key) && !keys.includes(category.key)) keys.push(category.key);
+        });
+        counts.forEach((_, key) => {
+            if (!keys.includes(key)) keys.push(key);
+        });
+        const entries = keys.map((key) => [
+            key,
+            key === "all" ? "Tous" : outcomeCategoryLabel(key),
+            key === "all" ? outcomeMarkets.length : counts.get(key) || 0,
+        ]);
+        container.replaceChildren(...entries.map(([key, label, count]) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "dex-chip";
+            button.dataset.category = key;
+            button.setAttribute("aria-pressed", activeOutcomeCategory === key ? "true" : "false");
+            button.textContent = `${label} ${count}`;
+            button.addEventListener("click", (event) => {
+                event.stopPropagation();
+                activeOutcomeCategory = key;
+                renderOutcomeCategoryChips();
+                renderOutcomeMarketOptions($("#outcome-market-search")?.value || "");
+                $("#outcome-market-search")?.focus();
+            });
+            return button;
+        }));
+    }
+
+    function setSelectedOutcomeMarket(market) {
+        selectedOutcomeMarket = market || OUTCOME_ALL_MARKET;
+        const hidden = $("#outcome-market");
+        if (hidden) hidden.value = selectedOutcomeMarket.key;
+        paintOutcomeLogo($("#outcome-market-logo"), selectedOutcomeMarket);
+        setText("outcome-market-name", selectedOutcomeMarket.name);
+        setText("outcome-market-symbol", outcomeTriggerSubtitle(selectedOutcomeMarket));
+        renderOutcomeMarketOptions($("#outcome-market-search")?.value || "");
+    }
+
+    function renderOutcomeMarketOptions(filter = "") {
+        const container = $("#outcome-market-options");
+        if (!container) return;
+        const terms = stripAccents(filter).toLowerCase().split(/\s+/).filter(Boolean);
+        const shown = outcomeMarkets.filter((market) => {
+            if (activeOutcomeCategory !== "all" && market.category !== activeOutcomeCategory) return false;
+            if (terms.length === 0) return true;
+            const haystack = stripAccents(
+                `${market.name} ${market.questionTitle} ${market.categoryLabel} `
+                + `${market.subcategory} ${market.sides.join(" ")} ${market.key} `
+                + `${market.id || ""} ${market.underlying}`
+            ).toLowerCase();
+            return terms.every((term) => haystack.includes(term));
+        });
+        const showBasket = terms.length === 0 && activeOutcomeCategory === "all";
+        const options = showBasket ? [OUTCOME_ALL_MARKET, ...shown] : shown;
+        const filtering = terms.length > 0 || activeOutcomeCategory !== "all";
+        setText("outcome-market-results", filtering
+            ? `${shown.length} résultat${shown.length > 1 ? "s" : ""}`
+            : `${shown.length} marché${shown.length > 1 ? "s" : ""}`);
+
+        if (options.length === 0) {
             const empty = document.createElement("div");
             empty.className = "empty-option";
             empty.textContent = "Aucun marché trouvé";
@@ -451,56 +691,107 @@
         }
 
         container.replaceChildren(
-            ...shown.map((market, index) => {
+            ...options.map((market, index) => {
                 const button = document.createElement("button");
                 button.type = "button";
                 button.className = "token-option";
                 button.setAttribute("role", "option");
                 button.tabIndex = index === 0 ? 0 : -1;
-                button.setAttribute("aria-selected", market.key === selectedWcMarket.key ? "true" : "false");
+                button.setAttribute("aria-selected", market.key === selectedOutcomeMarket.key ? "true" : "false");
                 button.dataset.market = market.key;
 
-                const logo = document.createElement("span");
-                logo.className = "token-logo";
-                logo.textContent = market.logo;
+                const logo = tokenLogoNode({ logo: market.logo, logoUrl: market.logoUrl });
 
                 const meta = document.createElement("span");
                 meta.className = "token-meta";
 
+                const title = document.createElement("span");
+                title.className = "token-title";
                 const name = document.createElement("strong");
-                name.textContent = market.label;
+                name.textContent = market.name;
+                const badge = document.createElement("span");
+                badge.className = "token-dex";
+                badge.textContent = market.key === "ALL" ? "out" : (market.categoryLabel || "out");
+                title.append(name, badge);
 
                 const subtitle = document.createElement("span");
-                subtitle.textContent = market.subtitle;
+                subtitle.className = "token-subtitle";
+                subtitle.textContent = outcomeOptionSubtitle(market);
 
-                meta.append(name, subtitle);
-                button.append(logo, meta);
-                button.addEventListener("click", () => {
-                    setSelectedWcMarket(market);
-                    closeWcMarketPicker(true);
+                const price = document.createElement("span");
+                price.className = "token-vol";
+                price.textContent = market.key === "ALL"
+                    ? `${outcomeMarkets.length}`
+                    : `${market.sideName} ${outcomeProbability(market, market.sideIndex)}`;
+
+                meta.append(title, subtitle);
+                button.append(logo, meta, price);
+                button.addEventListener("click", (event) => {
+                    event.stopPropagation();
+                    setSelectedOutcomeMarket(market);
+                    closeOutcomeMarketPicker(true);
                 });
                 return button;
             })
         );
     }
 
-    function openWcMarketPicker() {
-        const picker = $("#wc-market-picker");
-        const trigger = $("#wc-market-trigger");
-        if (!picker || !trigger) return;
-        picker.classList.add("open");
-        $("#wc-market-menu").hidden = false;
-        trigger.setAttribute("aria-expanded", "true");
-        renderWcMarketOptions($("#wc-market-search")?.value || "");
-        requestAnimationFrame(() => $("#wc-market-search")?.focus());
+    async function loadOutcomeMarkets() {
+        setText("outcome-market-count", "Chargement…");
+        try {
+            const data = await fetchJson(`${API_BASE}/api/outcomes/markets`);
+            const markets = Array.isArray(data.outcomes) ? data.outcomes.map(normalizeOutcome) : [];
+            if (markets.length === 0) {
+                throw new Error(data.error || "Aucun marché HIP-4 disponible");
+            }
+            outcomeMarkets = markets;
+            outcomeCategories = Array.isArray(data.categories)
+                ? data.categories.filter((category) => category && category.key)
+                : [];
+            outcomeCatalogLoaded = true;
+            activeOutcomeCategory = "all";
+            renderOutcomeCategoryChips();
+            const current = outcomeMarkets.find((market) => market.key === selectedOutcomeMarket.key);
+            setSelectedOutcomeMarket(current || OUTCOME_ALL_MARKET);
+            setText("outcome-market-count", `${markets.length} marchés`);
+            return true;
+        } catch (error) {
+            outcomeCatalogLoaded = false;
+            setText("outcome-market-count", "Indisponible");
+            renderOutcomeCategoryChips();
+            setSelectedOutcomeMarket(selectedOutcomeMarket);
+            showToast("error", "Outcome catalog unavailable", error.message);
+            return false;
+        }
     }
 
-    function closeWcMarketPicker(restoreFocus = false) {
-        const picker = $("#wc-market-picker");
-        const trigger = $("#wc-market-trigger");
+    function ensureOutcomeCatalog() {
+        if (outcomeCatalogLoaded || outcomeCatalogPromise) return outcomeCatalogPromise;
+        outcomeCatalogPromise = loadOutcomeMarkets().finally(() => {
+            outcomeCatalogPromise = null;
+        });
+        return outcomeCatalogPromise;
+    }
+
+    function openOutcomeMarketPicker() {
+        const picker = $("#outcome-market-picker");
+        const trigger = $("#outcome-market-trigger");
+        if (!picker || !trigger) return;
+        picker.classList.add("open");
+        $("#outcome-market-menu").hidden = false;
+        trigger.setAttribute("aria-expanded", "true");
+        ensureOutcomeCatalog();
+        renderOutcomeCategoryChips();
+        renderOutcomeMarketOptions($("#outcome-market-search")?.value || "");
+        requestAnimationFrame(() => $("#outcome-market-search")?.focus());
+    }
+
+    function closeOutcomeMarketPicker(restoreFocus = false) {
+        const picker = $("#outcome-market-picker");
+        const trigger = $("#outcome-market-trigger");
         if (!picker || !trigger) return;
         picker.classList.remove("open");
-        $("#wc-market-menu").hidden = true;
+        $("#outcome-market-menu").hidden = true;
         trigger.setAttribute("aria-expanded", "false");
         if (restoreFocus) trigger.focus();
     }
@@ -542,12 +833,22 @@
             const data = await fetchJson(`${API_BASE}/api/grid/tokens`);
             const tokens = Array.isArray(data.tokens) ? data.tokens.map(normalizeToken) : [];
             if (tokens.length === 0) return;
-            gridTokens = tokens.sort((a, b) => a.key.localeCompare(b.key));
-            const preferred = gridTokens.find((token) => token.key === selectedGridToken.key) || gridTokens[0];
+            // Marchés classés par volume 24 h décroissant (puis ticker/dex).
+            gridTokens = tokens.sort((a, b) =>
+                (b.dayVolume - a.dayVolume)
+                || a.ticker.localeCompare(b.ticker)
+                || a.dex.localeCompare(b.dex));
+            const preferred = gridTokens.find((token) => token.key === selectedGridToken.key)
+                || gridTokens.find((token) => token.key === "SP500")
+                || gridTokens[0];
+            activeGridDex = "all";
+            renderDexChips();
             setSelectedGridToken(preferred);
-            setText("grid-token-count", `${gridTokens.length} tokens`);
+            const dexCount = new Set(gridTokens.map((token) => token.dex)).size;
+            setText("grid-token-count", `${gridTokens.length} marchés · ${dexCount} dex`);
         } catch (error) {
             gridTokens = [selectedGridToken];
+            renderDexChips();
             setSelectedGridToken(selectedGridToken);
             setText("grid-token-count", "Fallback");
             showToast("error", "Token catalog unavailable", error.message);
@@ -556,12 +857,12 @@
 
     async function loadInitialStatus() {
         try {
-            const [grid, wc] = await Promise.all([
+            const [grid, outcome] = await Promise.all([
                 fetchJson(`${API_BASE}/api/grid/status`),
-                fetchJson(`${API_BASE}/api/worldcup/status`),
+                fetchJson(`${API_BASE}/api/outcomes/status`),
             ]);
             updateGridDashboard(grid);
-            updateWorldcupDashboard(wc);
+            updateOutcomeDashboard(outcome);
         } catch (error) {
             showToast("error", "Status unavailable", error.message);
         }
@@ -600,7 +901,7 @@
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === "grid_stats") updateGridDashboard(data);
-                if (data.type === "worldcup_stats") updateWorldcupDashboard(data);
+                if (data.type === "worldcup_stats") updateOutcomeDashboard(data);
             } catch (error) {
             }
         };
@@ -685,6 +986,7 @@
                   <div class="bot-stat"><span>Position</span><strong data-f="pos">—</strong></div>
                   <div class="bot-stat"><span>Spread</span><strong data-f="spread">—</strong></div>
                   <div class="bot-stat"><span>Markout B/A</span><strong data-f="markout">—</strong></div>
+                  <div class="bot-stat"><span>Edge requis / coté</span><strong data-f="edge">—</strong></div>
                 </div>
                 <footer class="bot-card-action" data-f="action"></footer>
               </article>`).join("");
@@ -722,7 +1024,8 @@
             set("actions-rate", b.order_actions_per_hour == null ? "—" : Number(b.order_actions_per_hour).toFixed(1));
             set("pos", formatUSD(b.position_usd));
             set("spread", formatBPS(b.spread_bps));
-            set("markout", b.strategy === "freqtrade" ? "—" : `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
+            set("markout", `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
+            set("edge", b.edge_required_bps ? `${formatBPS(b.edge_required_bps)} / ${formatBPS(b.quote_half_spread_bps)}` : "—");
             set("action", b.error ? `⚠ ${b.error}` : (b.action || ""));
             const stopBtn = card.querySelector(".bot-card-stop");
             if (stopBtn) {
@@ -735,28 +1038,28 @@
         });
     }
 
-    function updateWorldcupDashboard(data) {
+    function updateOutcomeDashboard(data) {
         if (!data || data.type !== "worldcup_stats") return;
 
-        setText("wc-duration", data.duration || "00:00:00");
-        setText("wc-run-duration", data.duration || "00:00:00");
-        setText("wc-volume", formatUSD(data.volume_usd));
-        setText("wc-fees", formatUSD(data.fees));
-        setText("wc-cost-1m", data.volume_usd > 0 ? formatUSD(data.cost_per_1m) : "—");
-        setText("wc-fills", String(data.fills || 0));
-        setText("wc-mid-price", formatPrice(data.mid_price));
-        setText("wc-spread-display", formatBPS(data.spread_bps));
-        setText("wc-position", formatUSD(data.position_usd));
+        setText("outcome-duration", data.duration || "00:00:00");
+        setText("outcome-run-duration", data.duration || "00:00:00");
+        setText("outcome-volume", formatUSD(data.volume_usd));
+        setText("outcome-fees", formatUSD(data.fees));
+        setText("outcome-cost-1m", data.volume_usd > 0 ? formatUSD(data.cost_per_1m) : "—");
+        setText("outcome-fills", String(data.fills || 0));
+        setText("outcome-mid-price", formatPrice(data.mid_price));
+        setText("outcome-spread-display", formatBPS(data.spread_bps));
+        setText("outcome-position", formatUSD(data.position_usd));
 
-        const pnl = $("#wc-pnl");
+        const pnl = $("#outcome-pnl");
         if (pnl) {
             pnl.textContent = formatUSD(data.net_pnl, true);
             setPnLColor(pnl, data.net_pnl);
         }
 
         if (typeof data.running === "boolean") {
-            wcRunning = data.running;
-            updateWcButtons();
+            outcomeRunning = data.running;
+            updateOutcomeButtons();
         }
     }
 
@@ -829,55 +1132,57 @@
         }
     }
 
-    async function startWorldcupBot() {
-        const order_size_usd = Number.parseFloat($("#wc-order-size")?.value) || 50;
+    async function startOutcomeBot() {
+        const order_size_usd = Number.parseFloat($("#outcome-order-size")?.value) || 50;
         // En %, même convention que --max-spread-pct (0.02 = 0.02% = 2 bps)
-        const max_spread_pct = Number.parseFloat($("#wc-spread")?.value);
-        const max_position_usd = Number.parseFloat($("#wc-max-pos")?.value) || 250;
-        const market = $("#wc-market")?.value || "ALL";
+        const max_spread_pct = Number.parseFloat($("#outcome-spread")?.value);
+        const max_position_usd = Number.parseFloat($("#outcome-max-pos")?.value) || 250;
+        const market = $("#outcome-market")?.value || "ALL";
 
-        if (!validateMin("wc", [
-            { selector: "#wc-order-size", min: 10, fallback: order_size_usd, message: "Order USD must be at least 10." },
-            { selector: "#wc-max-pos", min: 10, fallback: max_position_usd, message: "Max Pos USD must be at least 10." },
-            { selector: "#wc-spread", min: 0, message: "Le spread doit être un nombre positif ou nul." },
+        if (!validateMin("outcome", [
+            { selector: "#outcome-order-size", min: 10, fallback: order_size_usd, message: "Order USD must be at least 10." },
+            { selector: "#outcome-max-pos", min: 10, fallback: max_position_usd, message: "Max Pos USD must be at least 10." },
+            { selector: "#outcome-spread", min: 0, message: "Le spread doit être un nombre positif ou nul." },
         ])) {
-            showToast("error", "Check WorldCup settings", "Correct the highlighted field before starting.");
+            showToast("error", "Check Outcome settings", "Correct the highlighted field before starting.");
             return;
         }
 
-        setBusy("wc-start-btn", true);
+        setBusy("outcome-start-btn", true);
 
         try {
-            await fetchJson(`${API_BASE}/api/worldcup/start`, {
+            await fetchJson(`${API_BASE}/api/outcomes/start`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ order_size_usd, max_spread_pct, max_position_usd, market }),
             });
-            wcRunning = true;
-            updateWcButtons();
-            const marketTxt = market === "ALL" ? "tous les marchés" : market;
-            showToast("success", "WorldCup bot started", `${marketTxt} · spread < ${max_spread_pct}%`);
+            outcomeRunning = true;
+            updateOutcomeButtons();
+            const marketTxt = market === "ALL"
+                ? (outcomeMarkets.length ? `tous les marchés (${outcomeMarkets.length})` : "tous les marchés")
+                : (selectedOutcomeMarket.name || market);
+            showToast("success", "Outcome bot started", `${marketTxt} · spread < ${max_spread_pct}%`);
         } catch (error) {
-            setFormError("wc", error.message);
-            showToast("error", "WorldCup start failed", error.message);
+            setFormError("outcome", error.message);
+            showToast("error", "Outcome start failed", error.message);
         } finally {
-            setBusy("wc-start-btn", false);
-            updateWcButtons();
+            setBusy("outcome-start-btn", false);
+            updateOutcomeButtons();
         }
     }
 
-    async function stopWorldcupBot() {
-        setBusy("wc-stop-btn", true);
+    async function stopOutcomeBot() {
+        setBusy("outcome-stop-btn", true);
         try {
-            await fetchJson(`${API_BASE}/api/worldcup/stop`, { method: "POST" });
-            wcRunning = false;
-            updateWcButtons();
-            showToast("info", "WorldCup bot stopped", "The strategy has been stopped.");
+            await fetchJson(`${API_BASE}/api/outcomes/stop`, { method: "POST" });
+            outcomeRunning = false;
+            updateOutcomeButtons();
+            showToast("info", "Outcome bot stopped", "The strategy has been stopped.");
         } catch (error) {
-            showToast("error", "WorldCup stop failed", error.message);
+            showToast("error", "Outcome stop failed", error.message);
         } finally {
-            setBusy("wc-stop-btn", false);
-            updateWcButtons();
+            setBusy("outcome-stop-btn", false);
+            updateOutcomeButtons();
         }
     }
 
@@ -888,6 +1193,7 @@
         if (appBooted) return;
         appBooted = true;
         loadGridTokens();
+        ensureOutcomeCatalog();
         loadInitialStatus();
         connectWebSocket();
     }
@@ -1032,7 +1338,7 @@
             }
         });
         bindPickerKeyboard("grid-token-menu", "grid-token-search", closeTokenPicker);
-        bindPickerKeyboard("wc-market-menu", "wc-market-search", closeWcMarketPicker);
+        bindPickerKeyboard("outcome-market-menu", "outcome-market-search", closeOutcomeMarketPicker);
 
         $("#grid-token-trigger")?.addEventListener("click", () => {
             const picker = $("#grid-token-picker");
@@ -1041,37 +1347,65 @@
         });
 
         $("#grid-token-search")?.addEventListener("input", (event) => {
+            const clear = $("#grid-token-search-clear");
+            if (clear) clear.hidden = !event.target.value;
             renderTokenOptions(event.target.value);
+        });
+
+        $("#grid-token-search-clear")?.addEventListener("click", () => {
+            const input = $("#grid-token-search");
+            if (input) {
+                input.value = "";
+                input.focus();
+            }
+            const clear = $("#grid-token-search-clear");
+            if (clear) clear.hidden = true;
+            renderTokenOptions("");
         });
 
         document.addEventListener("click", (event) => {
             const picker = $("#grid-token-picker");
             if (picker && !picker.contains(event.target)) closeTokenPicker();
-            const wcPicker = $("#wc-market-picker");
-            if (wcPicker && !wcPicker.contains(event.target)) closeWcMarketPicker();
+            const outcomePicker = $("#outcome-market-picker");
+            if (outcomePicker && !outcomePicker.contains(event.target)) closeOutcomeMarketPicker();
         });
 
-        $("#wc-market-trigger")?.addEventListener("click", () => {
-            const picker = $("#wc-market-picker");
-            if (picker?.classList.contains("open")) closeWcMarketPicker();
-            else openWcMarketPicker();
+        $("#outcome-market-trigger")?.addEventListener("click", () => {
+            const picker = $("#outcome-market-picker");
+            if (picker?.classList.contains("open")) closeOutcomeMarketPicker();
+            else openOutcomeMarketPicker();
         });
 
-        $("#wc-market-search")?.addEventListener("input", (event) => {
-            renderWcMarketOptions(event.target.value);
+        $("#outcome-market-search")?.addEventListener("input", (event) => {
+            const clear = $("#outcome-market-search-clear");
+            if (clear) clear.hidden = !event.target.value;
+            renderOutcomeMarketOptions(event.target.value);
         });
 
-        setSelectedWcMarket(selectedWcMarket);
+        $("#outcome-market-search-clear")?.addEventListener("click", () => {
+            const input = $("#outcome-market-search");
+            if (input) {
+                input.value = "";
+                input.focus();
+            }
+            const clear = $("#outcome-market-search-clear");
+            if (clear) clear.hidden = true;
+            renderOutcomeMarketOptions("");
+        });
+
+        renderOutcomeCategoryChips();
+        setSelectedOutcomeMarket(selectedOutcomeMarket);
 
         $("#grid-start-btn")?.addEventListener("click", startGridBot);
         $("#grid-stop-btn")?.addEventListener("click", () => stopGridBot());
-        $("#wc-start-btn")?.addEventListener("click", startWorldcupBot);
-        $("#wc-stop-btn")?.addEventListener("click", stopWorldcupBot);
+        $("#outcome-start-btn")?.addEventListener("click", startOutcomeBot);
+        $("#outcome-stop-btn")?.addEventListener("click", stopOutcomeBot);
 
         gridTokens = [selectedGridToken];
+        renderDexChips();
         setSelectedGridToken(selectedGridToken);
         updateGridButtons();
-        updateWcButtons();
+        updateOutcomeButtons();
 
         $("#access-code-submit")?.addEventListener("click", submitAccessCode);
         $("#access-code-input")?.addEventListener("keydown", (event) => {

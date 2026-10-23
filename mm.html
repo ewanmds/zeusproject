@@ -1,0 +1,2270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MEGA Trador</title>
+  <meta property="og:title" content="TRADOOR" />
+  <meta property="og:description" content="Market Making • HIP-3 • Real-time Risk" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://tradoor0.xyz/" />
+  <meta property="og:image" content="https://tradoor0.xyz/web/share-cover.jpg?v=6" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="TRADOOR" />
+  <meta name="twitter:description" content="Market Making • HIP-3 • Real-time Risk" />
+  <meta name="twitter:image" content="https://tradoor0.xyz/web/share-cover.jpg?v=6" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet" />
+  <link rel="icon" type="image/svg+xml" href="/web/tradoor-icon.svg" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/web/tradoor-icon-180.png" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/web/vendor/three/three.module.js",
+      "three/addons/": "/web/vendor/three/examples/jsm/"
+    }
+  }
+  </script>
+  <link rel="stylesheet" href="/web/styles.css?v=20261020_1" />
+  <link rel="stylesheet" href="/web/outcomes.css?v=20260906_2" />
+  <!-- Adaptive layer — must load last so its media queries win the cascade. -->
+  <link rel="stylesheet" href="/web/responsive.css?v=20261020_1" />
+</head>
+<body>
+  <div id="boot_loader" aria-live="polite" aria-busy="true">
+    <div id="boot_scanlines"></div>
+    <div id="boot_three_wrap">
+      <canvas id="boot_three_canvas"></canvas>
+    </div>
+    <div id="boot_textline">
+      <div id="boot_glitch" aria-label="TRADOOR loading"></div>
+      <div id="boot_cursor" aria-hidden="true"></div>
+    </div>
+    <div id="boot_subtext">initializing</div>
+  </div>
+  <div id="boot_exit_sweep" aria-hidden="true"></div>
+  <canvas id="galaxy-bg-canvas"></canvas>
+  <div id="sky_dim_overlay" aria-hidden="true"></div>
+  <div id="cursor-sun"></div>
+  <canvas id="click-spark-canvas" aria-hidden="true"></canvas>
+  <div id="hyperspace_overlay" aria-hidden="true">
+    <canvas id="hyperspace_canvas"></canvas>
+    <div class="hyperspace-glow"></div>
+    <div class="hyperspace-vignette"></div>
+    <div class="hyperspace-flash"></div>
+  </div>
+  <div class="app">
+    <header class="header">
+      <div class="hero-box">
+        <a id="logo_home_link" class="title" href="/" aria-label="Home">
+          <img src="/web/tradoor-logo.svg" alt="TRADOOR" class="header-logo-svg" />
+        </a>
+      </div>
+      <nav class="header-nav" id="header_nav">
+        <div class="header-nav-item">
+          <button class="header-nav-btn header-nav-btn--orange" type="button">Analytics <span class="nav-chevron">▾</span></button>
+          <div class="header-dropdown menu-section-card--orange">
+            <button id="menu_open_stats" type="button" class="btn menu-item-btn">Tradoor stats</button>
+            <a href="https://hypurrintel.xyz/" target="_blank" rel="noopener noreferrer" class="btn menu-item-btn menu-item-link">Hyperliquid stats</a>
+            <a href="https://loris.tools/hip3" target="_blank" rel="noopener noreferrer" class="btn menu-item-btn menu-item-link">HIP 3 stats</a>
+            <a href="https://defillama.com/protocol/extended#information" target="_blank" rel="noopener noreferrer" class="btn menu-item-btn menu-item-link">Extended stats</a>
+          </div>
+        </div>
+        <div class="header-nav-item">
+          <button class="header-nav-btn header-nav-btn--blue" type="button">Tools <span class="nav-chevron">▾</span></button>
+          <div class="header-dropdown menu-section-card--blue">
+            <a href="/points" class="btn menu-item-btn menu-item-btn--icon"><img src="/web/tradoor-icon.svg" alt="" class="menu-item-icon" aria-hidden="true"><span class="menu-item-glitch">Points</span></a>
+            <button id="menu_open_hipvol" type="button" class="btn menu-item-btn">HIP-4 volume</button>
+          </div>
+        </div>
+        <div class="header-nav-divider"></div>
+        <div class="header-nav-item">
+          <button id="menu_open_referral" type="button" class="header-nav-btn header-nav-btn--referral">Referral</button>
+        </div>
+        <div class="header-nav-item">
+          <a href="/points" class="header-nav-btn header-nav-btn--tpoints" title="Tradoor Points"><span class="tpoints-spark" aria-hidden="true"></span>Tpoints</a>
+        </div>
+        <div class="header-nav-item">
+          <button id="menu_open_milestones" type="button" class="header-nav-btn header-nav-btn--milestones hidden">Milestones</button>
+        </div>
+        <div id="mode_selector" class="mode-selector" role="navigation" aria-label="Bot mode">
+          <button class="mode-sel-btn active" data-mode="mm" type="button">Market Making</button>
+          <button class="mode-sel-btn" data-mode="outcomes" type="button">Outcomes</button>
+          <button class="mode-sel-btn" data-mode="hip4vol" type="button">HIP-4 bot</button>
+          <button class="mode-sel-btn" data-mode="delta" type="button">Delta</button>
+        </div>
+      </nav>
+      <div class="header-actions">
+        <button id="menu_open_trading_score" type="button" class="header-nav-btn header-nav-btn--score" title="Trading Score">
+          <svg class="ts-badge-arc" viewBox="0 0 30 17" aria-hidden="true">
+            <defs>
+              <linearGradient id="ts_badge_grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#f87171"/>
+                <stop offset="50%" stop-color="#ff8c3c"/>
+                <stop offset="100%" stop-color="#35f0c2"/>
+              </linearGradient>
+            </defs>
+            <path d="M 2 16 A 13 13 0 0 1 28 16" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2.5" stroke-linecap="round"/>
+            <path id="ts_badge_arc_fill" d="M 2 16 A 13 13 0 0 1 28 16" fill="none" stroke="url(#ts_badge_grad)" stroke-width="2.5" stroke-linecap="round"/>
+          </svg>
+          <span class="ts-badge" id="ts_badge">--</span>
+        </button>
+        <button id="menu_open_feedback" type="button" class="header-icon-btn" aria-label="Feedback" title="Feedback">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg>
+        </button>
+        <a href="https://x.com/tradoor0" target="_blank" rel="noopener noreferrer" class="header-icon-btn" aria-label="Tradoor on X" title="Tradoor on X">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+        </a>
+        <button id="header_wallets_btn" type="button" class="header-wallets-btn hidden" aria-label="Exchanges: connect your exchanges" title="Connect your exchanges"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg><span class="header-wallets-label">Exchanges</span><span class="header-wallets-count" id="header_wallets_count" aria-hidden="true"></span></button>
+        <div class="header-nav-item header-connect-wrap" id="header_connect_wrap">
+          <!-- Not connected: Connect Wallet button -->
+          <button id="header_connect_btn" type="button" class="header-connect-btn">Connect Wallet</button>
+          <!-- Connected: truncated address + dropdown -->
+          <button id="header_wallet_btn" type="button" class="header-wallet-btn hidden">
+            <span id="header_wallet_addr"></span>
+            <span class="nav-chevron">▾</span>
+          </button>
+          <div class="header-dropdown header-dropdown--profile menu-section-card--cyan">
+            <button id="menu_open_my_stats" type="button" class="btn menu-item-btn">My Stats</button>
+            <button id="menu_open_telegram" type="button" class="btn menu-item-btn menu-item-btn--icon menu-item-btn--telegram"><img src="/web/tg.jpeg" alt="" class="menu-item-icon" aria-hidden="true"><span class="menu-item-glitch">Telegram bot</span></button>
+            <div class="header-dropdown-divider"></div>
+            <button id="menu_disconnect" type="button" class="btn menu-item-btn menu-item-btn--disconnect">Disconnect</button>
+          </div>
+        </div>
+        <!-- Mobile nav toggle: CSS hides it above 860px, where .header-nav is inline. -->
+        <button id="mobile_nav_toggle" type="button" class="mobile-nav-toggle"
+                aria-label="Menu" aria-expanded="false" aria-controls="header_nav">
+          <span aria-hidden="true"></span>
+        </button>
+      </div>
+    </header>
+    <div id="mobile_nav_scrim" class="mobile-nav-scrim" aria-hidden="true"></div>
+
+    <!-- Wallets drawer -->
+    <div id="wallets_overlay" class="wallets-overlay hidden" aria-hidden="true"></div>
+    <aside id="wallets_drawer" class="wallets-drawer hidden" aria-hidden="true">
+      <div class="wallets-head">
+        <div class="panel-title wallets-title">Exchanges</div>
+        <button id="wallets_close_btn" type="button" class="btn wallets-close">Close</button>
+      </div>
+      <div class="wallets-account" id="wallets_account">
+        <span class="wallets-account-label">Wallet</span>
+        <span class="wallets-account-addr" id="wallets_account_addr">-</span>
+      </div>
+      <div class="wallets-list" id="wallets_list">
+        <div class="wallets-card" data-dex="hyperliquid">
+          <div class="wallets-card-top">
+            <img src="/web/hyperliquid.svg" class="wallets-card-logo" alt="" />
+
+            <span class="wallets-card-badge" id="wallet_badge_hyperliquid"></span>
+          </div>
+          <div class="wallets-card-info" id="wallet_info_hyperliquid"></div>
+          <div class="wallets-card-actions">
+            <button type="button" class="wallets-card-action" id="wallet_action_hyperliquid">Connect</button>
+            <button type="button" class="wallets-card-disconnect hidden" id="wallet_disconnect_hyperliquid">Disconnect</button>
+            <button type="button" class="wallets-card-disconnect hidden" id="wallet_removekey_hyperliquid" title="Delete the Hyperliquid agent key stored on Tradoor">Remove key</button>
+          </div>
+          <div class="wallets-subaccounts" id="wallets_subaccounts">
+            <div class="wallets-subaccounts-title">Sub-accounts <span id="wallets_subaccounts_count" class="wallets-subaccounts-count"></span></div>
+            <div id="wallets_subaccounts_list"></div>
+            <button type="button" class="wallets-card-action" id="subaccount_create_btn">Create sub-account</button>
+          </div>
+        </div>
+        <div class="wallets-card" data-dex="extended" style="--venue-accent: #34eda4;">
+          <div class="wallets-card-top">
+            <img src="/web/extended.svg" class="wallets-card-logo" alt="" />
+            <span class="venue-beta-badge">BETA</span>
+            <span class="wallets-card-badge" id="wallet_badge_extended"></span>
+          </div>
+          <div class="wallets-card-info" id="wallet_info_extended"></div>
+          <div class="wallets-card-actions">
+            <button type="button" class="wallets-card-action" id="wallet_action_extended">Connect</button>
+            <button type="button" class="wallets-card-disconnect hidden" id="wallet_disconnect_extended">Disconnect</button>
+            <button type="button" class="wallets-card-disconnect hidden" id="wallet_removekey_extended" title="Delete the Extended API credentials stored on Tradoor">Remove key</button>
+          </div>
+        </div>
+        <div class="wallets-card" data-dex="risex" style="--venue-accent: #03de82;">
+          <div class="wallets-card-top">
+            <img src="/web/risex.svg" class="wallets-card-logo" alt="RISEx" />
+            <span class="venue-beta-badge venue-beta-badge--risex">BETA</span>
+            <span class="wallets-card-badge" id="wallet_badge_risex"></span>
+          </div>
+          <div class="wallets-card-info" id="wallet_info_risex"></div>
+          <div class="wallets-card-actions">
+            <button type="button" class="wallets-card-action" id="wallet_action_risex">Connect</button>
+            <button type="button" class="wallets-card-disconnect hidden" id="wallet_disconnect_risex">Disconnect</button>
+          </div>
+        </div>
+        <div class="wallets-card" data-dex="qfex" style="--venue-accent: #38a5a0;">
+          <div class="wallets-card-top">
+            <span class="venue-logo-qfex"><img src="/web/qfex.svg" class="wallets-card-logo venue-logo-qfex-mark" alt="" /><span class="venue-logo-qfex-text">QFEX</span></span>
+            <span class="venue-beta-badge venue-beta-badge--qfex">BETA</span>
+            <span class="wallets-card-badge" id="wallet_badge_qfex"></span>
+          </div>
+          <div class="wallets-card-info" id="wallet_info_qfex"></div>
+          <div class="wallets-card-actions">
+            <button type="button" class="wallets-card-action" id="wallet_action_qfex">Connect</button>
+            <button type="button" class="wallets-card-disconnect hidden" id="wallet_disconnect_qfex">Disconnect</button>
+            <button type="button" class="wallets-card-disconnect hidden" id="wallet_removekey_qfex" title="Delete the QFEX API key stored on Tradoor">Remove key</button>
+          </div>
+        </div>
+      </div>
+      <div class="wallets-footer">
+        <button id="wallets_disconnect_all" type="button" class="wallets-disconnect-all">Disconnect All</button>
+      </div>
+    </aside>
+
+
+    <!-- ────────── HIP-4 VOLUME CALCULATOR (CSV) ────────── -->
+    <div id="hipvol_overlay" class="kpoints-overlay" aria-hidden="true"></div>
+    <aside id="hipvol_drawer" class="kpoints-drawer hidden" aria-hidden="true">
+      <div class="kpoints-head">
+        <div class="panel-title kpoints-title">HIP-4 Volume Calculator</div>
+        <button id="hipvol_close_btn" type="button" class="btn">Close</button>
+      </div>
+
+      <div class="kq-card">
+        <div class="kq-card-title">
+          <div class="kq-badge" style="background:rgba(255,140,60,0.18);color:rgb(255,140,60);">H4</div>
+          <span>HIP-4 Outcomes Volume</span>
+        </div>
+        <p class="kq-subtitle">Drop your Hyperliquid trades export (.csv) to get your HIP-4 (outcomes) volume over a date range.</p>
+
+        <div class="hipvol-platform" id="hipvol_platform">
+          <span class="hipvol-platform-label">Hyperliquid outcomes · 24h volume (all markets)</span>
+          <span class="hipvol-platform-value" id="hipvol_platform_value">…</span>
+        </div>
+
+        <div class="kq-field">
+          <label for="hipvol_csv">Trade history (.csv)</label>
+          <div class="kq-file-wrap">
+            <input type="file" id="hipvol_csv" accept=".csv,text/csv" class="kq-file-input">
+            <label for="hipvol_csv" class="kq-file-label">
+              <span class="kq-file-btn">Choose file</span>
+              <span class="kq-file-name" id="hipvol_csvName">No file chosen</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="kq-field" style="margin-top:10px;">
+          <label>Date Range (Month / Day) - optional</label>
+          <div class="kq-range-row" style="gap:8px;margin-top:6px;">
+            <span style="font-size:11px;color:rgb(255,140,60);min-width:42px;">Start</span>
+            <input type="number" id="hipvol_startMonth" placeholder="MM" min="1" max="12">
+            <input type="number" id="hipvol_startDay" placeholder="DD" min="1" max="31">
+          </div>
+          <div class="kq-range-row" style="gap:8px;margin-top:6px;">
+            <span style="font-size:11px;color:rgb(255,140,60);min-width:42px;">End</span>
+            <input type="number" id="hipvol_endMonth" placeholder="MM" min="1" max="12">
+            <input type="number" id="hipvol_endDay" placeholder="DD" min="1" max="31">
+          </div>
+          <p class="kq-subtitle" style="margin-top:6px;">Leave empty to include all dates.</p>
+        </div>
+
+        <div class="kq-actions" style="margin-top:10px;">
+          <button type="button" class="kq-btn kq-btn--primary" id="hipvol_calcBtn">Calculate HIP-4 Volume</button>
+        </div>
+        <div class="kq-result" id="hipvol_result" aria-live="polite"></div>
+        <ul class="hipvol-breakdown" id="hipvol_breakdown" hidden></ul>
+      </div>
+    </aside>
+
+    <div id="stats_overlay" class="stats-overlay" aria-hidden="true"></div>
+    <aside id="stats_drawer" class="stats-drawer hidden" aria-hidden="true">
+      <div class="stats-drawer-head">
+        <div class="panel-title">Tradoor Stats</div>
+        <button id="stats_close_btn" type="button" class="btn">Close</button>
+      </div>
+      <div id="stats_error" class="form-error hidden"></div>
+      <div class="podium-section" id="podium_section">
+        <div class="panel-title">Volume Leaders</div>
+        <div class="podium">
+          <div class="podium-slot podium-slot--silver">
+            <div class="podium-rank">2</div>
+            <div class="podium-addr" id="podium_addr_2">&mdash;</div>
+            <div class="podium-vol" id="podium_vol_2">&mdash;</div>
+            <div class="podium-bar"></div>
+          </div>
+          <div class="podium-slot podium-slot--gold">
+            <div class="podium-rank">1</div>
+            <div class="podium-addr" id="podium_addr_1">&mdash;</div>
+            <div class="podium-vol" id="podium_vol_1">&mdash;</div>
+            <div class="podium-bar"></div>
+          </div>
+          <div class="podium-slot podium-slot--bronze">
+            <div class="podium-rank">3</div>
+            <div class="podium-addr" id="podium_addr_3">&mdash;</div>
+            <div class="podium-vol" id="podium_vol_3">&mdash;</div>
+            <div class="podium-bar"></div>
+          </div>
+        </div>
+      </div>
+      <div class="grid stats-kpi-grid">
+        <div class="stat">
+          <div class="stat-label">Unique Connected Addresses</div>
+          <div class="stat-value" id="stats_unique_addresses">-</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Daily Total Volume</div>
+          <div class="stat-value" id="stats_daily_volume">-</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">All-Time Total Volume</div>
+          <div class="stat-value" id="stats_all_time_volume">-</div>
+        </div>
+        <div class="stat" id="stats_your_rank_card" style="display:none;">
+          <div class="stat-label">Your Rank</div>
+          <div class="stat-value" id="stats_your_rank">-</div>
+        </div>
+      </div>
+      <div class="panel-title" style="margin-top:14px;">Daily Volume (30d)</div>
+      <div class="stats-chart-wrap">
+        <canvas id="stats_daily_volume_chart"></canvas>
+        <div id="stats_chart_tooltip" class="stats-chart-tooltip hidden" role="status" aria-live="polite"></div>
+      </div>
+      <div class="stats-section" style="margin-top:24px;">
+        <div class="stat">
+          <div class="stat-label">Daily Platform Fees</div>
+          <div class="stat-value" id="stats_daily_fees">-</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">All-Time Platform Fees</div>
+          <div class="stat-value" id="stats_all_time_fees">-</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Annualized Fees (30d)</div>
+          <div class="stat-value" id="stats_annualized_fees">-</div>
+        </div>
+      </div>
+    </aside>
+
+
+    <!-- Wallet picker modal (EIP-6963) -->
+    <div id="wallet_picker_modal" class="wp-modal hidden" aria-hidden="true" role="dialog">
+      <div class="wp-overlay" id="wp_overlay"></div>
+      <div class="wp-card">
+        <div class="wp-header">
+          <div class="wp-title">Connect Wallet</div>
+          <button type="button" class="wp-close" id="wp_close" aria-label="Close">&times;</button>
+        </div>
+        <div class="wp-sub">Choose a wallet to continue</div>
+        <div class="wp-list" id="wp_list"></div>
+        <div class="wp-footer">No wallet? <a href="https://rabby.io" target="_blank" rel="noopener">Install Rabby</a></div>
+      </div>
+    </div>
+
+    <!-- Milestones page (fullscreen) -->
+    <div id="ms_page" class="ms-page hidden" aria-hidden="true">
+      <canvas id="ms_particles" class="ms-particles"></canvas>
+      <div class="ms-page-inner" id="ms_page_inner">
+        <button id="ms_close_btn" type="button" class="btn ms-back-btn">&larr; Back</button>
+        <div class="ms-title">Volume Milestones</div>
+        <div class="ms-subtitle">Climb the ranks with your trading volume</div>
+        <div class="ms-path" id="ms_path"></div>
+      </div>
+      <div class="ms-bottom-bar hidden" id="ms_bottom_bar">
+        <div class="ms-bottom-vol-wrap">
+          <div class="ms-bottom-label">Your Volume</div>
+          <div class="ms-bottom-value" id="ms_vol_value">$0</div>
+        </div>
+        <div class="ms-bottom-next-wrap">
+          <div class="ms-bottom-label">Next</div>
+          <div class="ms-bottom-target" id="ms_next_label">$100K : Explorer</div>
+        </div>
+        <div class="ms-bottom-rank-wrap" id="ms_rank_wrap" style="display:none">
+          <div class="ms-bottom-label">Rank</div>
+          <div class="ms-bottom-rank" id="ms_rank_value">#-</div>
+        </div>
+        <div class="ms-bottom-bar-track">
+          <div class="ms-bottom-bar-fill" id="ms_progress_fill" style="width:0%"></div>
+        </div>
+        <div class="ms-bottom-pct" id="ms_pct">0%</div>
+      </div>
+    </div>
+
+    <!-- Competition page (fullscreen) -->
+    <div id="comp_page" class="comp-page hidden" aria-hidden="true">
+      <canvas id="comp_confetti" class="comp-confetti"></canvas>
+      <div class="comp-page-inner">
+        <button id="comp_close_btn" type="button" class="btn comp-back-btn">&larr; Back</button>
+
+        <div class="comp-title-main">Trading Competition</div>
+        <div class="comp-dates" id="comp_dates"></div>
+
+        <!-- Countdown Timer -->
+        <div class="comp-timer-wrap">
+          <div class="comp-timer" id="comp_timer">
+            <div class="comp-timer-unit">
+              <span class="comp-timer-digit" id="comp_days">00</span>
+              <span class="comp-timer-label">Days</span>
+            </div>
+            <span class="comp-timer-sep">:</span>
+            <div class="comp-timer-unit">
+              <span class="comp-timer-digit" id="comp_hours">00</span>
+              <span class="comp-timer-label">Hrs</span>
+            </div>
+            <span class="comp-timer-sep">:</span>
+            <div class="comp-timer-unit">
+              <span class="comp-timer-digit" id="comp_mins">00</span>
+              <span class="comp-timer-label">Min</span>
+            </div>
+            <span class="comp-timer-sep">:</span>
+            <div class="comp-timer-unit">
+              <span class="comp-timer-digit" id="comp_secs">00</span>
+              <span class="comp-timer-label">Sec</span>
+            </div>
+          </div>
+          <div class="comp-timer-status" id="comp_timer_status"></div>
+        </div>
+
+        <!-- Prize Pool -->
+        <div class="comp-prizes">
+          <div class="comp-prize comp-prize--silver">
+            <div class="comp-prize-medal">2nd</div>
+            <div class="comp-prize-amount">$200 <span class="comp-prize-curr">USDC</span></div>
+          </div>
+          <div class="comp-prize comp-prize--gold">
+            <div class="comp-prize-medal">1st</div>
+            <div class="comp-prize-amount">$300 <span class="comp-prize-curr">USDC</span></div>
+          </div>
+          <div class="comp-prize comp-prize--bronze">
+            <div class="comp-prize-medal">3rd</div>
+            <div class="comp-prize-amount">$100 <span class="comp-prize-curr">USDC</span></div>
+          </div>
+        </div>
+
+        <!-- Podium -->
+        <div class="comp-podium-section">
+          <div class="comp-section-label">Weekly Volume Leaders</div>
+          <div class="comp-podium">
+            <div class="comp-pod comp-pod--silver">
+              <div class="comp-pod-rank">2</div>
+              <div class="comp-pod-addr" id="comp_addr_2">&mdash;</div>
+              <div class="comp-pod-vol" id="comp_vol_2">&mdash;</div>
+              <div class="comp-pod-bar"></div>
+            </div>
+            <div class="comp-pod comp-pod--gold">
+              <div class="comp-pod-rank">1</div>
+              <div class="comp-pod-addr" id="comp_addr_1">&mdash;</div>
+              <div class="comp-pod-vol" id="comp_vol_1">&mdash;</div>
+              <div class="comp-pod-bar"></div>
+            </div>
+            <div class="comp-pod comp-pod--bronze">
+              <div class="comp-pod-rank">3</div>
+              <div class="comp-pod-addr" id="comp_addr_3">&mdash;</div>
+              <div class="comp-pod-vol" id="comp_vol_3">&mdash;</div>
+              <div class="comp-pod-bar"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Your Rank -->
+        <div class="comp-your-rank" id="comp_your_rank" style="display:none;">
+          <div class="comp-your-rank-label">Your Rank</div>
+          <div class="comp-your-rank-value" id="comp_your_rank_val">#-</div>
+          <div class="comp-your-rank-vol" id="comp_your_rank_vol">$0</div>
+        </div>
+        <div class="comp-connect-hint" id="comp_connect_hint" style="display:none;">
+          Connect wallet to see your rank
+        </div>
+
+        <!-- Participants & volume -->
+        <div class="comp-meta" id="comp_meta"></div>
+
+        <!-- Rules -->
+        <div class="comp-rules">
+          <div class="comp-section-label">Rules</div>
+          <ul class="comp-rules-list">
+            <li>Volume tracked from Hyperliquid, Trade.xyz &amp; Kinetiq market making sessions</li>
+            <li>Competition runs from Sunday 23h to Friday 23h (Paris time)</li>
+            <li>Prizes distributed manually in USDC after competition ends</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="landing-wrap" id="landing_wrap">
+
+      <!-- MM connection panel (existing) -->
+      <section class="panel panel-green" id="connect_page">
+        <div class="panel-title">Connection</div>
+        <div id="connect_steps" class="connect-steps" aria-live="polite">
+          <button id="connect_step_1" class="connect-step is-pending" type="button" data-step="1">
+            <span class="step-kicker">1</span>
+            <span class="step-label">Connect wallet</span>
+            <span class="step-state">Pending</span>
+          </button>
+          <div class="step-connector" id="step_conn_12"></div>
+          <button id="connect_step_2" class="connect-step is-pending" type="button" data-step="2">
+            <span class="step-kicker">2</span>
+            <span class="step-label">Approve builder fee</span>
+            <span class="step-state">Pending</span>
+          </button>
+          <div class="step-connector" id="step_conn_23"></div>
+          <button id="connect_step_3" class="connect-step is-pending" type="button" data-step="3">
+            <span class="step-kicker">3</span>
+            <span class="step-label">Approve TRADOR agent</span>
+            <span class="step-state">Pending</span>
+          </button>
+        </div>
+        <div class="grid">
+          <label>
+            Mode
+            <div id="mode_cards" class="mode-cards mode-cards--multi" role="group" aria-label="Select platforms">
+              <button
+                id="mode_card_hyperliquid"
+                type="button"
+                class="mode-card"
+                role="checkbox"
+                aria-label="Hyperliquid"
+                aria-checked="true"
+                data-mode-value="hyperliquid_mainnet"
+                data-dex="hyperliquid"
+              >
+                <span class="mode-card-logo" aria-hidden="true">
+                  <img src="/web/hyperliquid.svg" alt="" />
+                </span>
+
+              </button>
+            </div>
+            <div class="mode-native-hidden">
+              <select id="mode">
+                <option value="hyperliquid_mainnet">Hyperliquid</option>
+                <option value="extended_mainnet">Extended</option>
+                <option value="risex_mainnet">RISEx</option>
+                <option value="qfex_mainnet">QFEX</option>
+              </select>
+            </div>
+          </label>
+          <div class="wallet-identity">
+            <div class="wallet-identity-row">
+              <div id="wallet_address_display" class="wallet-identity-value">No wallet</div>
+              <span id="nft_holder_badge" class="nft-holder-badge hidden" title="Hypurr NFT holder : 20% fee discount">NFT</span>
+              <button id="profile_disconnect_btn" class="profile-disconnect-btn" type="button" title="Disconnect wallet" aria-label="Disconnect wallet">
+                <span aria-hidden="true">✕</span>
+              </button>
+            </div>
+          </div>
+          <input id="account_address" type="hidden" value="" />
+          <input id="api_key" type="hidden" value="" />
+          <div id="api_key_status" class="api-key-status hidden"></div>
+          <input id="enable_trading" type="hidden" value="true" />
+        </div>
+        <div class="actions" style="margin-top:12px;">
+          <button id="connect_continue" class="btn primary">Connect</button>
+        </div>
+        <div id="signature_steps" class="signature-mini-row hidden" aria-live="polite">
+          <div id="wallet_auth_status" class="wallet-auth-status step-mini" title="Wallet signature required.">1/3 Wallet</div>
+          <div id="builder_fee_status" class="builder-fee-status step-mini" title="Approve builder fee.">2/3 Builder</div>
+          <div id="agent_status" class="agent-status step-mini" title="Approve TRADOR agent.">3/3 Agent</div>
+        </div>
+        <div id="connect_error" class="form-error hidden"></div>
+      </section>
+
+      <!-- ── Section 1: Tagline ──────────────────────────────── -->
+      <section id="landing_manifesto" class="landing-section landing-manifesto" aria-label="Tagline">
+        <p class="tagline">Trade smarter on Hyperliquid.</p>
+      </section>
+
+      <!-- ── Section 2: Features ──────────────────────────────── -->
+      <section id="landing_features" class="landing-section landing-features" aria-label="Features">
+        <h2 class="landing-section-title">Built for perp DEX traders</h2>
+        <div class="features-grid">
+          <div class="feature-card">
+            <div class="feature-icon">&#9881;</div>
+            <div class="feature-title">Market Making</div>
+            <div class="feature-desc">Place and manage quotes automatically. Collect the spread 24/7.</div>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">&#8599;</div>
+            <div class="feature-title">Directional Bias</div>
+            <div class="feature-desc">Skew your quotes to ride the trend while collecting spread.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Section 3: Numbers ───────────────────────────────── -->
+      <section id="landing_numbers" class="landing-section landing-numbers" aria-label="Platform stats">
+        <h2 class="landing-section-title">Tradoor in numbers</h2>
+        <div class="numbers-grid">
+          <div class="number-card">
+            <div class="number-value" id="landing_stat_volume" data-target="0">$0</div>
+            <div class="number-label">All-Time Volume</div>
+          </div>
+          <div class="number-card">
+            <div class="number-value" id="landing_stat_fees" data-target="0">$0</div>
+            <div class="number-label">Platform Fees</div>
+          </div>
+          <div class="number-card">
+            <div class="number-value" id="landing_stat_users" data-target="0" data-integer="1">0</div>
+            <div class="number-label">Unique Addresses</div>
+          </div>
+        </div>
+      </section>
+
+      <div class="scroll-hint" id="scroll_hint" aria-hidden="true">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" width="48" height="48"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <footer class="landing-footer">
+        <a href="/tos" target="_blank" rel="noopener noreferrer" class="landing-tos-link">Terms of Service</a>
+      </footer>
+    </div>
+
+    <div id="main_page" class="hidden">
+    <section id="market_panel" class="market-inline">
+      <div id="dex_selector" class="dex-selector" role="tablist" aria-label="DEX">
+        <button id="dex_tab_hyperliquid" type="button" class="dex-card active" data-dex="hyperliquid" role="tab" aria-selected="true" style="--venue-accent: #35f0c2;">
+          <img src="/web/hyperliquid.svg" class="dex-card-logo" alt="Hyperliquid" />
+          <span class="dex-card-dot" aria-hidden="true"></span>
+        </button>
+        <button id="dex_tab_extended" type="button" class="dex-card" data-dex="extended" role="tab" aria-selected="false" style="--venue-accent: #34eda4;">
+          <img src="/web/extended.svg" class="dex-card-logo" alt="Extended" />
+          <span class="venue-beta-badge" aria-label="Beta">BETA</span>
+          <span class="dex-card-dot" aria-hidden="true"></span>
+        </button>
+        <button id="dex_tab_risex" type="button" class="dex-card" data-dex="risex" role="tab" aria-selected="false" style="--venue-accent: #03de82;">
+          <img src="/web/risex.svg" class="dex-card-logo" alt="RISEx" />
+          <span class="venue-beta-badge venue-beta-badge--risex" aria-label="Beta">BETA</span>
+          <span class="dex-card-dot" aria-hidden="true"></span>
+        </button>
+        <button id="dex_tab_qfex" type="button" class="dex-card" data-dex="qfex" role="tab" aria-selected="false" aria-label="QFEX" style="--venue-accent: #38a5a0;">
+          <span class="venue-logo-qfex"><img src="/web/qfex.svg" class="dex-card-logo venue-logo-qfex-mark" alt="" /><span class="venue-logo-qfex-text">QFEX</span></span>
+          <span class="venue-beta-badge venue-beta-badge--qfex" aria-label="Beta">BETA</span>
+          <span class="dex-card-dot" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="market-inline-row">
+        <div id="source_selector" class="source-selector" role="tablist" aria-label="Market source">
+          <div id="source_slider" class="source-slider" aria-hidden="true"></div>
+          <button id="source_top20" type="button" class="source-option active" data-source="top20" role="tab" aria-selected="true" aria-pressed="true">
+            <img src="/web/hyperliquid.svg" alt="Hyperliquid" />
+          </button>
+          <button id="source_hip3" type="button" class="source-option" data-source="hip3" role="tab" aria-selected="false" aria-pressed="false">
+            <img src="/web/markets.svg" alt="Kinetiq Markets" />
+          </button>
+          <button id="source_xyz" type="button" class="source-option" data-source="xyz" role="tab" aria-selected="false" aria-pressed="false">
+            <img src="/web/tradexyz.svg" alt="Trade.xyz" />
+          </button>
+          <button id="source_io" type="button" class="source-option" data-source="io" role="tab" aria-selected="false" aria-pressed="false" aria-label="EntropyIO">
+            <span class="source-io-brand"><img src="/web/entropyio.svg" alt="" /><span class="source-io-name">EntropyIO</span></span>
+          </button>
+        </div>
+        <label class="market-token-label">
+          Choose Token
+          <div class="select-wrap token-select-wrap">
+            <div id="token_picker" class="token-picker">
+              <button id="market_symbol_btn" type="button" class="token-picker-btn" aria-haspopup="listbox" aria-expanded="false">
+                <span id="market_symbol_label">Select token</span>
+              </button>
+              <button id="market_symbol_chevron" type="button" class="token-picker-chevron" aria-label="Open token list" aria-haspopup="listbox" aria-expanded="false">
+                <span aria-hidden="true">▾</span>
+              </button>
+              <div id="market_symbol_menu" class="token-picker-menu hidden" role="listbox" aria-label="Choose token">
+                <div id="market_symbol_group_tabs" class="token-picker-tabs hidden">
+                  <button type="button" class="token-picker-tab active" data-group="all">All</button>
+                  <button type="button" class="token-picker-tab" data-group="tradfi">TradFi</button>
+                </div>
+                <input id="market_symbol_search" class="token-picker-search" type="text" placeholder="Search token..." autocomplete="off" />
+                <div id="market_symbol_list" class="token-picker-list"></div>
+              </div>
+            </div>
+            <select id="market_symbol" class="token-native-hidden"></select>
+          </div>
+        </label>
+      </div>
+      <div class="source-native-hidden">
+        <select id="market_source">
+          <option value="top20">Top 20 by volume</option>
+          <option value="hip3">Kinetiq HIP-3 (mkts)</option>
+          <option value="xyz">Trade.xyz (xyz)</option>
+          <option value="io">EntropyIO (io)</option>
+          <option value="coming_soon" disabled>More coming soon</option>
+        </select>
+      </div>
+      <div id="hip3_notice" class="hip3-notice" style="display:none">ℹ️ Kinetiq Markets (mkts) requires <strong>Unified Account</strong> mode on <a href="https://app.hyperliquid.xyz" target="_blank" rel="noopener">app.hyperliquid.xyz</a> → Settings → make sure this is <strong>unchecked</strong>:<br><span class="hip3-notice-mockup"><span class="hip3-notice-mockup-label">Disable Unified Account Mode</span><span class="hip3-notice-mockup-checkbox"></span></span></div>
+    </section>
+
+        <div id="trading_account_wrap" class="trading-account-wrap hidden">
+          <div class="risk-mode-title ta-title-row">Trading Account
+            <button type="button" class="ta-fund-btn" data-open-subaccounts>Fund</button></div>
+          <div id="trading_account_selector" class="trading-account-selector">
+            <button type="button" class="ta-option active" data-ta="">Main</button>
+            <button type="button" class="ta-option ta-empty" data-ta-slot="1">+ Sub 1</button>
+            <button type="button" class="ta-option ta-empty" data-ta-slot="2">+ Sub 2</button>
+          </div>
+        </div>
+
+        <section class="panel panel-orange" id="notional_panel">
+          <div class="panel-title" style="display:none;">Notional</div>
+          <div class="grid">
+            <label>
+          <span id="session_notional_label">Session Notional (USDC)</span>
+          <div class="notional-input-wrap">
+            <input id="session_notional" type="number" step="0.01" value="0" />
+            <img id="notional_token_icon" class="notional-token-icon" src="/web/usdc.png" alt="USDC" />
+            <button id="session_notional_max" type="button" class="notional-max-btn">MAX</button>
+          </div>
+        </label>
+        <div class="notional-card">
+          <div id="available_notional_label" class="notional-label">Available Notional (USDC)</div>
+          <div id="available_notional" class="notional-value">-</div>
+          <div id="selected_leverage" class="notional-hint">Pair Max Leverage: 25x</div>
+          <div id="selected_min_order" class="notional-hint hidden"></div>
+          <div id="account_create_warning" class="account-create-warning hidden"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel panel-primary" id="risk_panel">
+      <div class="panel-title risk-engine-title">Risk & Engine
+        <label class="advanced-mm-inline-toggle" for="advanced_mm_enabled">
+          <span class="advanced-mm-inline-label">Advanced Settings</span>
+          <input id="advanced_mm_enabled" type="checkbox" aria-controls="advanced_mm_fields" aria-label="Enable advanced settings" />
+          <span class="advanced-mm-inline-switch" aria-hidden="true"></span>
+        </label>
+      </div>
+      <div id="preset_sections" class="risk-mode-wrap">
+        <div class="risk-mode-title">Execution Profile</div>
+        <div id="risk_mode_selector" class="risk-mode-selector mode-conservative">
+          <div class="risk-mode-slider" aria-hidden="true"></div>
+          <button id="mode_aggressive" type="button" class="risk-mode-option aggressive">Aggressive Volume<span class="risk-mode-info" data-info="Best for high-liquidity periods and volume objectives. Trades faster and larger, with higher short-term drawdown risk.">?</span></button>
+          <button id="mode_classic" type="button" class="risk-mode-option classic">Classic<span class="risk-mode-info" data-info="Balanced profile for mixed conditions. Good default when market regime is unclear and you want stable behavior.">?</span></button>
+          <button id="mode_conservative" type="button" class="risk-mode-option conservative active">Conservative PnL<span class="risk-mode-info" data-info="Best for volatile/choppy conditions. Prioritizes PnL protection with lower pace and tighter risk exposure.">?</span></button>
+        </div>
+      </div>
+      <div class="direction-bias-wrap">
+        <div class="risk-mode-title">Direction Bias</div>
+        <div id="direction_bias_selector" class="direction-bias-selector bias-neutral">
+          <div class="direction-bias-slider" aria-hidden="true"></div>
+          <button id="bias_long" type="button" class="direction-bias-option long">Long<span class="risk-mode-info" data-info="Targets ~20% long exposure. Still quotes both sides but naturally accumulates a long bias.">?</span></button>
+          <button id="bias_neutral" type="button" class="direction-bias-option neutral active">Neutral<span class="risk-mode-info" data-info="Standard market making with no directional preference. Targets zero net exposure.">?</span></button>
+          <button id="bias_short" type="button" class="direction-bias-option short">Short<span class="risk-mode-info" data-info="Targets ~20% short exposure. Still quotes both sides but naturally accumulates a short bias.">?</span></button>
+        </div>
+      </div>
+      <div class="quote-mode-wrap">
+        <div class="risk-mode-title">Quote Mode</div>
+        <div id="quote_mode_selector" class="quote-mode-selector mode-sniper">
+          <div class="quote-mode-slider" aria-hidden="true"></div>
+          <button id="qm_adaptive" type="button" class="quote-mode-option adaptive qm-hero"><span class="qm-auto-badge">auto</span><svg class="qm-badge-icon qm-hero-icon" viewBox="0 0 24 24" width="22" height="22"><path d="M1 14 q4 -9 7 0 t7 -6" fill="none" stroke="rgba(53,240,194,0.85)" stroke-width="1.6" stroke-linecap="round"/><line x1="16" y1="3" x2="16" y2="21" stroke="rgba(53,240,194,0.45)" stroke-width="1" stroke-dasharray="2,2"/><line x1="16" y1="12" x2="23" y2="12" stroke="rgba(53,240,194,0.7)" stroke-width="1.6" stroke-linecap="round"/></svg><span class="qm-hero-text"><span class="qm-label">Adaptive <span class="risk-mode-info" data-info="Regime filter: detects chop vs trend (volume profile + ATR + efficiency ratio).&#10;&#10;CHOP  → grid anchored on the value area, spread calibrated on ATR (floor always covers fees).&#10;TREND → flatten-only (quotes only the reducing side) then pause.&#10;&#10;Market making wins in chop and loses in trends: this mode steps aside when the market starts trending.">?</span></span><span class="qm-hero-sub">Detects chop vs trend. Quotes the chop, steps aside in trends.</span></span></button>
+          <div class="quote-mode-manual-label">Manual modes</div>
+          <div class="quote-mode-manual-grid">
+          <button id="qm_grid" type="button" class="quote-mode-option grid"><span class="qm-new-badge">new</span><svg class="qm-badge-icon" viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="1" width="6" height="3" rx="0.5" fill="rgba(255,140,60,0.9)"/><rect x="7" y="5.5" width="10" height="3" rx="0.5" fill="rgba(255,140,60,0.7)"/><rect x="5" y="10" width="14" height="3" rx="0.5" fill="rgba(255,140,60,0.5)"/><rect x="2" y="14.5" width="20" height="3" rx="0.5" fill="rgba(255,140,60,0.35)"/><line x1="0" y1="19.5" x2="24" y2="19.5" stroke="rgba(255,255,255,0.15)" stroke-width="0.5" stroke-dasharray="2,2"/><rect x="2" y="21" width="20" height="3" rx="0.5" fill="rgba(255,140,60,0.35)"/></svg><span class="qm-label">Grid <span class="risk-mode-info" data-info="4 bids + 4 asks. Larger orders far from mid, catches volatile wicks. Best for high volatility.&#10;&#10;  ASK4  ██████████  40%&#10;  ASK3  ███████      30%&#10;  ASK2  █████          20%&#10;  ASK1  ██                10%&#10;           ── mid ──&#10;  BID1  ██                10%&#10;  BID2  █████          20%&#10;  BID3  ███████      30%&#10;  BID4  ██████████  40%">?</span></span></button>
+          <button id="qm_sniper" type="button" class="quote-mode-option sniper active"><svg class="qm-badge-icon" viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="9" fill="none" stroke="rgba(220,230,245,0.5)" stroke-width="1.5"/><circle cx="12" cy="12" r="5" fill="none" stroke="rgba(220,230,245,0.35)" stroke-width="1"/><circle cx="12" cy="12" r="1.5" fill="rgba(235,244,255,0.9)"/><line x1="12" y1="1" x2="12" y2="5" stroke="rgba(220,230,245,0.4)" stroke-width="1"/><line x1="12" y1="19" x2="12" y2="23" stroke="rgba(220,230,245,0.4)" stroke-width="1"/><line x1="1" y1="12" x2="5" y2="12" stroke="rgba(220,230,245,0.4)" stroke-width="1"/><line x1="19" y1="12" x2="23" y2="12" stroke="rgba(220,230,245,0.4)" stroke-width="1"/></svg><span class="qm-label">Sniper</span></button>
+          <button id="qm_fortress" type="button" class="quote-mode-option fortress"><span class="qm-new-badge">new</span><svg class="qm-badge-icon" viewBox="0 0 24 24" width="16" height="16"><rect x="2" y="1" width="20" height="3" rx="0.5" fill="rgba(96,165,250,0.9)"/><rect x="5" y="5.5" width="14" height="3" rx="0.5" fill="rgba(96,165,250,0.7)"/><rect x="7" y="10" width="10" height="3" rx="0.5" fill="rgba(96,165,250,0.5)"/><rect x="9" y="14.5" width="6" height="3" rx="0.5" fill="rgba(96,165,250,0.35)"/><line x1="0" y1="19.5" x2="24" y2="19.5" stroke="rgba(255,255,255,0.15)" stroke-width="0.5" stroke-dasharray="2,2"/><rect x="9" y="21" width="6" height="3" rx="0.5" fill="rgba(96,165,250,0.35)"/></svg><span class="qm-label">Fortress <span class="risk-mode-info" data-info="4 bids + 4 asks. Larger orders near mid, wall of liquidity, high fill rate. Best for low volatility.&#10;&#10;  ASK4  ██                10%&#10;  ASK3  █████          20%&#10;  ASK2  ███████      30%&#10;  ASK1  ██████████  40%&#10;           ── mid ──&#10;  BID1  ██████████  40%&#10;  BID2  ███████      30%&#10;  BID3  █████          20%&#10;  BID4  ██                10%">?</span></span></button>
+          </div>
+        </div>
+      </div>
+      <div id="advanced_mm_section" class="advanced-mm-section hidden">
+        <div id="advanced_strategies_bar" class="advanced-strategies-bar">
+          <div id="advanced_strategies_tabs" class="advanced-strategies-tabs" role="tablist"></div>
+          <div id="advanced_strategies_banner" class="advanced-strategies-banner hidden"></div>
+        </div>
+        <div id="advanced_mm_fields" class="advanced-mm-fields hidden">
+          <div class="advanced-mm-range-group">
+            <div class="advanced-mm-range-label">
+              <span class="advanced-mm-range-title">Spread</span>
+              <span class="advanced-mm-range-unit">bps</span>
+            </div>
+            <div class="advanced-mm-range-inputs">
+              <input id="advanced_spread_min_bps" type="number" step="0.01" min="0.05" value="0.30" aria-label="Spread min" />
+              <span class="advanced-mm-range-sep" aria-hidden="true">→</span>
+              <input id="advanced_spread_max_bps" type="number" step="0.01" min="0.05" value="2.00" aria-label="Spread max" />
+            </div>
+          </div>
+          <div class="advanced-mm-range-group">
+            <div class="advanced-mm-range-label">
+              <span class="advanced-mm-range-title">Position size</span>
+              <span class="advanced-mm-range-unit">USD</span>
+            </div>
+            <div class="advanced-mm-range-inputs">
+              <input id="advanced_pos_min_usd" type="number" step="0.01" min="12" value="20" aria-label="Position size min" />
+              <span class="advanced-mm-range-sep" aria-hidden="true">→</span>
+              <input id="advanced_pos_max_usd" type="number" step="0.01" min="12" value="100" aria-label="Position size max" />
+            </div>
+          </div>
+          <div class="advanced-mm-pills-row">
+            <div class="advanced-mm-pill-group">
+              <span class="advanced-mm-pill-label">Engine</span>
+              <select id="advanced_engine_speed" class="advanced-mm-pill-select">
+                <option value="normal">Normal</option>
+                <option value="fast">Fast</option>
+              </select>
+            </div>
+            <div class="advanced-mm-pill-group">
+              <span class="advanced-mm-pill-label">Bias</span>
+              <select id="advanced_direction_bias" class="advanced-mm-pill-select">
+                <option value="neutral" selected>Neutral</option>
+                <option value="long">Long</option>
+                <option value="short">Short</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div id="advanced_mm_error" class="advanced-mm-error hidden"></div>
+      </div>
+      <div class="stop-mode-grid">
+        <div class="stop-mode-switcher">
+          <button id="stop_mode_btn_vol" type="button" class="stop-mode-btn active" data-mode="vol">
+            <span class="stop-mode-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg></span>
+            <span class="stop-mode-btn-text">Target Volume</span>
+          </button>
+          <button id="stop_mode_btn_sched" type="button" class="stop-mode-btn" data-mode="sched">
+            <span class="stop-mode-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+            <span class="stop-mode-btn-text">Schedule</span>
+          </button>
+        </div>
+        <div class="stop-mode-fields">
+          <div id="stop_mode_vol" class="stop-mode-panel">
+            <label>
+              Target Session Volume (USD)
+              <div class="range-input-row">
+                <input id="target_vol_range" type="range" min="10000" max="5000000" step="10000" value="25000" class="range-slider range-slider--vol" />
+                <span class="range-number-wrap"><span class="range-number-prefix">$</span><input id="target_vol" type="text" inputmode="numeric" value="25,000" class="range-number" /></span>
+              </div>
+            </label>
+            <label>
+              Max Session Loss (USD)
+              <div class="range-input-row">
+                <input id="max_loss_range" type="range" min="5" max="100" step="1" value="25" class="range-slider range-slider--loss" />
+                <span class="range-number-wrap"><span class="range-number-prefix">$</span><input id="max_loss" type="text" inputmode="numeric" value="" placeholder="Auto" class="range-number" /></span>
+              </div>
+            </label>
+          </div>
+          <div id="stop_mode_sched" class="stop-mode-panel panel-hidden">
+            <div class="sched-grid">
+              <label class="sched-field">
+                Start time
+                <input id="sched_start_time" type="time" class="sched-time-input" />
+              </label>
+              <div class="sched-controls">
+                <button id="sched_recurring_toggle" type="button" class="sched-recurring-toggle" title="Recurring: OFF &#x2014; runs once then stops. Click to repeat daily.">
+                  <span class="sched-recurring-track">
+                    <span class="sched-recurring-thumb">
+                      <svg class="sched-recurring-icon" viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+                        <path d="M8 1.5a6.5 6.5 0 0 1 6.445 5.649l.005.201h-1.5a5 5 0 1 0-1.27 3.336l.12-.136 1.06 1.06A6.5 6.5 0 1 1 8 1.5zm3.5 3v2.5H9V5.5h2.5z"/>
+                      </svg>
+                    </span>
+                  </span>
+                </button>
+                <button id="sched_save_btn" type="button" class="sched-inline-save">Save</button>
+                <span id="sched_status_text" class="sched-status-text"></span>
+              </div>
+              <label class="sched-field">
+                Stop time
+                <input id="sched_stop_time" type="time" class="sched-time-input" />
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="risk_changes_row" class="risk-changes-row hidden">
+        <div id="risk_error" class="risk-error hidden"></div>
+        <button id="apply_risk_changes" type="button" class="btn apply-changes-btn">Apply Changes</button>
+      </div>
+    </section>
+
+    <section class="panel" id="action_panel">
+      <div id="running_slots" class="slot-cards"></div>
+      <div class="actions-row">
+        <button id="main_action_btn" class="action-btn stopped">
+          <span class="action-btn-spinner"></span>
+          <span class="action-btn-label">▶ START BOT</span>
+        </button>
+        <button id="stop_all_btn" type="button" class="btn slot-stop-all hidden">■ Stop All</button>
+      </div>
+      <div id="main_error" class="form-error hidden"></div>
+      <div id="restart_notice" class="restart-notice hidden">The server restarted: the bot was stopped and all positions were closed.</div>
+      <div id="risex_expiry_banner" class="risex-expiry-banner hidden" role="status">
+        <span id="risex_expiry_text" class="risex-expiry-text"></span>
+        <button id="risex_expiry_renew" type="button" class="risex-expiry-renew">Renew signer</button>
+      </div>
+    </section>
+
+    <section class="panel" id="dashboard_panel">
+      <div class="dashboard-head">
+        <div class="panel-title dashboard-title">Dashboard</div>
+        <div class="dashboard-tabs">
+          <button id="tab_overview" class="tab-btn active">Overview</button>
+          <button id="tab_history" class="tab-btn">History</button>
+          <button id="tab_my_stats" class="tab-btn">My Stats</button>
+        </div>
+      </div>
+
+      <div id="dashboard_overview">
+        <div class="grid dashboard-kpi-grid">
+          <div class="stat">
+            <div class="stat-label">Session PnL</div>
+            <div class="stat-value" id="stat_session_pnl">-</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Session Volume</div>
+            <div class="stat-value" id="stat_session_volume">-</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label" id="stat_pnl_per_million_label">PnL per $100k Volume</div>
+            <div class="stat-value" id="stat_pnl_per_million">-</div>
+          </div>
+          <div class="stat stat-compact">
+            <div class="stat-label">Tradoor Fees (1 bps)</div>
+            <div class="stat-value" id="stat_tradoor_fees">-</div>
+          </div>
+        </div>
+        <div id="risex_quota" class="risex-quota hidden" title="RISEx charges one placement per order from a per-address quota; orders of about $45+ earn their quota back at typical fill rates.">
+          <span class="risex-quota-label">RISEx order quota</span>
+          <span class="risex-quota-value" id="risex_quota_value">-</span>
+          <span class="risex-quota-detail" id="risex_quota_detail"></span>
+        </div>
+        <div id="qfex_rate" class="risex-quota qfex-rate hidden" title="QFEX limits messages per account: 12,000 weighted units per 60 seconds, shared by all sessions of the account.">
+          <span class="risex-quota-label">QFEX message budget (60 s)</span>
+          <span class="risex-quota-value" id="qfex_rate_value">-</span>
+          <span class="risex-quota-detail" id="qfex_rate_detail"></span>
+        </div>
+        <div id="adaptive_regime_banner" class="adaptive-regime-banner hidden">
+          <span class="regime-chip" id="adaptive_regime_chip">CHOP</span>
+          <span class="regime-detail" id="adaptive_regime_detail">-</span>
+        </div>
+        <div class="panel-title" style="margin-top:16px;">Active Positions</div>
+        <div class="table">
+          <div class="row header">
+            <div>Coin</div>
+            <div>Size</div>
+            <div>Entry</div>
+            <div>Liq</div>
+            <div>PNL</div>
+            <div>Value</div>
+            <div>ROI</div>
+          </div>
+          <div id="positions"></div>
+        </div>
+      </div>
+
+      <div id="dashboard_history" class="hidden">
+        <div class="table">
+          <div class="row header row-history">
+            <div>Start</div>
+            <div>Duration (min)</div>
+            <div>Mode</div>
+            <div>Token</div>
+            <div>Volume</div>
+            <div>Fees</div>
+            <div>Total PnL</div>
+            <div></div>
+          </div>
+          <div id="session_history_rows"></div>
+        </div>
+      </div>
+
+    </section>
+    </div>
+
+    <!-- ========================================================================
+         HIP-4 PREDICTION MARKETS - dedicated section
+         Activated via /predictions route or Tools menu → Prediction Markets.
+         All selectors prefixed with `hip4_` and CSS classes prefixed `.hip4-`.
+       ======================================================================== -->
+    <section id="hip4_page" class="hip4-page hidden" aria-hidden="true">
+      <!-- Atmospheric background: ember field + scanline -->
+      <div class="hip4-bg" aria-hidden="true">
+        <div class="hip4-bg-grid"></div>
+        <div class="hip4-bg-glow hip4-bg-glow--a"></div>
+        <div class="hip4-bg-glow hip4-bg-glow--b"></div>
+        <div class="hip4-bg-scan"></div>
+      </div>
+
+
+    </section>
+
+
+
+
+  </div>
+  <!-- MM Token Selector Modal -->
+  <div id="mm_token_modal_overlay" class="mm-token-modal-overlay hidden" aria-hidden="true"></div>
+  <div id="mm_token_modal" class="mm-token-modal hidden" role="dialog" aria-modal="true" aria-label="Select token">
+    <div class="mm-token-modal-head">
+      <span class="mm-token-modal-title">Select Token</span>
+      <button id="mm_token_modal_close" type="button" class="mm-token-modal-close" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="mm-token-modal-controls">
+      <input id="mm_token_modal_search" type="text" class="mm-token-modal-search" placeholder="Search token..." autocomplete="off" spellcheck="false" />
+      <div id="mm_token_modal_tabs" class="mm-token-modal-tabs hidden" role="tablist" aria-label="Market category"></div>
+    </div>
+    <div class="mm-token-modal-table-wrap">
+      <table class="mm-token-modal-table">
+        <thead>
+          <tr>
+            <th data-sort="fav" class="mm-col-fav">&#9733;</th>
+            <th data-sort="symbol">TOKEN</th>
+            <th data-sort="price" class="mm-col-right">PRICE</th>
+            <th data-sort="change" class="mm-col-right">24H %</th>
+            <th data-sort="volume" class="mm-col-right">VOLUME</th>
+          </tr>
+        </thead>
+        <tbody id="mm_token_modal_body"></tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Generic app dialog (replaces native alert/confirm) -->
+  <div id="app_dialog_overlay" class="app-dialog-overlay hidden" aria-hidden="true"></div>
+  <div id="app_dialog" class="app-dialog hidden" role="alertdialog" aria-modal="true" aria-hidden="true">
+    <p id="app_dialog_msg" class="app-dialog-msg"></p>
+    <div id="app_dialog_actions" class="app-dialog-actions">
+      <button id="app_dialog_cancel" type="button" class="app-dialog-btn app-dialog-btn--cancel">Cancel</button>
+      <button id="app_dialog_ok" type="button" class="app-dialog-btn app-dialog-btn--ok">OK</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+    import { FontLoader } from "three/addons/loaders/FontLoader.js";
+    import { TextGeometry } from "three/addons/geometries/TextGeometry.js";
+
+    const loaderRoot = document.getElementById("boot_loader");
+    const bootExitSweep = document.getElementById("boot_exit_sweep");
+    const glitchRoot = document.getElementById("boot_glitch");
+    const subtext = document.getElementById("boot_subtext");
+    const canvas = document.getElementById("boot_three_canvas");
+    const TARGET = "TRADOOR";
+    const SYMBOLS = "!@#$%^&*()_+-=[]{}|;:<>?/~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const LOADER_MIN_MS = 2400;
+    const LOADER_MAX_MS = 6500;
+    const spans = [];
+    const resolveOrder = [...TARGET].map((_, i) => i).sort(() => Math.random() - 0.5);
+    const resolved = new Set();
+    let resolveIdx = 0;
+    let resolveDelay = 200;
+    let scrambleTimer = null;
+    let resolveTimer = null;
+    let fallbackTimer = null;
+    let rafId = 0;
+    let sceneReady = false;
+    let glitchDone = false;
+    let hidden = false;
+    let minDelayTimer = null;
+    const loaderStartMs = performance.now();
+    let renderer = null;
+    let camera = null;
+    let scene = null;
+    let textMesh = null;
+    let textBaseScale = 1;
+    let finishing = false;
+    let logoSnapSent = false;
+    let renderFrames = 0;
+    let snapProbeCanvas = null;
+    let snapProbeCtx = null;
+
+    function randSymbol() {
+      return SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)];
+    }
+
+    function canvasHasVisibleContent(srcCanvas) {
+      if (!srcCanvas || !srcCanvas.width || !srcCanvas.height) return false;
+      if (!snapProbeCanvas) {
+        snapProbeCanvas = document.createElement("canvas");
+        snapProbeCanvas.width = 64;
+        snapProbeCanvas.height = 32;
+        snapProbeCtx = snapProbeCanvas.getContext("2d", { willReadFrequently: true });
+      }
+      if (!snapProbeCtx) return false;
+      snapProbeCtx.clearRect(0, 0, 64, 32);
+      snapProbeCtx.drawImage(srcCanvas, 0, 0, 64, 32);
+      const px = snapProbeCtx.getImageData(0, 0, 64, 32).data;
+      let lit = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        const a = px[i + 3];
+        if (a < 10) continue;
+        const luma = px[i] + px[i + 1] + px[i + 2];
+        if (luma > 26) {
+          lit += 1;
+          if (lit > 16) return true;
+        }
+      }
+      return false;
+    }
+
+    function publishBootLogoSnapshot() {
+      if (logoSnapSent || !renderer || !canvas) return;
+      if (!canvasHasVisibleContent(canvas)) return;
+      try {
+        const dataUrl = canvas.toDataURL("image/png");
+        if (!dataUrl) return;
+        logoSnapSent = true;
+        window.__TRADOOR_BOOT_LOGO__ = dataUrl;
+        window.dispatchEvent(new CustomEvent("trador-boot-logo", { detail: { dataUrl } }));
+      } catch (_) {
+        // ignore canvas export issues
+      }
+    }
+
+    async function finishLoader() {
+      if (hidden || finishing || !loaderRoot) return;
+      finishing = true;
+      hidden = true;
+      if (scrambleTimer) clearInterval(scrambleTimer);
+      if (resolveTimer) clearTimeout(resolveTimer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      if (minDelayTimer) clearTimeout(minDelayTimer);
+      if (rafId) cancelAnimationFrame(rafId);
+      if (!logoSnapSent) {
+        for (let i = 0; i < 5 && !logoSnapSent; i += 1) {
+          publishBootLogoSnapshot();
+          if (!logoSnapSent) await new Promise((resolve) => window.setTimeout(resolve, 70));
+        }
+      }
+      loaderRoot.classList.add("exiting");
+      await new Promise((resolve) => window.setTimeout(resolve, 140));
+      loaderRoot.classList.add("hidden");
+      if (bootExitSweep) {
+        const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (!reduceMotion) {
+          bootExitSweep.classList.remove("active");
+          void bootExitSweep.offsetWidth;
+          bootExitSweep.classList.add("active");
+          window.setTimeout(() => bootExitSweep.classList.remove("active"), 460);
+        }
+      }
+      if (renderer) renderer.dispose();
+    }
+
+    function maybeFinishLoader() {
+      if (!sceneReady || !glitchDone || hidden) return;
+      const elapsed = performance.now() - loaderStartMs;
+      const remaining = LOADER_MIN_MS - elapsed;
+      if (remaining <= 0) {
+        finishLoader();
+        return;
+      }
+      if (minDelayTimer) clearTimeout(minDelayTimer);
+      minDelayTimer = window.setTimeout(finishLoader, remaining);
+    }
+
+    function startGlitch() {
+      for (let i = 0; i < TARGET.length; i += 1) {
+        const span = document.createElement("span");
+        span.className = "char";
+        span.textContent = randSymbol();
+        glitchRoot.appendChild(span);
+        spans.push(span);
+      }
+
+      scrambleTimer = window.setInterval(() => {
+        for (let i = 0; i < spans.length; i += 1) {
+          if (!resolved.has(i)) spans[i].textContent = randSymbol();
+        }
+      }, 50);
+
+      function resolveNext() {
+        if (resolveIdx >= resolveOrder.length) {
+          glitchDone = true;
+          if (scrambleTimer) {
+            clearInterval(scrambleTimer);
+            scrambleTimer = null;
+          }
+          maybeFinishLoader();
+          return;
+        }
+        const i = resolveOrder[resolveIdx++];
+        resolved.add(i);
+        spans[i].textContent = TARGET[i];
+        spans[i].classList.add("resolved");
+        resolveDelay = Math.max(40, resolveDelay * 0.88);
+        resolveTimer = window.setTimeout(resolveNext, resolveDelay);
+      }
+
+      resolveTimer = window.setTimeout(resolveNext, 220);
+      window.setTimeout(() => subtext.classList.add("visible"), 200);
+    }
+
+    function init3D() {
+      if (!canvas || !canvas.offsetParent) {
+        sceneReady = true;
+        maybeFinishLoader();
+        return;
+      }
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
+      camera.position.set(0, 0, 6.2);
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setClearColor(0x000000, 0);
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+
+      const key = new THREE.DirectionalLight(0xfff1df, 2.2);
+      key.position.set(2.2, 2.8, 4.2);
+      scene.add(key);
+      const rim = new THREE.DirectionalLight(0x5af0d2, 1.65);
+      rim.position.set(-3, -0.8, 2.5);
+      scene.add(rim);
+      const warm = new THREE.PointLight(0xff9a4a, 1.25, 20, 2);
+      warm.position.set(0.8, -1.2, 3.4);
+      scene.add(warm);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.28));
+
+      const loader = new FontLoader();
+      loader.load(
+        "/web/vendor/three/examples/fonts/helvetiker_bold.typeface.json",
+        (font) => {
+          const geo = new TextGeometry(TARGET, {
+            font,
+            size: 1,
+            depth: 0.5,
+            bevelEnabled: true,
+            bevelThickness: 0.05,
+            bevelSize: 0.03,
+          });
+          geo.center();
+          const mat = new THREE.MeshPhysicalMaterial({
+            color: 0x2a2a2f,
+            metalness: 0.9,
+            roughness: 0.18,
+            clearcoat: 0.8,
+            clearcoatRoughness: 0.22,
+            emissive: 0xff8a3a,
+            emissiveIntensity: 0.2,
+          });
+          textMesh = new THREE.Mesh(geo, mat);
+          textBaseScale = 1;
+          textMesh.rotation.x = -0.08;
+          scene.add(textMesh);
+          resize();
+          sceneReady = true;
+          maybeFinishLoader();
+        },
+        undefined,
+        () => {
+          sceneReady = true;
+          maybeFinishLoader();
+        },
+      );
+
+      function resize() {
+        const wrap = document.getElementById("boot_three_wrap");
+        const w = Math.max(1, wrap?.clientWidth || window.innerWidth);
+        const h = Math.max(1, wrap?.clientHeight || window.innerHeight);
+        const aspect = w / h;
+        camera.aspect = aspect;
+        // Keep the 3D logo fully visible on narrow/half-width viewports.
+        if (aspect < 1.0) camera.position.z = 10.2;
+        else if (aspect < 1.25) camera.position.z = 9.0;
+        else if (aspect < 1.5) camera.position.z = 7.8;
+        else camera.position.z = 6.2;
+        if (textMesh) {
+          const fit = Math.max(0.6, Math.min(1.0, aspect / 1.65));
+          const s = textBaseScale * fit;
+          textMesh.scale.set(s, s, s);
+        }
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h, false);
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      function animate(t) {
+        const sec = t * 0.001;
+        if (textMesh) {
+          textMesh.rotation.y = Math.sin(sec * 0.75) * 0.17;
+          textMesh.rotation.z = Math.sin(sec * 0.45) * 0.03;
+        }
+        renderer.render(scene, camera);
+        renderFrames += 1;
+        if (sceneReady && !logoSnapSent && renderFrames > 10) {
+          publishBootLogoSnapshot();
+        }
+        rafId = requestAnimationFrame(animate);
+      }
+      rafId = requestAnimationFrame(animate);
+    }
+
+    startGlitch();
+    init3D();
+    fallbackTimer = window.setTimeout(finishLoader, LOADER_MAX_MS);
+  </script>
+  <!-- ────────── HIP-4 VOLUME BOT - /hip4vol ────────── -->
+  <section id="hip4vol_page" class="hip4vol-page hidden" aria-hidden="true">
+    <div class="hv-bg" aria-hidden="true">
+      <div class="hv-bg-grid"></div>
+      <div class="hv-bg-glow"></div>
+      <div class="hv-bg-scan"></div>
+    </div>
+
+    <div class="hv-shell">
+      <!-- Locked view: default state (also shown when disconnected / no access) -->
+      <div id="hip4vol_locked" class="hv-locked hidden">
+        <div class="hv-locked-card">
+          <div class="hv-locked-icon">🔒</div>
+          <h2 class="hv-locked-title">Invite-only</h2>
+          <p class="hv-locked-sub">Enter your access code to unlock the volume bot.</p>
+          <div class="hv-code-row">
+            <input type="text" id="hip4vol_lock_code_input" class="hv-code-input" placeholder="Enter code…" autocomplete="off" spellcheck="false" />
+            <button type="button" id="hip4vol_lock_claim_btn" class="hv-btn hv-btn-launch hv-locked-btn">Unlock</button>
+          </div>
+          <div class="hv-msg hv-locked-msg" id="hip4vol_lock_msg"></div>
+        </div>
+      </div>
+
+      <div id="hip4vol_main">
+      <!-- Hero -->
+      <header class="hv-hero">
+        <div class="hv-hero-main">
+          <h1 class="hv-title">Volume <em>Engine</em></h1>
+        </div>
+        <div class="hv-hero-side">
+          <div class="hv-tier" id="hip4vol_tier_badge">-</div>
+        </div>
+      </header>
+
+      <div class="hv-grid">
+        <!-- ── LEFT : configuration ── -->
+        <div class="hv-col hv-col-config">
+          <!-- Sessions : un onglet par marche (slots 7 a 9) -->
+          <div class="hv-card hv-tabs-card">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Sessions</span>
+              <span class="hv-cap-hint" id="hip4vol_tabs_hint">up to 5 markets</span>
+            </div>
+            <div id="hip4vol_tabs" class="trading-account-selector hv-tabs"></div>
+          </div>
+
+          <!-- Mode : taker (volume) / maker (resting) -->
+          <div class="hv-card hv-mode-card">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Mode</span>
+            </div>
+            <div class="hv-mode-toggle">
+              <button type="button" id="hip4vol_mode_taker" class="hv-mode-btn is-active"><span class="hv-mode-badge">best cost</span><span class="hv-mode-help" data-tip="Market orders across all live markets: more volume, lower cost.">?</span>Taker <em>market orders</em></button>
+              <button type="button" id="hip4vol_mode_maker" class="hv-mode-btn"><span class="hv-mode-help" data-tip="Limit orders resting on one market: slower, more organic volume.">?</span>Maker <em>resting orders</em></button>
+            </div>
+          </div>
+
+          <!-- Outcome market (maker only) -->
+          <div class="hv-card hidden" id="hip4vol_outcome_card">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Outcome market</span>
+              <span class="hv-cap-hint" id="hip4vol_outcome_selected"></span>
+            </div>
+            <div class="hv-outcome-search-wrap">
+              <input type="text" id="hip4vol_outcome_search" class="hv-outcome-search"
+                     placeholder="Search markets…" autocomplete="off" spellcheck="false" />
+              <span class="hv-outcome-check" aria-hidden="true">✓</span>
+            </div>
+            <div id="hip4vol_venue_chips" class="hv-venue-chips" aria-label="Filter by deployer"></div>
+            <div id="hip4vol_outcome_list" class="hv-outcome-list">
+              <div class="hv-outcome-empty">Loading…</div>
+            </div>
+          </div>
+
+          <!-- Trading account (HL subaccounts) -->
+          <div id="hip4vol_ta_wrap" class="trading-account-wrap">
+            <div class="risk-mode-title ta-title-row">Trading Account
+              <button type="button" class="ta-fund-btn" data-open-subaccounts>Fund</button></div>
+            <div id="hip4vol_ta_selector" class="trading-account-selector">
+              <button type="button" class="ta-option active" data-ta="">Main</button>
+              <button type="button" class="ta-option ta-empty" data-ta-slot="1">+ Sub 1</button>
+              <button type="button" class="ta-option ta-empty" data-ta-slot="2">+ Sub 2</button>
+            </div>
+          </div>
+
+          <!-- Max size -->
+          <div class="hv-card">
+            <div class="hv-card-head">
+              <span class="hv-card-label" id="hip4vol_size_label">Max size <em>/ order</em></span>
+              <span class="hv-cap-hint" id="hip4vol_size_cap_hint"></span>
+            </div>
+            <div class="hv-slider-row">
+              <input type="range" id="hip4vol_size_slider" class="hv-slider" min="20" max="5000" step="1" value="100" />
+              <div class="hv-value-box">
+                <span class="hv-value-affix">$</span>
+                <input type="number" id="hip4vol_max_size" class="hv-value-input" value="100" min="20" step="1" />
+              </div>
+            </div>
+            <div class="hv-avail-inline">Available: <span id="hip4vol_avail">-</span></div>
+          </div>
+
+          <!-- Volume cap -->
+          <div class="hv-card" id="hip4vol_volume_card">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Volume target</span>
+              <span class="hv-cap-hint">0 = no target</span>
+            </div>
+            <div class="hv-slider-row">
+              <input type="range" id="hip4vol_volume_slider" class="hv-slider" min="0" max="1000000" step="1000" value="0" />
+              <div class="hv-value-box">
+                <span class="hv-value-affix">$</span>
+                <input type="number" id="hip4vol_max_volume" class="hv-value-input" value="0" min="0" step="100" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Market universe (taker) : all live markets, or outcome.xyz markets only -->
+          <div class="hv-card" id="hip4vol_only_out_card">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Markets</span>
+            </div>
+            <div class="hv-taker-venues">
+              <button type="button" id="hip4vol_universe_all" class="hv-venue-chip hv-venue-chip--all is-active" title="Scans every live HIP-4 market, Hyperliquid native ones included">All markets</button>
+              <span class="hv-venue-sep">or only</span>
+              <span id="hip4vol_taker_venue_chips" class="hv-venue-chips hv-venue-chips--inline" aria-label="Deployers to trade">
+                <button type="button" class="hv-venue-chip hv-venue-chip--out" data-venue="out" title="Markets deployed by outcome.xyz">out</button>
+                <button type="button" class="hv-venue-chip hv-venue-chip--txyz" data-venue="txyz" title="Markets deployed by trade.xyz">TXYZ</button>
+                <button type="button" class="hv-venue-chip hv-venue-chip--skew" data-venue="skew" title="Markets deployed by Skew">skew</button>
+              </span>
+            </div>
+            <div class="hv-cap-hint hv-taker-venues-hint">Pick one or more deployers to trade only their markets.</div>
+          </div>
+
+          <!-- Trading style (spread limit, mapped server-side) -->
+          <div class="hv-card" id="hip4vol_spread_field">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Trading style</span>
+            </div>
+            <div class="hv-mode-toggle">
+              <button type="button" id="hip4vol_spread_conservative" class="hv-mode-btn is-active"><span class="hv-mode-badge">best cost</span><span class="hv-mode-help" data-tip="Only trades very tight markets (spread &le; 0.02%): lowest cost per volume, fewer trade windows.">?</span>Conservative <em>tight markets</em></button>
+              <button type="button" id="hip4vol_spread_aggressive" class="hv-mode-btn"><span class="hv-mode-help" data-tip="Also trades wider markets (spread &le; 0.05%): ~2.5x more trade windows, higher cost per volume.">?</span>Aggressive <em>more volume</em></button>
+            </div>
+          </div>
+
+          <!-- Quote spread (maker mode only) -->
+          <div class="hv-card hidden" id="hip4mm_spread_card">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Quote spread <em>bid-ask</em></span>
+              <span class="hv-cap-hint">default 0.04%</span>
+            </div>
+            <div class="hv-slider-row">
+              <input type="range" id="hip4mm_spread_slider" class="hv-slider" min="0.02" max="2" step="0.01" value="0.04" />
+              <div class="hv-value-box">
+                <input type="number" id="hip4mm_spread" class="hv-value-input" value="0.04" min="0.02" max="2" step="0.01" />
+                <span class="hv-value-affix hv-value-affix--suffix">%</span>
+              </div>
+            </div>
+          </div>
+          <div class="hv-msg" id="hip4vol_code_msg"></div>
+        </div>
+
+        <!-- ── RIGHT : launch console ── -->
+        <div class="hv-col hv-col-console">
+          <div class="hv-console" id="hip4vol_console">
+            <div class="hv-reactor" id="hip4vol_reactor">
+              <span class="hv-reactor-ring hv-reactor-ring--1"></span>
+              <span class="hv-reactor-ring hv-reactor-ring--2"></span>
+              <span class="hv-reactor-ring hv-reactor-ring--3"></span>
+              <span class="hv-reactor-core"></span>
+              <span class="hv-reactor-state" id="hip4vol_console_state"></span>
+            </div>
+
+            <div class="hv-actions">
+              <button type="button" id="hip4vol_approve_btn" class="hv-btn hv-btn-launch hv-btn-approve">Approve builder fees</button>
+              <button type="button" id="hip4vol_start_btn" class="hv-btn hv-btn-launch">Start</button>
+              <button type="button" id="hip4vol_stop_btn" class="hv-btn hv-btn-stop hidden">Stop</button>
+              <button type="button" id="hip4vol_stop_limit_btn" class="hv-btn hv-btn-stop hv-btn-stop-limit hidden">Stop with limit orders</button>
+            </div>
+            <div class="hv-limit-close hidden" id="hip4vol_limit_close_panel">
+              <div class="hv-limit-close-head">
+                <span class="hv-limit-close-dot"></span>
+                <span id="hip4vol_limit_close_title">Closing with limit orders</span>
+                <span class="hv-limit-close-timer" id="hip4vol_limit_close_timer"></span>
+              </div>
+              <div class="hv-limit-close-rows" id="hip4vol_limit_close_rows"></div>
+              <button type="button" id="hip4vol_limit_close_market_btn" class="hv-btn hv-btn-stop">Close now (market)</button>
+            </div>
+            <div class="hv-msg hv-action-msg" id="hip4vol_action_msg"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Toutes les sessions : stats de chaque onglet sans changer d'onglet -->
+      <div class="hv-status hv-sessions hidden" id="hip4vol_sessions_panel">
+        <div class="hv-status-head"><span class="hv-status-dot"></span>All sessions<span class="hv-sessions-total" id="hip4vol_sessions_total"></span></div>
+        <div class="hv-sessions-table">
+          <div class="hv-sessions-row hv-sessions-colhead">
+            <div>Market</div>
+            <div>Volume</div>
+            <div>PnL</div>
+            <div>Trades</div>
+            <div>Cost / $10k</div>
+          </div>
+          <div id="hip4vol_sessions_rows"></div>
+        </div>
+      </div>
+
+      <!-- Live status (full width, below both columns) -->
+      <div class="hv-status hidden" id="hip4vol_status_panel">
+        <div class="hv-status-head"><span class="hv-status-dot"></span>Live telemetry<span id="hip4vol_sub_badge"></span></div>
+        <div class="hv-status-grid">
+          <div class="hv-stat">
+            <span class="hv-stat-label">Volume</span>
+            <span class="hv-stat-value" id="hip4vol_stat_volume">-</span>
+          </div>
+          <div class="hv-stat">
+            <span class="hv-stat-label">PnL</span>
+            <span class="hv-stat-value" id="hip4vol_stat_pnl">-</span>
+          </div>
+          <div class="hv-stat">
+            <span class="hv-stat-label">Trades</span>
+            <span class="hv-stat-value" id="hip4vol_stat_trades">-</span>
+          </div>
+          <div class="hv-stat">
+            <span class="hv-stat-label">Residuals</span>
+            <span class="hv-stat-value" id="hip4vol_stat_residuals">-</span>
+          </div>
+          <div class="hv-stat">
+            <span class="hv-stat-label">Cost / $10k</span>
+            <span class="hv-stat-value" id="hip4vol_stat_cost">-</span>
+          </div>
+        </div>
+        <div class="hv-mm-markets hidden" id="hip4vol_mm_markets"></div>
+      </div>
+
+      <!-- Session history (full width, below live telemetry) -->
+      <div class="hv-card hv-history" id="hip4vol_history">
+        <div class="hv-history-head">
+          <span class="hv-card-label">Session history</span>
+          <span class="hv-history-summary" id="hip4vol_history_summary"></span>
+        </div>
+        <div class="hv-history-table">
+          <div class="hv-history-row hv-history-colhead">
+            <div>Date</div>
+            <div>Duration</div>
+            <div>Volume</div>
+            <div>PnL</div>
+            <div>Cost / $10k</div>
+          </div>
+          <div id="hip4vol_history_body">
+            <div class="hv-history-empty">Loading…</div>
+          </div>
+        </div>
+        <button type="button" class="hv-history-more" id="hip4vol_history_more" style="display:none">Voir plus</button>
+      </div>
+      </div><!-- /#hip4vol_main -->
+    </div>
+  </section>
+
+  <!-- ────────── DELTA - /delta ────────── -->
+  <section id="delta_page" class="delta-page hidden" aria-hidden="true">
+    <div class="hv-bg" aria-hidden="true">
+      <div class="hv-bg-grid"></div>
+      <div class="hv-bg-glow"></div>
+    </div>
+
+    <div class="hv-shell dl-shell">
+      <header class="hv-hero">
+        <div class="hv-hero-main">
+          <div class="hv-eyebrow"><span class="hv-eyebrow-dot"></span>Delta</div>
+          <h1 class="hv-title">Delta <em>Loop</em></h1>
+          <p class="hv-sub">Long on one exchange, short on another, flipped on a timer. Farm volume and funding while staying delta-neutral.</p>
+        </div>
+      </header>
+
+      <!-- Setup -->
+      <div id="delta_setup" class="dl-setup">
+        <div class="dl-banner" id="delta_end_banner" role="status" hidden></div>
+        <div class="dl-legs">
+          <article class="hv-card dl-leg dl-leg--long" id="delta_leg_long" data-side="long"></article>
+          <div class="dl-spine">
+            <button type="button" class="dl-swap" id="delta_swap_btn" title="Swap long and short" aria-label="Swap long and short">&#8644;</button>
+            <span class="dl-spine-lbl" id="delta_spine_note">Same token</span>
+          </div>
+          <article class="hv-card dl-leg dl-leg--short" id="delta_leg_short" data-side="short"></article>
+        </div>
+
+        <div class="dl-settings">
+          <div class="hv-card">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Size <em>per leg</em></span>
+              <span class="hv-cap-hint" id="delta_size_hint"></span>
+            </div>
+            <div class="hv-value-box hv-value-box--full">
+              <span class="hv-value-affix">$</span>
+              <input type="number" id="delta_notional" class="hv-value-input" min="20" step="100" value="5000" aria-label="Size per leg" />
+            </div>
+            <button type="button" class="dl-toggle" id="delta_same_token" aria-pressed="true"><i></i>Same token on both legs</button>
+            <p class="dl-note" id="delta_same_token_note"></p>
+          </div>
+
+          <div class="hv-card dl-span2">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Execution</span>
+            </div>
+            <div class="hv-mode-toggle dl-exec-toggle">
+              <button type="button" class="hv-mode-btn" data-exec="market"><span class="hv-mode-help" data-tip="Both legs fire at once: fastest, pays taker fees on both.">?</span>Market <em>both legs</em></button>
+              <button type="button" class="hv-mode-btn" data-exec="limit_then_market"><span class="hv-mode-help" data-tip="One leg rests as a limit order; each fill is hedged at market on the other leg: cheaper, a few seconds unhedged.">?</span>Limit, then market <em>one maker leg</em></button>
+            </div>
+            <div class="dl-exec-limit" id="delta_limit_opts">
+              <div class="dl-row">
+                <span class="dl-lbl">Limit leg</span>
+                <div class="dl-seg" role="group" aria-label="Limit leg">
+                  <button type="button" data-limit-leg="long">Long</button>
+                  <button type="button" data-limit-leg="short">Short</button>
+                  <button type="button" data-limit-leg="auto">Auto</button>
+                </div>
+              </div>
+              <p class="dl-note" id="delta_auto_note"></p>
+              <div class="dl-row">
+                <span class="dl-lbl">Chase: re-quote every</span>
+                <div class="hv-value-box dl-box-sm">
+                  <input type="number" id="delta_chase" class="hv-value-input" min="1" max="30" step="1" value="3" aria-label="Re-quote interval" />
+                  <span class="hv-value-affix hv-value-affix--suffix">s</span>
+                </div>
+              </div>
+              <div class="dl-row">
+                <span class="dl-lbl">Go market after</span>
+                <div class="hv-value-box dl-box-sm">
+                  <input type="number" id="delta_chase_timeout" class="hv-value-input" min="5" max="300" step="1" value="45" aria-label="Go market after" />
+                  <span class="hv-value-affix hv-value-affix--suffix">s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="hv-card dl-wide dl-opt" id="delta_loop_card">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Reverse loop <em>timer</em></span>
+              <button type="button" class="dl-toggle" id="delta_loop_on" aria-pressed="true" aria-label="Reverse loop"><i></i></button>
+            </div>
+            <p class="dl-note dl-opt-off">Off: both legs are opened and held. No automatic reverse, stop conditions still apply.</p>
+            <div class="dl-opt-body">
+              <div class="dl-field">
+                <div class="dl-row"><span class="dl-lbl">Flip every</span><span class="dl-val" id="delta_interval_txt">-</span></div>
+                <input type="range" id="delta_interval" class="hv-slider" min="5" max="240" step="5" value="30" aria-label="Flip every" />
+              </div>
+              <div class="dl-field">
+                <div class="dl-row">
+                  <button type="button" class="dl-toggle" id="delta_jitter_on" aria-pressed="true"><i></i>Randomize</button>
+                  <span class="dl-val" id="delta_jitter_txt">-</span>
+                </div>
+                <input type="range" id="delta_jitter" class="hv-slider" min="5" max="50" step="5" value="20" aria-label="Jitter" />
+              </div>
+              <p class="dl-note">Each reverse flips both legs in place: long becomes short and short becomes long, on the same exchanges.</p>
+            </div>
+          </div>
+
+          <div class="hv-card dl-wide dl-opt" id="delta_guard_card">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Liquidation guard</span>
+              <button type="button" class="dl-toggle" id="delta_guard_on" aria-pressed="true" aria-label="Liquidation guard"><i></i></button>
+            </div>
+            <p class="dl-note dl-opt-off is-warn">Off: Delta never closes the legs when one gets close to liquidation. You still get a Telegram alert if notifications are on.</p>
+            <div class="dl-opt-body">
+              <div class="dl-field">
+                <div class="dl-row"><span class="dl-lbl">Close both legs below</span><span class="dl-val" id="delta_guard_close_txt">-</span></div>
+                <input type="range" id="delta_guard_close" class="hv-slider" min="10" max="60" step="5" value="25" aria-label="Close threshold" />
+              </div>
+              <div class="dl-field">
+                <div class="dl-row"><span class="dl-lbl">Telegram alert at</span><span class="dl-val" id="delta_guard_alert_txt">-</span></div>
+                <input type="range" id="delta_guard_alert" class="hv-slider" min="15" max="80" step="5" value="40" aria-label="Alert threshold" />
+              </div>
+              <p class="dl-note" id="delta_guard_note"></p>
+            </div>
+          </div>
+
+          <div class="hv-card dl-wide dl-opt" id="delta_telegram_card">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Telegram notifications</span>
+              <button type="button" class="dl-toggle" id="delta_telegram_on" aria-pressed="false" aria-label="Telegram notifications"><i></i></button>
+            </div>
+            <p class="dl-note dl-opt-off">Off: no Telegram message for this loop (opens, reverses, alerts, stop). Events stay in the session history.</p>
+            <div class="dl-opt-body">
+              <p class="dl-note">Messages go to the Telegram chat linked to your account: opens, reverses, liquidation alerts and the end of the loop.</p>
+            </div>
+          </div>
+
+          <div class="hv-card dl-wide">
+            <div class="hv-card-head">
+              <span class="hv-card-label">Stop conditions <em>whichever comes first</em></span>
+            </div>
+            <div class="dl-stops">
+              <div class="dl-stop" data-stop="max_reverses">
+                <button type="button" class="dl-toggle" data-stop-toggle="max_reverses" aria-label="Reverse count" aria-pressed="true"><i></i></button>
+                <span class="dl-stop-t">Reverse count<small>Stop and close after N reverses</small></span>
+                <div class="hv-value-box dl-box-sm"><input type="number" class="hv-value-input" data-stop-input="max_reverses" min="1" step="1" value="40" aria-label="Reverse count" /><span class="hv-value-affix hv-value-affix--suffix">x</span></div>
+              </div>
+              <div class="dl-stop" data-stop="volume_usd">
+                <button type="button" class="dl-toggle" data-stop-toggle="volume_usd" aria-label="Volume target" aria-pressed="true"><i></i></button>
+                <span class="dl-stop-t">Volume target<small>Both legs combined</small></span>
+                <div class="hv-value-box dl-box-md"><span class="hv-value-affix">$</span><input type="number" class="hv-value-input" data-stop-input="volume_usd" min="1" step="1000" value="1000000" aria-label="Volume target" /></div>
+              </div>
+              <div class="dl-stop" data-stop="duration_h">
+                <button type="button" class="dl-toggle" data-stop-toggle="duration_h" aria-label="Duration" aria-pressed="false"><i></i></button>
+                <span class="dl-stop-t">Duration<small>From start</small></span>
+                <div class="hv-value-box dl-box-sm"><input type="number" class="hv-value-input" data-stop-input="duration_h" min="1" step="1" value="24" aria-label="Duration" /><span class="hv-value-affix hv-value-affix--suffix">h</span></div>
+              </div>
+              <div class="dl-stop" data-stop="max_loss_usd">
+                <button type="button" class="dl-toggle" data-stop-toggle="max_loss_usd" aria-label="Max loss" aria-pressed="true"><i></i></button>
+                <span class="dl-stop-t">Max loss<small>Net PnL incl. fees and funding</small></span>
+                <div class="hv-value-box dl-box-sm"><span class="hv-value-affix">$</span><input type="number" class="hv-value-input" data-stop-input="max_loss_usd" min="1" step="10" value="150" aria-label="Max loss" /></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dl-launchbar">
+          <div class="dl-proj">
+            <div><span class="dl-proj-lbl">Volume / reverse</span><span class="dl-proj-val" id="delta_proj_rev">-</span></div>
+            <div><span class="dl-proj-lbl">Volume / day</span><span class="dl-proj-val" id="delta_proj_day">-</span></div>
+            <div><span class="dl-proj-lbl">Ends after</span><span class="dl-proj-val" id="delta_proj_end">-</span></div>
+            <div><span class="dl-proj-lbl">Total volume</span><span class="dl-proj-val dl-warm" id="delta_proj_total">-</span></div>
+            <div><span class="dl-proj-lbl">Margin needed</span><span class="dl-proj-val" id="delta_proj_margin">-</span></div>
+          </div>
+          <div class="dl-launch">
+            <button type="button" id="delta_start_btn" class="hv-btn hv-btn-launch">Start</button>
+            <div class="hv-msg hv-err" id="delta_start_msg" role="status"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Running -->
+      <div id="delta_running" class="dl-running hidden" aria-hidden="true">
+        <div class="dl-banner" id="delta_run_banner" role="status" hidden></div>
+        <div class="dl-live">
+          <div class="dl-live-main">
+            <article class="hv-card dl-countdown">
+              <div class="hv-card-head">
+                <span class="dl-live-pill" id="delta_run_pill">Running</span>
+                <span class="hv-cap-hint" id="delta_run_market"></span>
+              </div>
+              <h2 class="dl-countdown-title" id="delta_run_title"><span id="delta_run_title_txt">Next reverse in</span> <span class="dl-countdown-num" id="delta_run_countdown" data-dl-countdown></span></h2>
+              <p class="dl-countdown-sub" id="delta_run_sentence"></p>
+              <div class="dl-progress"><i id="delta_run_progress"></i></div>
+            </article>
+
+            <div class="hv-status dl-stats">
+              <div class="hv-status-grid dl-stats-grid">
+                <div class="hv-stat"><span class="hv-stat-label">Reverse</span><span class="hv-stat-value" id="delta_stat_rev">-</span></div>
+                <div class="hv-stat"><span class="hv-stat-label">Volume</span><span class="hv-stat-value dl-warm" id="delta_stat_vol">-</span></div>
+                <div class="hv-stat"><span class="hv-stat-label">Fees</span><span class="hv-stat-value" id="delta_stat_fees">-</span></div>
+                <div class="hv-stat"><span class="hv-stat-label">Funding</span><span class="hv-stat-value" id="delta_stat_funding">-</span></div>
+                <div class="hv-stat"><span class="hv-stat-label">Net PnL</span><span class="hv-stat-value" id="delta_stat_pnl">-</span></div>
+                <div class="hv-stat"><span class="hv-stat-label">Cost / $1M</span><span class="hv-stat-value" id="delta_stat_cost">-</span></div>
+              </div>
+            </div>
+
+            <div class="dl-cycles-head">
+              <span class="hv-card-label">Cycles</span>
+              <span class="hv-cap-hint" id="delta_run_exec"></span>
+            </div>
+            <div class="dl-cycles-wrap">
+              <table class="dl-cycles">
+                <thead>
+                  <tr><th>#</th><th>Time</th><th>Flip</th><th>Limit filled in</th><th>Slippage</th><th>Fees</th><th>Funding</th><th>Unhedged</th></tr>
+                </thead>
+                <tbody id="delta_cycles_body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <aside class="dl-live-side">
+            <article class="hv-card dl-side-card">
+              <span class="hv-card-label">Positions</span>
+              <div class="dl-livepos" id="delta_pos_long"></div>
+              <div class="dl-livepos" id="delta_pos_short"></div>
+            </article>
+            <article class="hv-card dl-side-card">
+              <span class="hv-card-label">Stop conditions</span>
+              <div class="dl-stoplist" id="delta_stop_list"></div>
+            </article>
+            <article class="hv-card dl-side-card dl-live-actions">
+              <button type="button" id="delta_reverse_btn" class="hv-btn hv-btn-ghost">Reverse now</button>
+              <button type="button" id="delta_stop_btn" class="hv-btn hv-btn-stop">Stop</button>
+              <div class="hv-msg" id="delta_run_msg" role="status"></div>
+            </article>
+          </aside>
+        </div>
+      </div>
+
+      <!-- Session history (Setup and Running) -->
+      <section class="hv-history dl-history" id="delta_history" hidden>
+        <div class="hv-history-head">
+          <span class="hv-card-label">Session history</span>
+          <span class="hv-history-summary" id="delta_history_summary"></span>
+        </div>
+        <div class="dl-history-wrap">
+          <div class="hv-history-table" id="delta_history_table"></div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <!-- Delta stop confirmation (Promise modal, model: #hip4vol_limit_modal) -->
+  <div id="delta_stop_modal_overlay" class="connect-modal-overlay hidden" aria-hidden="true"></div>
+  <aside id="delta_stop_modal" class="connect-modal dl-stop-modal hidden" role="dialog" aria-modal="true" aria-labelledby="delta_stop_modal_title" aria-hidden="true">
+    <div class="connect-modal-head">
+      <div class="connect-modal-title" id="delta_stop_modal_title">Stop the loop?</div>
+      <button id="delta_stop_modal_close" type="button" class="btn connect-modal-close" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="connect-modal-subtitle">Both legs are closed at market.</div>
+    <div class="dl-modal-actions">
+      <button type="button" id="delta_stop_modal_cancel" class="hv-btn hv-btn-ghost">Cancel</button>
+      <button type="button" id="delta_stop_modal_confirm" class="hv-btn hv-btn-stop">Stop and close</button>
+    </div>
+  </aside>
+
+  <!-- Delta token selector (clone of #mm_token_modal, fed by /api/delta/markets) -->
+  <div id="delta_token_modal_overlay" class="mm-token-modal-overlay hidden" aria-hidden="true"></div>
+  <div id="delta_token_modal" class="mm-token-modal dl-token-modal hidden" role="dialog" aria-modal="true" aria-label="Select token">
+    <div class="mm-token-modal-head">
+      <span class="mm-token-modal-title" id="delta_token_modal_title">Select token</span>
+      <button id="delta_token_modal_close" type="button" class="mm-token-modal-close" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="mm-token-modal-controls">
+      <input id="delta_token_modal_search" type="text" class="mm-token-modal-search" placeholder="Search token…" autocomplete="off" spellcheck="false" />
+      <div id="delta_token_modal_tabs" class="mm-token-modal-tabs hidden" role="tablist" aria-label="Market category"></div>
+    </div>
+    <div class="mm-token-modal-table-wrap">
+      <table class="mm-token-modal-table">
+        <thead>
+          <tr>
+            <th data-sort="symbol">Token</th>
+            <th data-sort="lev" class="mm-col-right">Max</th>
+            <th data-sort="volume" class="mm-col-right sort-active">24h vol</th>
+          </tr>
+        </thead>
+        <tbody id="delta_token_modal_body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ────────── OUTCOME MARKETS (HIP-4, design Tradoor) - /outcomes ────────── -->
+  <section id="outcomes_page" class="hidden" aria-hidden="true">
+    <div id="oc_bg" style="display:none"></div>
+    <div id="outcomes_list_view"></div>
+    <div id="outcomes_detail_view" class="hidden"></div>
+  </section>
+
+  <script src="/web/galaxy-bg.js"></script>
+  <script src="/web/app.js?v=20261020_2"></script>
+  <script src="/web/delta.js?v=20261020_1"></script>
+  <script src="/web/outcomes.js?v=20261003_1"></script>
+
+  <!-- Connection modal -->
+  <!-- Choix de venue avant la connexion wallet -->
+  <div id="venue_choice_overlay" class="connect-modal-overlay hidden" aria-hidden="true"></div>
+  <aside id="venue_choice_modal" class="venue-choice-modal hidden" role="dialog" aria-modal="true" aria-labelledby="venue_choice_title" aria-hidden="true">
+    <div class="venue-choice-title" id="venue_choice_title">Choose your venue</div>
+    <div class="venue-choice-subtitle">Where do you want to trade?</div>
+    <div class="venue-choice-cards">
+      <button type="button" class="venue-choice-card" data-dex="hyperliquid" style="--venue-accent: #35f0c2;">
+        <img src="/web/hyperliquid.svg" class="venue-choice-logo" alt="Hyperliquid" />
+      </button>
+      <button type="button" class="venue-choice-card" data-dex="extended" style="--venue-accent: #34eda4;">
+        <img src="/web/extended.svg" class="venue-choice-logo" alt="Extended" />
+        <span class="venue-beta-badge">BETA</span>
+      </button>
+      <button type="button" class="venue-choice-card" data-dex="risex" style="--venue-accent: #03de82;">
+        <img src="/web/risex.svg" class="venue-choice-logo" alt="RISEx" />
+        <span class="venue-beta-badge venue-beta-badge--risex">BETA</span>
+      </button>
+      <button type="button" class="venue-choice-card" data-dex="qfex" aria-label="QFEX" style="--venue-accent: #38a5a0;">
+        <span class="venue-logo-qfex"><img src="/web/qfex.svg" class="venue-choice-logo venue-logo-qfex-mark" alt="" /><span class="venue-logo-qfex-text">QFEX</span></span>
+        <span class="venue-beta-badge venue-beta-badge--qfex">BETA</span>
+      </button>
+    </div>
+  </aside>
+
+  <div id="hip4vol_limit_modal_overlay" class="connect-modal-overlay hidden" aria-hidden="true"></div>
+  <aside id="hip4vol_limit_modal" class="connect-modal hidden" role="dialog" aria-modal="true" aria-labelledby="hip4vol_limit_modal_title" aria-hidden="true">
+    <div class="connect-modal-head">
+      <div class="connect-modal-title" id="hip4vol_limit_modal_title">Stop with limit orders</div>
+      <button id="hip4vol_limit_modal_close" type="button" class="btn connect-modal-close" aria-label="Close">✕</button>
+    </div>
+    <div class="connect-modal-subtitle">
+      Your positions are closed with passive limit orders at the best price, repriced until they fill.
+      If they are not filled within the timeout, the bot closes them at market.
+    </div>
+    <div class="hv-limit-choices" id="hip4vol_limit_choices">
+      <button type="button" class="hv-limit-choice" data-min="5">5 min</button>
+      <button type="button" class="hv-limit-choice" data-min="15">15 min</button>
+      <button type="button" class="hv-limit-choice is-active" data-min="30">30 min</button>
+      <button type="button" class="hv-limit-choice" data-min="60">1 h</button>
+      <button type="button" class="hv-limit-choice" data-min="90">1 h 30</button>
+      <button type="button" class="hv-limit-choice" data-min="120">2 h</button>
+    </div>
+    <button type="button" id="hip4vol_limit_modal_confirm" class="hv-btn hv-btn-stop">Start limit close</button>
+  </aside>
+
+  <div id="connect_modal_overlay" class="connect-modal-overlay hidden" aria-hidden="true"></div>
+  <aside id="connect_modal" class="connect-modal hidden" role="dialog" aria-modal="true" aria-labelledby="connect_modal_title" aria-hidden="true">
+    <div class="connect-modal-head">
+      <div class="connect-modal-title" id="connect_modal_title">Connection</div>
+      <button id="connect_modal_close" type="button" class="btn connect-modal-close" aria-label="Close">✕</button>
+    </div>
+    <div class="connect-modal-progress" aria-hidden="true">
+      <div id="connect_modal_progress_fill" class="connect-modal-progress-fill"></div>
+    </div>
+    <div class="connect-modal-subtitle" id="connect_modal_subtitle">Signing with your wallet</div>
+    <div class="connect-modal-steps" id="connect_modal_steps">
+      <button id="cm_step_1" class="cm-step is-pending" type="button" data-step="1">
+        <span class="cm-step-kicker">1</span>
+        <span class="cm-step-icon" aria-hidden="true">
+          <span class="cm-step-spinner"></span>
+          <svg class="cm-step-check" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          <svg class="cm-step-cross" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </span>
+        <span class="cm-step-label">Connect wallet</span>
+        <span class="cm-step-state">Pending</span>
+        <span class="cm-step-error" role="alert"></span>
+        <span class="cm-step-retry" aria-hidden="true">Retry</span>
+      </button>
+      <div class="cm-step-connector" id="cm_conn_12"><div class="cm-step-connector-fill"></div></div>
+      <button id="cm_step_2" class="cm-step is-pending" type="button" data-step="2">
+        <span class="cm-step-kicker">2</span>
+        <span class="cm-step-icon" aria-hidden="true">
+          <span class="cm-step-spinner"></span>
+          <svg class="cm-step-check" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          <svg class="cm-step-cross" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </span>
+        <span class="cm-step-label">Approve builder fee</span>
+        <span class="cm-step-state">Pending</span>
+        <span class="cm-step-error" role="alert"></span>
+        <span class="cm-step-retry" aria-hidden="true">Retry</span>
+      </button>
+      <div class="cm-step-connector" id="cm_conn_23"><div class="cm-step-connector-fill"></div></div>
+      <button id="cm_step_3" class="cm-step is-pending" type="button" data-step="3">
+        <span class="cm-step-kicker">3</span>
+        <span class="cm-step-icon" aria-hidden="true">
+          <span class="cm-step-spinner"></span>
+          <svg class="cm-step-check" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          <svg class="cm-step-cross" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </span>
+        <span class="cm-step-label">Approve TRADOR agent</span>
+        <span class="cm-step-state">Pending</span>
+        <span class="cm-step-error" role="alert"></span>
+        <span class="cm-step-retry" aria-hidden="true">Retry</span>
+      </button>
+      <div id="cm_substeps" class="cm-substeps hidden" aria-live="polite"></div>
+    </div>
+    <div class="connect-modal-footer">
+      <div id="connect_modal_current_dex" class="connect-modal-current-dex"></div>
+    </div>
+  </aside>
+
+  <!-- Points-live announcement (one-shot per user) -->
+  <div id="points_live_overlay" class="referral-modal-overlay hidden" aria-hidden="true"></div>
+  <div id="points_live_modal" class="referral-modal points-live-modal hidden" role="dialog" aria-modal="true" aria-label="Tradoor Points are live" aria-hidden="true">
+    <canvas id="points_live_confetti" class="points-live-confetti" aria-hidden="true"></canvas>
+    <button id="points_live_close" type="button" class="btn referral-modal-close-btn points-live-close">✕</button>
+    <div class="points-live-body">
+      <div class="points-live-kicker">TRADOOR</div>
+      <div class="points-live-title">POINTS</div>
+      <div class="points-live-live">are <span class="pl-live">LIVE</span> !</div>
+      <p class="points-live-sub">Your trading volume now earns tPoints. Retroactive points are already credited.</p>
+      <a href="/points" id="points_live_cta" class="points-live-cta">View my Points →</a>
+    </div>
+  </div>
+
+  <!-- Referral modal -->
+  <div id="referral_modal_overlay" class="referral-modal-overlay hidden" aria-hidden="true"></div>
+  <div id="referral_modal" class="referral-modal hidden" role="dialog" aria-modal="true" aria-label="Referral" aria-hidden="true">
+    <div class="referral-modal-head">
+      <div class="referral-modal-title">Referral</div>
+      <button id="referral_modal_close" type="button" class="btn referral-modal-close-btn">✕</button>
+    </div>
+    <!-- Tier cards -->
+    <div class="referral-tier-cards">
+      <div class="referral-tier-card tier-1">
+        <div class="rtc-label">Tier 1</div>
+        <div class="rtc-discount">−10%</div>
+        <div class="rtc-req">1 referral</div>
+      </div>
+      <div class="referral-tier-card tier-2">
+        <div class="rtc-label">Tier 2</div>
+        <div class="rtc-discount">−20%</div>
+        <div class="rtc-req">5 qualified</div>
+        <div class="rtc-tooltip">Each referral must have reached <strong>$100k</strong> in cumulative trading volume</div>
+      </div>
+      <div class="referral-tier-card tier-3">
+        <div class="rtc-label">Tier 3</div>
+        <div class="rtc-discount">−25%</div>
+        <div class="rtc-req">10 qualified</div>
+        <div class="rtc-tooltip">Each referral must have reached <strong>$100k</strong> in cumulative trading volume</div>
+      </div>
+    </div>
+    <!-- Commission highlight -->
+    <div class="referral-commission-highlight">
+      <span class="rch-text">Earn <strong>10% of your referrals' fees</strong> as passive commission</span>
+    </div>
+
+    <!-- Tier + discount badge : always visible when connected -->
+    <div id="referral_tier_block" class="referral-tier-block hidden">
+      <div class="referral-tier-row">
+        <span id="referral_tier_badge" class="referral-tier-badge"></span>
+        <span id="referral_discount_badge" class="referral-discount-badge hidden"></span>
+      </div>
+      <div id="referral_tier_progress_wrap" class="referral-tier-progress-wrap hidden">
+        <div class="referral-tier-progress-label">
+          <span id="referral_tier_progress_text"></span>
+          <span id="referral_tier_next_label"></span>
+        </div>
+        <div class="referral-tier-progress-bar-bg">
+          <div id="referral_tier_progress_bar" class="referral-tier-progress-bar" style="width:0%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Locked state -->
+    <div id="referral_locked_block" class="referral-locked-block hidden">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22" class="referral-lock-icon"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <div class="referral-locked-text">
+        <div class="referral-locked-title">$100,000 in volume required to share your link</div>
+        <div id="referral_locked_progress" class="referral-locked-progress"></div>
+      </div>
+    </div>
+
+    <!-- Unlocked content -->
+    <div id="referral_content" class="hidden">
+      <div class="referral-section-label">Your referral link</div>
+      <div class="referral-link-row">
+        <span id="referral_link_display" class="referral-link-value">-</span>
+        <button id="referral_copy_btn" class="referral-copy-btn" type="button" title="Copy link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+      </div>
+      <div id="referral_stats" class="referral-stats"></div>
+
+      <div id="referral_set_code_row" class="referral-apply-row referral-set-code-row hidden">
+        <input id="referral_new_code_input" class="referral-code-input" type="text" placeholder="my-custom-code" maxlength="20" autocomplete="off" spellcheck="false" />
+        <button id="referral_set_code_btn" class="referral-apply-btn btn" type="button">Save</button>
+        <button id="referral_set_code_cancel" class="referral-cancel-btn" type="button">✕</button>
+      </div>
+      <button id="referral_edit_code_btn" class="referral-edit-code-btn" type="button">Edit code</button>
+      <div id="referral_set_code_msg" class="referral-msg hidden"></div>
+    </div>
+
+    <!-- Apply section : visible when connected and not yet referred -->
+    <div id="referral_apply_section" class="hidden">
+      <div class="referral-divider"></div>
+      <div class="referral-section-label">Enter a referral code</div>
+      <!-- Form (before applying) -->
+      <div id="referral_apply_row" class="referral-apply-row">
+        <input id="referral_code_input" class="referral-code-input" type="text" placeholder="Referral code" maxlength="64" autocomplete="off" spellcheck="false" />
+        <button id="referral_apply_btn" class="referral-apply-btn btn" type="button">Apply</button>
+      </div>
+      <!-- Read-only display (after applying) -->
+      <div id="referral_applied_row" class="referral-applied-row hidden">
+        <span class="referral-applied-label">Code applied</span>
+        <span id="referral_applied_code" class="referral-applied-code"></span>
+        <span class="referral-applied-check">✓</span>
+      </div>
+      <div id="referral_msg" class="referral-msg hidden"></div>
+    </div>
+
+    <!-- Commission block : visible whenever connected -->
+    <div id="referral_commission_block" class="referral-commission-block hidden">
+      <div class="referral-divider"></div>
+      <div class="referral-section-label">Commissions earned</div>
+      <div class="referral-commission-grid">
+        <div class="referral-commission-row">
+          <span class="referral-commission-label">Total earned</span>
+          <span id="referral_comm_earned" class="referral-commission-value">$0.00</span>
+        </div>
+        <div class="referral-commission-row">
+          <span class="referral-commission-label">Claimed</span>
+          <span id="referral_comm_claimed" class="referral-commission-value">$0.00</span>
+        </div>
+        <div class="referral-commission-row">
+          <span class="referral-commission-label">Pending payout</span>
+          <span id="referral_comm_pending" class="referral-commission-value">$0.00</span>
+        </div>
+        <div class="referral-commission-row referral-commission-row-claimable">
+          <span class="referral-commission-label">Available to claim</span>
+          <span id="referral_comm_claimable" class="referral-commission-value referral-commission-claimable">$0.00</span>
+        </div>
+      </div>
+      <button id="referral_claim_btn" class="referral-claim-btn btn" type="button" disabled>Claim</button>
+      <div id="referral_claim_msg" class="referral-msg hidden"></div>
+    </div>
+
+    <p id="referral_not_connected_msg" class="referral-not-connected hidden">Connect your wallet to access referral.</p>
+  </div>
+
+  <!-- Trading Score full-page -->
+  <div id="trading_score_overlay" class="ts-fullpage-overlay hidden" aria-hidden="true"></div>
+  <div id="trading_score_modal" class="ts-fullpage hidden" role="dialog" aria-modal="true" aria-label="Trading Score" aria-hidden="true">
+    <div class="ts-fullpage-head">
+      <div class="ts-fullpage-title">Trading Score</div>
+      <button id="trading_score_close_btn" type="button" class="btn ts-fullpage-close">&#10005;</button>
+    </div>
+
+    <div class="ts-fullpage-body">
+      <!-- Gauge -->
+      <div class="ts-gauge-wrap">
+        <svg class="ts-gauge-svg" viewBox="0 0 200 120" aria-hidden="true">
+          <defs>
+            <linearGradient id="ts_gauge_grad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#f87171"/>
+              <stop offset="50%" stop-color="#ff8c3c"/>
+              <stop offset="100%" stop-color="#35f0c2"/>
+            </linearGradient>
+          </defs>
+          <path class="ts-gauge-bg" d="M 20 105 A 80 80 0 0 1 180 105" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="14" stroke-linecap="round"/>
+          <path class="ts-gauge-fill" id="ts_gauge_fill" d="M 20 105 A 80 80 0 0 1 180 105" fill="none" stroke="url(#ts_gauge_grad)" stroke-width="14" stroke-linecap="round"/>
+        </svg>
+        <div class="ts-gauge-value" id="ts_gauge_value">--</div>
+        <div class="ts-gauge-label" id="ts_gauge_label">Loading...</div>
+      </div>
+
+      <!-- Factor bars -->
+      <div class="ts-factors" id="ts_factors"></div>
+
+      <!-- Recommendations -->
+      <div class="ts-section-title">Recommended Configuration</div>
+      <div class="ts-rec-grid" id="ts_recommendations"></div>
+
+      <!-- Apply button -->
+      <button id="ts_apply_btn" class="ts-apply-btn btn" type="button" disabled>Apply Optimal Config</button>
+    </div>
+
+    <div class="ts-loading hidden" id="ts_loading">Loading...</div>
+    <div class="ts-error hidden" id="ts_error"></div>
+  </div>
+
+  <!-- My Stats modal -->
+  <div id="my_stats_overlay" class="referral-modal-overlay hidden" aria-hidden="true"></div>
+  <div id="my_stats_modal" class="referral-modal my-stats-modal hidden" role="dialog" aria-modal="true" aria-label="My Stats" aria-hidden="true">
+    <div class="referral-modal-head">
+      <div class="referral-modal-title">My Stats</div>
+      <button id="my_stats_close_btn" type="button" class="btn referral-modal-close-btn">✕</button>
+    </div>
+    <div class="myst-grid">
+      <div class="myst-card">
+        <div class="myst-label">Total Volume</div>
+        <div class="myst-value" id="myst_volume">-</div>
+        <div class="myst-sub" id="myst_sessions">- sessions</div>
+      </div>
+      <div class="myst-card">
+        <div class="myst-label">Total PnL</div>
+        <div class="myst-value" id="myst_pnl">-</div>
+        <div class="myst-sub" id="myst_pnl_sub">&nbsp;</div>
+      </div>
+      <div class="myst-card">
+        <div class="myst-label">Fees Saved</div>
+        <div class="myst-value myst-value--green" id="myst_fees_saved">-</div>
+        <div class="myst-sub" id="myst_discount_label">No referral discount</div>
+      </div>
+      <div class="myst-card">
+        <div class="myst-label">Referral Earnings</div>
+        <div class="myst-value myst-value--cyan" id="myst_commissions">-</div>
+        <div class="myst-sub" id="myst_refs_count">- referrals</div>
+      </div>
+      <div class="myst-card myst-card--wide">
+        <div class="myst-label">Net PnL per $100k Volume</div>
+        <div class="myst-value" id="myst_net_per_100k">-</div>
+        <div class="myst-sub" id="myst_net_coverage">&nbsp;</div>
+      </div>
+    </div>
+    <div class="myst-loading" id="myst_loading">Loading…</div>
+    <div class="myst-error hidden" id="myst_error"></div>
+  </div>
+
+  <!-- Feedback modal -->
+  <div id="feedback_overlay" class="referral-modal-overlay hidden" aria-hidden="true"></div>
+  <!-- Telegram verification modal -->
+  <div id="telegram_overlay" class="referral-modal-overlay hidden" aria-hidden="true"></div>
+  <div id="telegram_modal" class="referral-modal telegram-modal hidden" role="dialog" aria-modal="true" aria-label="Telegram Notifications" aria-hidden="true">
+    <div class="referral-modal-head">
+      <div class="referral-modal-title">Telegram Notifications</div>
+      <button id="telegram_close_btn" type="button" class="btn referral-modal-close-btn">✕</button>
+    </div>
+
+    <!-- State: not linked -->
+    <div id="telegram_unlinked" class="telegram-state">
+      <p class="telegram-desc">Receive notifications when your sessions start or stop.</p>
+      <p class="telegram-desc telegram-desc--sub">Click the button below to send a message containing the code
+        <strong id="telegram_code" class="telegram-code">------</strong>
+        to the bot <a href="https://t.me/tradooralerts_bot" target="_blank" rel="noopener noreferrer" class="telegram-link">@tradooralerts_bot</a>.
+      </p>
+      <a id="telegram_verify_btn" target="_blank" rel="noopener noreferrer" class="telegram-verify-btn telegram-verify-btn--disabled">Verify Telegram Account</a>
+      <div id="telegram_verify_status" class="telegram-verify-status"></div>
+      <label class="telegram-dismiss-label">
+        <input id="telegram_dismiss_check" type="checkbox" /><span class="dismiss-check"></span>
+        <span>Don't show this automatically</span>
+      </label>
+    </div>
+
+    <!-- State: linked -->
+    <div id="telegram_linked" class="telegram-state hidden">
+      <div class="telegram-linked-badge">✓ Telegram linked</div>
+      <p class="telegram-desc">You'll receive notifications when sessions start or stop.</p>
+      <label class="telegram-toggle-label">
+        <input id="telegram_enabled" type="checkbox" checked />
+        <span>Notifications enabled</span>
+      </label>
+      <button id="telegram_unlink_btn" type="button" class="btn telegram-btn telegram-btn--unlink">Unlink Telegram</button>
+    </div>
+  </div>
+
+  <!-- PnL Share modal -->
+  <div id="pnl_share_overlay" class="referral-modal-overlay hidden" aria-hidden="true"></div>
+  <div id="pnl_share_modal" class="pnl-share-modal hidden" role="dialog" aria-modal="true" aria-label="Share PnL" aria-hidden="true">
+    <div class="pnl-share-head">
+      <div class="pnl-share-title">Share PnL</div>
+      <button id="pnl_share_close_btn" type="button" class="btn referral-modal-close-btn">✕</button>
+    </div>
+    <div class="pnl-share-body">
+      <div class="pnl-share-canvas-wrap">
+        <canvas id="pnl_share_canvas" width="600" height="340"></canvas>
+      </div>
+      <div class="pnl-share-controls">
+        <div class="pnl-share-section-label">Overlay</div>
+        <div class="pnl-share-overlays">
+          <button type="button" class="pnl-share-ov-btn pnl-share-ov-btn--green active" data-overlay="green" title="Green stars"></button>
+          <button type="button" class="pnl-share-ov-btn pnl-share-ov-btn--red" data-overlay="red" title="Red stars"></button>
+          <button type="button" class="pnl-share-ov-btn pnl-share-ov-btn--custom" data-overlay="custom" title="Custom image">+</button>
+        </div>
+        <input type="file" id="pnl_share_custom_file" accept="image/*" class="hidden" />
+        <div class="pnl-share-section-label">Display Options</div>
+        <label class="pnl-share-option"><input type="checkbox" id="pnl_share_opt_pnl" checked /><span>Include PnL amount</span></label>
+        <label class="pnl-share-option"><input type="checkbox" id="pnl_share_opt_volume" checked /><span>Include Volume</span></label>
+      </div>
+    </div>
+    <div class="pnl-share-actions">
+      <button id="pnl_share_download" type="button" class="btn pnl-share-action-btn">⬇ Download</button>
+      <button id="pnl_share_copy" type="button" class="btn pnl-share-action-btn pnl-share-action-btn--alt">📋 Copy</button>
+      <button id="pnl_share_tweet" type="button" class="btn pnl-share-action-btn pnl-share-action-btn--tweet">𝕏 Tweet</button>
+    </div>
+  </div>
+
+  <div id="feedback_modal" class="referral-modal hidden" role="dialog" aria-modal="true" aria-label="Feedback" aria-hidden="true">
+    <div class="referral-modal-head">
+      <div class="referral-modal-title">Feedback</div>
+      <button id="feedback_close_btn" type="button" class="btn referral-modal-close-btn">✕</button>
+    </div>
+    <div id="feedback_history" class="feedback-history"></div>
+    <p class="referral-modal-desc">Share your thoughts, report bugs, or suggest features.</p>
+    <textarea id="feedback_message" class="feedback-textarea" placeholder="Your message…" maxlength="2000" rows="3"></textarea>
+    <div class="feedback-footer">
+      <span id="feedback_status" class="feedback-status"></span>
+      <button id="feedback_send_btn" type="button" class="btn feedback-send-btn">Send</button>
+    </div>
+  </div>
+
+  <!-- Sub-account transfer modal -->
+  <div id="subtransfer_modal_overlay" class="referral-modal-overlay hidden" aria-hidden="true"></div>
+  <div id="subtransfer_modal" class="referral-modal hidden" role="dialog" aria-modal="true" aria-label="Sub-account transfer" aria-hidden="true">
+    <div class="referral-modal-head">
+      <div class="referral-modal-title" id="subtransfer_title">Transfer</div>
+      <button id="subtransfer_close" type="button" class="btn referral-modal-close-btn">✕</button>
+    </div>
+    <div class="subtransfer-body">
+      <div id="subtransfer_target_line" class="subtransfer-target"></div>
+      <div class="subtransfer-row">
+        <button type="button" class="ta-option active" id="subtransfer_dir_fund">Main → Sub</button>
+        <button type="button" class="ta-option" id="subtransfer_dir_withdraw">Sub → Main</button>
+      </div>
+      <div class="subtransfer-avail">Available: <span id="subtransfer_avail">…</span>
+        <button type="button" class="btn subtransfer-max-btn" id="subtransfer_max">MAX</button></div>
+      <div class="subtransfer-row">
+        <button type="button" class="ta-option active" id="subtransfer_kind_perp">Perp USDC</button>
+        <button type="button" class="ta-option" id="subtransfer_kind_spot">Spot USDC</button>
+      </div>
+      <input type="number" id="subtransfer_amount" inputmode="decimal" placeholder="Amount (USDC)" min="0" step="any" />
+      <div id="subtransfer_error" class="form-error hidden"></div>
+      <button type="button" class="btn subtransfer-submit-btn" id="subtransfer_submit">Transfer</button>
+    </div>
+  </div>
+</body>
+</html>

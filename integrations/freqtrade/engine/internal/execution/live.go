@@ -1262,6 +1262,12 @@ func (le *LiveExecutor) reconcilePositions() {
 	// Re-acquire lock and reconcile order tracking.
 	le.mu.Lock()
 	defer le.mu.Unlock()
+	// A refresh may have started during the network queries above. In that case
+	// the exchange snapshot is already stale and must not bump the epoch under
+	// an in-flight refresh, which would abort a perfectly healthy requote.
+	if le.refreshInProgress.Load() > 0 {
+		return
+	}
 	for coin, trackedCount := range coinsToCheck {
 		exchangeCount := exchangeOrders[coin]
 		// Re-check tracking hasn't changed from a concurrent fill/refresh.
@@ -1743,6 +1749,26 @@ func (le *LiveExecutor) classifyReconcileDrift(
 		return deltaNotional, true, false
 	}
 
+	// Zeus mode soft cap: inventory is hard-capped at a single order size
+	// (risk.max_position_notional == order_size_usd), so any divergence within
+	// that bound is fully explainable by a missed own fill (WS drop + REST
+	// poller latency). Hard-halting on it would stop quoting for ~30s on every
+	// slipped fill, since the default threshold max(50, 25% * quote_notional)
+	// is half the allowed inventory for a single-order Zeus config. Adopt chain
+	// state + synthesize a fill instead; persistent drift still escalates via
+	// the consecutive-soft-mismatch cancel path. Beyond the cap, the divergence
+	// can only come from external wallet activity or a tracking bug — hard halt.
+	if le.cfg != nil && le.cfg.ZeusMode {
+		if orderCap := le.cfg.ForAsset(coin).Risk.MaxPositionNotional; orderCap > 0 && deltaNotional <= orderCap {
+			slog.Info("reconciliation: drift within Zeus order-size cap, treating as soft correction",
+				"coin", coin,
+				"delta_notional", fmt.Sprintf("%.2f", deltaNotional),
+				"order_cap", fmt.Sprintf("%.2f", orderCap),
+			)
+			return deltaNotional, false, false
+		}
+	}
+
 	threshold := 50.0
 	if le.cfg != nil {
 		threshold = math.Max(50.0, 0.25*le.cfg.ForAsset(coin).MarketMaking.QuoteNotional)
@@ -1917,6 +1943,7 @@ func (le *LiveExecutor) Refresh(ctx context.Context, coin string, orders []types
 		mu            sync.Mutex
 		wg1           sync.WaitGroup
 		clearTracking atomic.Bool
+		superseded    atomic.Bool
 		pendingPlaces []orderDiff
 	)
 
@@ -1985,8 +2012,12 @@ func (le *LiveExecutor) Refresh(ctx context.Context, coin string, orders []types
 			go func() {
 				defer wg1.Done()
 				if err := le.cancelSingleOID(ctx, d.tracked.OID, coin); err != nil {
-					slog.Error("cancel of tracked order failed",
+					// The order may already be gone (filled or cancelled by a
+					// fill/reconciliation race). Clear tracking so the next
+					// refresh resyncs via cancel-all instead of halting.
+					slog.Warn("cancel of tracked order failed; scheduling resync",
 						"oid", d.tracked.OID, "coin", coin, "error", err)
+					superseded.Store(true)
 					clearTracking.Store(true)
 				}
 			}()
@@ -2001,9 +2032,14 @@ func (le *LiveExecutor) Refresh(ctx context.Context, coin string, orders []types
 	// Epoch guard between phases: if a fill arrived during Phase 1,
 	// abort before placing new orders.
 	le.mu.Lock()
-	if clearTracking.Load() || le.orderEpoch[coin] != epoch {
+	fillChanged := le.orderEpoch[coin] != epoch
+	if clearTracking.Load() || fillChanged {
 		delete(le.liveOrders, coin)
 		le.mu.Unlock()
+		le.syncCachedOrders(coin)
+		if superseded.Load() || fillChanged {
+			return fmt.Errorf("%w: refresh %s: order state changed during phase 1", ErrRefreshSuperseded, coin)
+		}
 		return fmt.Errorf("refresh %s: epoch changed during phase 1, tracking cleared", coin)
 	}
 	le.mu.Unlock()
@@ -2065,7 +2101,9 @@ func (le *LiveExecutor) Refresh(ctx context.Context, coin string, orders []types
 	wg2.Wait()
 
 	le.mu.Lock()
-	if clearTracking.Load() || le.orderEpoch[coin] != epoch {
+	fillChangedFinal := le.orderEpoch[coin] != epoch
+	epochChangedFinal := clearTracking.Load() || fillChangedFinal
+	if epochChangedFinal {
 		delete(le.liveOrders, coin)
 		le.markOrderGenerationLocked(coin)
 	} else {
@@ -2074,7 +2112,11 @@ func (le *LiveExecutor) Refresh(ctx context.Context, coin string, orders []types
 	}
 	le.mu.Unlock()
 
-	if clearTracking.Load() {
+	if epochChangedFinal {
+		le.syncCachedOrders(coin)
+		if superseded.Load() || fillChangedFinal {
+			return fmt.Errorf("%w: refresh %s: order state changed during phase 2", ErrRefreshSuperseded, coin)
+		}
 		return fmt.Errorf("refresh %s: fallback failures, tracking cleared", coin)
 	}
 
@@ -2198,6 +2240,7 @@ func (le *LiveExecutor) RefreshMulti(ctx context.Context, ordersByCoin map[strin
 
 	var (
 		clearTracking atomic.Bool
+		superseded    atomic.Bool
 		newTracked    = make(map[string][]trackedOrder)
 		mu            sync.Mutex
 		wg1           sync.WaitGroup
@@ -2249,6 +2292,7 @@ func (le *LiveExecutor) RefreshMulti(ctx context.Context, ordersByCoin map[strin
 			defer wg1.Done()
 			if err := le.transport.CancelBatch(ctx, allCancels); err != nil {
 				slog.Error("batch cancel failed in RefreshMulti", "error", err)
+				superseded.Store(true)
 				clearTracking.Store(true)
 			}
 		}()
@@ -2271,7 +2315,10 @@ func (le *LiveExecutor) RefreshMulti(ctx context.Context, ordersByCoin map[strin
 			le.markOrderGenerationLocked(ce.coin)
 		}
 		le.mu.Unlock()
-		return fmt.Errorf("RefreshMulti: epoch changed during phase 1, tracking cleared")
+		for _, ce := range epochs {
+			le.syncCachedOrders(ce.coin)
+		}
+		return fmt.Errorf("%w: RefreshMulti: order state changed during phase 1", ErrRefreshSuperseded)
 	}
 	le.mu.Unlock()
 
@@ -2337,7 +2384,13 @@ func (le *LiveExecutor) RefreshMulti(ctx context.Context, ordersByCoin map[strin
 	}
 	le.mu.Unlock()
 
-	if clearTracking.Load() {
+	if epochChangedFinal {
+		for _, ce := range epochs {
+			le.syncCachedOrders(ce.coin)
+		}
+		if superseded.Load() || !clearTracking.Load() {
+			return fmt.Errorf("%w: RefreshMulti: order state changed during phase 2", ErrRefreshSuperseded)
+		}
 		return fmt.Errorf("RefreshMulti: batch failures, tracking cleared")
 	}
 
@@ -2387,6 +2440,7 @@ func (le *LiveExecutor) refreshBatch(ctx context.Context, coin string, epoch uin
 		wg1           sync.WaitGroup
 		mu            sync.Mutex
 		clearTracking atomic.Bool
+		superseded    atomic.Bool
 	)
 
 	// Phase 1: Batch modifies + cancels (concurrent with each other).
@@ -2448,6 +2502,7 @@ func (le *LiveExecutor) refreshBatch(ctx context.Context, coin string, epoch uin
 			}
 			if err := le.transport.CancelBatch(ctx, targets); err != nil {
 				slog.Error("batch cancel failed", "coin", coin, "error", err)
+				superseded.Store(true)
 				clearTracking.Store(true)
 			}
 		}()
@@ -2458,10 +2513,15 @@ func (le *LiveExecutor) refreshBatch(ctx context.Context, coin string, epoch uin
 	// Epoch guard between phases: if a fill arrived during Phase 1,
 	// abort before placing new orders.
 	le.mu.Lock()
-	if clearTracking.Load() || le.orderEpoch[coin] != epoch {
+	fillChanged := le.orderEpoch[coin] != epoch
+	if clearTracking.Load() || fillChanged {
 		delete(le.liveOrders, coin)
 		le.markOrderGenerationLocked(coin)
 		le.mu.Unlock()
+		le.syncCachedOrders(coin)
+		if superseded.Load() || fillChanged {
+			return fmt.Errorf("%w: refresh %s: order state changed during batch phase 1", ErrRefreshSuperseded, coin)
+		}
 		return fmt.Errorf("refresh %s: epoch changed during batch phase 1, tracking cleared", coin)
 	}
 	le.mu.Unlock()
@@ -2501,7 +2561,9 @@ func (le *LiveExecutor) refreshBatch(ctx context.Context, coin string, epoch uin
 	wg2.Wait()
 
 	le.mu.Lock()
-	if clearTracking.Load() || le.orderEpoch[coin] != epoch {
+	fillChangedFinal := le.orderEpoch[coin] != epoch
+	epochChangedFinal := clearTracking.Load() || fillChangedFinal
+	if epochChangedFinal {
 		delete(le.liveOrders, coin)
 		le.markOrderGenerationLocked(coin)
 	} else {
@@ -2510,7 +2572,11 @@ func (le *LiveExecutor) refreshBatch(ctx context.Context, coin string, epoch uin
 	}
 	le.mu.Unlock()
 
-	if clearTracking.Load() {
+	if epochChangedFinal {
+		le.syncCachedOrders(coin)
+		if superseded.Load() || fillChangedFinal {
+			return fmt.Errorf("%w: refresh %s: order state changed during batch phase 2", ErrRefreshSuperseded, coin)
+		}
 		return fmt.Errorf("refresh %s: batch failures, tracking cleared", coin)
 	}
 

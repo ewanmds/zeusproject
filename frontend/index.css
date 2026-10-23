@@ -38,6 +38,7 @@ html {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   scroll-behavior: smooth;
+  scroll-padding-top: calc(var(--topbar-height) + 16px);
 }
 
 body {
@@ -278,7 +279,7 @@ svg {
 main {
   position: relative;
   z-index: 1;
-  padding: 24px;
+  padding: 24px 24px 56px;
 }
 
 .page {
@@ -304,6 +305,9 @@ main {
 .control-panel {
   display: grid;
   gap: 20px;
+  align-self: start;
+  position: sticky;
+  top: calc(var(--topbar-height) + 24px);
   padding: 24px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -518,8 +522,10 @@ main {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  right: 0;
+  right: auto;
   z-index: 50;
+  width: min(440px, calc(100vw - 48px));
+  max-height: min(70vh, 540px);
   padding: 8px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
@@ -544,12 +550,83 @@ main {
   width: 14px;
   height: 14px;
   color: var(--muted);
+  pointer-events: none;
+}
+
+.search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.06);
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.search-clear:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.token-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.dex-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dex-chip {
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+}
+
+.dex-chip:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.dex-chip[aria-pressed="true"] {
+  color: #0b1220;
+  background: var(--cta);
+  border-color: var(--cta);
+  font-weight: 700;
+}
+
+.token-result-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 .token-search {
   width: 100%;
   height: 34px;
-  padding: 0 10px 0 32px;
+  padding: 0 32px 0 32px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
   background: rgba(9, 13, 22, 0.7);
@@ -562,8 +639,12 @@ main {
   border-color: var(--cta);
 }
 
+.token-search::-webkit-search-cancel-button {
+  display: none;
+}
+
 .token-options {
-  max-height: 220px;
+  max-height: 300px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -572,9 +653,9 @@ main {
 
 .token-option {
   width: 100%;
-  height: 44px;
+  height: 46px;
   display: grid;
-  grid-template-columns: 28px 1fr;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 0 8px;
@@ -590,9 +671,67 @@ main {
 }
 
 .token-option .token-logo {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   font-size: 9px;
+  overflow: hidden;
+}
+
+.token-logo img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  border-radius: 50%;
+}
+
+.token-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.token-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.token-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.token-dex {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(139, 92, 246, 0.14);
+  color: #c4b5fd;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 15px;
+  text-transform: lowercase;
+}
+
+.token-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+
+.token-vol {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  white-space: nowrap;
 }
 
 .empty-option {
@@ -1175,6 +1314,10 @@ main {
   .workspace {
     grid-template-columns: 1fr;
   }
+
+  .control-panel {
+    position: static;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1199,6 +1342,7 @@ main {
     right: 16px;
     bottom: 16px;
     top: auto;
+    width: auto;
     max-height: 60vh;
   }
 }

@@ -1,5 +1,6 @@
 """Offline Zeus/Freqtrade regressions. All account and exchange I/O is mocked."""
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,22 +26,49 @@ class AdapterTests(unittest.TestCase):
         self.assertNotIn('env', config)
         self.assertNotIn('wallet_address', config)
         self.assertEqual(config['strategy']['assets'], ['xyz:SP500'])
-        self.assertEqual(config['market_making']['quote_notional'], 40)
+        self.assertEqual(config['market_making']['quote_notional'], 10)  # 25% of 40
         self.assertEqual(config['market_making']['ladder_levels'], 1)
         self.assertFalse(config['market_making']['adaptive_notional_enabled'])
-        self.assertFalse(config['signal_pauses_enabled'])
+        self.assertTrue(config['market_making']['edge_gate_enabled'])
+        self.assertTrue(config['signal_pauses_enabled'])  # parité config.live.yaml du Bureau
         self.assertFalse(config['postmortem']['enabled'])
         self.assertTrue(config['risk']['session_flatten_on_shutdown'])
         self.assertEqual(config['risk']['max_position_notional'], 40)
+        self.assertEqual(config['risk']['max_spread_exposure'], 44)
+        self.assertEqual(config['risk']['max_open_orders'], 4)
+        self.assertLess(config['risk']['session_stop_loss_bps'], 0)
         self.assertEqual(config['execution']['leverage'], 6)
-        self.assertFalse(config['rate_limit']['disabled'])
+        self.assertTrue(config['rate_limit']['disabled'])
+        self.assertEqual(config['risk']['fail_closed_cooldown_sec'], 15)
+        self.assertEqual(config['risk']['max_fail_closed_retries'], 5)
+
+    def test_quarter_sizing_scales_ladder_with_budget(self):
+        config = ft.session_config('xyz:SP500', 100, META)
+        self.assertEqual(config['market_making']['quote_notional'], 25)
+        self.assertEqual(config['market_making']['ladder_levels'], 2)
+        self.assertEqual(config['risk']['max_open_orders'], 6)
+        config = ft.session_config('xyz:SP500', 400, META)
+        self.assertEqual(config['market_making']['quote_notional'], 100)
+        self.assertEqual(config['market_making']['ladder_levels'], 3)
+        self.assertEqual(config['risk']['max_open_orders'], 8)
 
     def test_invalid_and_unexecutable_budget_is_rejected(self):
-        for amount in (float('nan'), float('inf'), 9, 10.01):
-            # At mid 100, lot 0.1 contracts => smallest order is 10 dollars.
+        for amount in (float('nan'), float('inf'), 9, 10.01, 39.99):
+            # 25% per side must clear the exchange's 10 USD minimum order.
             meta = [{'universe': [{'name': 'xyz:SP500', 'szDecimals': 0, 'maxLeverage': 6}]}, [{'midPx': '100'}]]
             with self.subTest(amount=amount), self.assertRaises(ValueError):
                 ft.session_config('xyz:SP500', amount, meta)
+
+    def test_market_eligibility_warns_on_razor_thin_book(self):
+        thin = {'levels': [[{'px': '100.00'}], [{'px': '100.0013'}]]}  # ~0.13 bps full spread
+        with patch.object(ft, 'post_info', return_value=thin):
+            edge = ft.market_eligibility('xyz:SP500')
+        self.assertTrue(edge['warning'])
+        wide = {'levels': [[{'px': '99.95'}], [{'px': '100.05'}]]}  # ~10 bps full spread
+        with patch.object(ft, 'post_info', return_value=wide):
+            edge = ft.market_eligibility('io:ANTH')
+        self.assertGreater(edge['venue_half_bps'], 0)
+        self.assertFalse(edge['warning'])
 
     def test_snapshot_identity_and_secret_whitelist(self):
         raw = dict(protocol=1, session_id='session', symbol='xyz:SP500', volume=10, PRIVATE_KEY='never-export')
@@ -61,7 +89,21 @@ class AdapterTests(unittest.TestCase):
             binary.write_bytes(b'MZtest')
             binary.chmod(0o755)
             with patch.object(ft, 'ROOT', root), patch.object(ft, 'binary_path', return_value=binary):
-                with self.assertRaisesRegex(ValueError, 'build'):
+                with self.assertRaisesRegex(ValueError, 'non vérifié.*--build'):
+                    ft.require_binary()
+
+    def test_stale_binary_is_reported_separately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'bin').mkdir()
+            binary = root / 'bin' / 'test.exe'
+            binary.write_bytes(b'MZtest')
+            binary.chmod(0o755)
+            manifest = {'source': 'old-source', 'binaries': {binary.name: hashlib.sha256(b'MZtest').hexdigest()}}
+            (root / 'bin' / 'build.json').write_text(json.dumps(manifest), encoding='utf-8')
+            with patch.object(ft, 'ROOT', root), patch.object(ft, 'binary_path', return_value=binary), \
+                 patch.object(ft, 'engine_digest', return_value='new-source'):
+                with self.assertRaisesRegex(ValueError, 'périmé.*--build'):
                     ft.require_binary()
 
     def test_flat_confirmation_requires_valid_fresh_rest_state(self):
@@ -118,14 +160,15 @@ class AdapterTests(unittest.TestCase):
         snapshots = []
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(ft, 'acquire_lock'), patch.object(ft, 'require_binary', return_value=Path('fake.exe')), \
-             patch.object(ft, 'post_info', return_value=META), patch.object(ft, 'preflight') as checks, \
+             patch.object(ft, 'post_info', side_effect=[META, {'levels': [[{'px': '99.9'}], [{'px': '100.1'}]]}]), \
+             patch.object(ft, 'preflight') as checks, \
              patch.object(ft.uuid, 'uuid4', return_value=SimpleNamespace(hex=session)), \
              patch.object(ft.signal, 'signal'), patch('dotenv.load_dotenv'), \
              patch.object(ft, 'stop_file_path', return_value=str(Path(directory) / 'stop.flag')), \
              patch.object(ft, 'publish', side_effect=lambda _, data: snapshots.append(dict(data))), \
              patch.object(ft.subprocess, 'Popen', return_value=child) as spawn:
             self.assertEqual(ft.run('SP500', 40), 0)
-        self.assertEqual([call.args[2] for call in checks.call_args_list], ['-validate', '-check-account'])
+        self.assertEqual([call.args[2] for call in checks.call_args_list], ['-check-account'])
         self.assertTrue(snapshots[-1]['position_known'])
         self.assertEqual(snapshots[-1]['phase'], 'stopped')
         args = spawn.call_args.args[0]

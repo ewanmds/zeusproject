@@ -42,9 +42,9 @@
         <svg aria-hidden="true"><use href="#icon-grid"></use></svg>
         Market Making
       </button>
-      <button class="nav-tab" type="button" role="tab" id="tab-worldcup" aria-selected="false" aria-controls="page-worldcup" data-page="worldcup" tabindex="-1">
+      <button class="nav-tab" type="button" role="tab" id="tab-outcome" aria-selected="false" aria-controls="page-outcome" data-page="outcome" tabindex="-1">
         <svg aria-hidden="true"><use href="#icon-cup"></use></svg>
-        WorldCup
+        Outcome
       </button>
     </nav>
 
@@ -99,17 +99,15 @@
               <legend>Stratégie</legend>
               <div class="field">
                 <label for="grid-strategy">Mode de cotation</label>
-                <select id="grid-strategy" aria-describedby="grid-strategy-hint">
+                <select id="grid-strategy">
                   <option value="bbo">BBO Order Book</option>
                   <option value="mid">MID Order Book</option>
                   <option value="freqtrade">Freqtrade</option>
                 </select>
-                <span class="field-hint" id="grid-strategy-hint">Achat au meilleur bid, vente au meilleur ask.</span>
               </div>
               <div class="field" id="grid-offset-field" hidden>
                 <label for="grid-offset-bps">Distance from mid (bps)</label>
-                <input type="number" id="grid-offset-bps" value="1" min="0" max="9999.9" step="0.1" inputmode="decimal" aria-describedby="grid-offset-help grid-offset-error">
-                <span class="field-hint" id="grid-offset-help">Bid = mid − distance · Ask = mid + distance. 1 bp = 0,01 %. Minimum 1 tick de chaque côté.</span>
+                <input type="number" id="grid-offset-bps" value="1" min="0" max="9999.9" step="0.1" inputmode="decimal" aria-describedby="grid-offset-error">
                 <span class="field-hint" id="grid-offset-error" role="alert" hidden></span>
               </div>
             </fieldset>
@@ -130,10 +128,17 @@
                     </span>
                     <span class="token-chevron" aria-hidden="true">&#9662;</span>
                   </button>
-                  <div class="token-menu" id="grid-token-menu" role="dialog" aria-label="Choisir un token" hidden>
-                    <div class="search-shell">
-                      <svg aria-hidden="true"><use href="#icon-search"></use></svg>
-                      <input class="token-search" id="grid-token-search" type="search" placeholder="Rechercher un token…" aria-label="Rechercher un token" autocomplete="off" aria-controls="grid-token-options">
+                  <div class="token-menu" id="grid-token-menu" role="dialog" aria-label="Choisir un marché HIP-3" hidden>
+                    <div class="token-menu-head">
+                      <div class="search-shell">
+                        <svg aria-hidden="true"><use href="#icon-search"></use></svg>
+                        <input class="token-search" id="grid-token-search" type="search" placeholder="Nom, ticker ou dex…" aria-label="Rechercher un marché HIP-3" autocomplete="off" aria-controls="grid-token-options">
+                        <button class="search-clear" id="grid-token-search-clear" type="button" aria-label="Effacer la recherche" hidden>&times;</button>
+                      </div>
+                      <div class="token-filters">
+                        <div class="dex-chips" id="grid-token-dexes" role="group" aria-label="Filtrer par dex"></div>
+                        <span class="token-result-count" id="grid-token-results" aria-live="polite"></span>
+                      </div>
                     </div>
                     <div class="token-options" id="grid-token-options" role="listbox" aria-labelledby="grid-token-label"></div>
                   </div>
@@ -147,8 +152,7 @@
               <legend>Taille</legend>
               <div class="field">
                 <label for="grid-order-size">Montant par ordre <span class="unit-label">USD</span></label>
-                <input type="number" id="grid-order-size" value="100" min="10" step="1" inputmode="decimal" aria-describedby="grid-size-help grid-form-alert" required>
-                <span class="field-hint" id="grid-size-help">Inventaire limité à une taille d'ordre. Retour à plat avant une nouvelle entrée.</span>
+                <input type="number" id="grid-order-size" value="100" min="10" step="1" inputmode="decimal" aria-describedby="grid-form-alert" required>
               </div>
             </fieldset>
 
@@ -165,7 +169,6 @@
                 Tout arrêter
               </button>
             </div>
-            <p class="action-help" id="grid-action-help">Arrêter annule les ordres et ferme la position du bot.</p>
           </form>
         </aside>
 
@@ -196,42 +199,49 @@
       </div>
     </section>
 
-    <section id="page-worldcup" class="page" role="tabpanel" aria-labelledby="tab-worldcup" hidden>
-      <div class="workspace-intro"><div><p class="eyebrow">Marchés de prédiction</p><h2>WorldCup</h2><p>Suis ton panier HIP-4 et ses exécutions.</p></div><span class="environment-tag"><span aria-hidden="true"></span>Ordres réels · Mainnet</span></div>
+    <section id="page-outcome" class="page" role="tabpanel" aria-labelledby="tab-outcome" hidden>
+      <div class="workspace-intro"><div><p class="eyebrow">Marchés de prédiction</p><h2>Outcome</h2><p>Tous les marchés HIP-4 du deployer <strong>out</strong>, avec leurs logos Hyperliquid.</p></div><span class="environment-tag"><span aria-hidden="true"></span>Ordres réels · Mainnet</span></div>
       <div class="workspace">
         <aside class="control-panel">
           <header class="panel-head">
             <div class="panel-copy">
-              <p class="eyebrow">Nouvelle session</p><h3 class="panel__title" id="wc-heading">WorldCup</h3>
-              <p class="panel__desc">Multi-market HIP-4 basket.</p>
+              <p class="eyebrow">Nouvelle session</p><h3 class="panel__title" id="outcome-heading">Outcome</h3>
+              <p class="panel__desc">Catalogue HIP-4 dynamique · deployer out.</p>
             </div>
-            <span class="state-pill" id="wc-state-pill" hidden>Live</span>
+            <span class="state-pill" id="outcome-state-pill" hidden>Live</span>
           </header>
 
-          <form class="panel__form" id="wc-form" novalidate>
+          <form class="panel__form" id="outcome-form" novalidate>
             <fieldset class="form-block">
-              <legend>Market</legend>
+              <legend>Marché</legend>
               <div class="field">
                 <div class="field-head">
-                  <span id="wc-market-label">Marché</span>
-                  <span class="mini-badge" id="wc-market-count">12 choix</span>
+                  <span id="outcome-market-label">Marché</span>
+                  <span class="mini-badge" id="outcome-market-count">Chargement…</span>
                 </div>
-                <input type="hidden" id="wc-market" value="ALL">
-                <div class="token-picker" id="wc-market-picker">
-                  <button class="token-trigger" id="wc-market-trigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="wc-market-menu" aria-labelledby="wc-market-label wc-market-name">
-                    <span class="token-logo" id="wc-market-logo" aria-hidden="true">WC</span>
+                <input type="hidden" id="outcome-market" value="ALL">
+                <div class="token-picker" id="outcome-market-picker">
+                  <button class="token-trigger" id="outcome-market-trigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="outcome-market-menu" aria-labelledby="outcome-market-label outcome-market-name">
+                    <span class="token-logo" id="outcome-market-logo" aria-hidden="true">OU</span>
                     <span class="token-copy">
-                      <strong id="wc-market-name">Tous les marchés</strong>
-                      <small id="wc-market-symbol">panier HIP-4 · outcome NO</small>
+                      <strong id="outcome-market-name">Tous les marchés</strong>
+                      <small id="outcome-market-symbol">catalogue HIP-4 · out</small>
                     </span>
                     <span class="token-chevron" aria-hidden="true">&#9662;</span>
                   </button>
-                  <div class="token-menu" id="wc-market-menu" role="dialog" aria-label="Choisir un marché WorldCup" hidden>
-                    <div class="search-shell">
-                      <svg aria-hidden="true"><use href="#icon-search"></use></svg>
-                      <input class="token-search" id="wc-market-search" type="search" placeholder="Rechercher un pays" aria-label="Rechercher un pays" aria-controls="wc-market-options" autocomplete="off">
+                  <div class="token-menu" id="outcome-market-menu" role="dialog" aria-label="Choisir un marché Outcome" hidden>
+                    <div class="token-menu-head">
+                      <div class="search-shell">
+                        <svg aria-hidden="true"><use href="#icon-search"></use></svg>
+                        <input class="token-search" id="outcome-market-search" type="search" placeholder="Nom, équipe, catégorie…" aria-label="Rechercher un marché HIP-4" aria-controls="outcome-market-options" autocomplete="off">
+                        <button class="search-clear" id="outcome-market-search-clear" type="button" aria-label="Effacer la recherche" hidden>&times;</button>
+                      </div>
+                      <div class="token-filters">
+                        <div class="dex-chips" id="outcome-market-categories" role="group" aria-label="Filtrer par catégorie"></div>
+                        <span class="token-result-count" id="outcome-market-results" aria-live="polite"></span>
+                      </div>
                     </div>
-                    <div class="token-options" id="wc-market-options" role="listbox" aria-labelledby="wc-market-label"></div>
+                    <div class="token-options" id="outcome-market-options" role="listbox" aria-labelledby="outcome-market-label"></div>
                   </div>
                 </div>
               </div>
@@ -239,30 +249,29 @@
             <fieldset class="form-block">
               <legend>Parameters</legend>
               <div class="field">
-                <label for="wc-order-size">Order (USD)</label>
-                <input type="number" id="wc-order-size" value="50" min="10" step="1" inputmode="decimal" aria-describedby="wc-form-alert" required>
+                <label for="outcome-order-size">Order (USD)</label>
+                <input type="number" id="outcome-order-size" value="50" min="10" step="1" inputmode="decimal" aria-describedby="outcome-form-alert" required>
               </div>
               <div class="field-row">
                 <div class="field">
-                  <label for="wc-spread">Max spread (%)</label>
-                  <input type="number" id="wc-spread" value="0.02" min="0" step="0.005" inputmode="decimal" aria-describedby="wc-spread-help wc-form-alert" required>
-                  <span class="field-hint" id="wc-spread-help">0,02 % = 2 bps.</span>
+                  <label for="outcome-spread">Max spread (%)</label>
+                  <input type="number" id="outcome-spread" value="0.02" min="0" step="0.005" inputmode="decimal" aria-describedby="outcome-form-alert" required>
                 </div>
                 <div class="field">
-                  <label for="wc-max-pos">Max position (USD)</label>
-                  <input type="number" id="wc-max-pos" value="200" min="10" step="10" inputmode="decimal" aria-describedby="wc-form-alert" required>
+                  <label for="outcome-max-pos">Max position (USD)</label>
+                  <input type="number" id="outcome-max-pos" value="200" min="10" step="10" inputmode="decimal" aria-describedby="outcome-form-alert" required>
                 </div>
               </div>
             </fieldset>
 
-            <div class="form-alert" id="wc-form-alert" role="alert" hidden></div>
+            <div class="form-alert" id="outcome-form-alert" role="alert" hidden></div>
 
             <div class="action-row">
-              <button class="btn btn-start" id="wc-start-btn" type="button">
+              <button class="btn btn-start" id="outcome-start-btn" type="button">
                 <svg aria-hidden="true"><use href="#icon-play"></use></svg>
                 Start
               </button>
-              <button class="btn btn-stop" id="wc-stop-btn" type="button" disabled>
+              <button class="btn btn-stop" id="outcome-stop-btn" type="button" disabled>
                 <svg aria-hidden="true"><use href="#icon-stop"></use></svg>
                 Stop
               </button>
@@ -270,12 +279,12 @@
           </form>
         </aside>
 
-        <section class="dashboard" aria-label="WorldCup session stats">
-          <div class="run-banner" id="wc-run-banner" hidden>
+        <section class="dashboard" aria-label="Outcome session stats">
+          <div class="run-banner" id="outcome-run-banner" hidden>
             <span class="run-dot" aria-hidden="true"></span>
             <div class="run-copy">
               <strong>Session active</strong>
-              <span id="wc-run-duration">00:00:00</span>
+              <span id="outcome-run-duration">00:00:00</span>
             </div>
           </div>
 
@@ -285,7 +294,7 @@
                 <svg><use href="#icon-cup"></use></svg>
               </div>
               <span class="metric-label">Net PnL</span>
-              <strong class="metric-value positive" id="wc-pnl">—</strong>
+              <strong class="metric-value positive" id="outcome-pnl">—</strong>
               <span class="metric-foot">Real-time profit/loss</span>
             </article>
 
@@ -294,7 +303,7 @@
                 <svg><use href="#icon-grid"></use></svg>
               </div>
               <span class="metric-label">Duration</span>
-              <strong class="metric-value metric-mono" id="wc-duration">00:00:00</strong>
+              <strong class="metric-value metric-mono" id="outcome-duration">00:00:00</strong>
               <span class="metric-foot">Elapsed time</span>
             </article>
 
@@ -303,7 +312,7 @@
                 <svg><use href="#icon-play"></use></svg>
               </div>
               <span class="metric-label">Volume</span>
-              <strong class="metric-value metric-mono" id="wc-volume">—</strong>
+              <strong class="metric-value metric-mono" id="outcome-volume">—</strong>
               <span class="metric-foot">Total traded volume</span>
             </article>
 
@@ -312,7 +321,7 @@
                 <svg><use href="#icon-info"></use></svg>
               </div>
               <span class="metric-label">Fees</span>
-              <strong class="metric-value metric-mono" id="wc-fees">—</strong>
+              <strong class="metric-value metric-mono" id="outcome-fees">—</strong>
               <span class="metric-foot">Execution fees</span>
             </article>
 
@@ -321,7 +330,7 @@
                 <svg><use href="#icon-alert"></use></svg>
               </div>
               <span class="metric-label">Cost / 1M</span>
-              <strong class="metric-value metric-mono" id="wc-cost-1m">—</strong>
+              <strong class="metric-value metric-mono" id="outcome-cost-1m">—</strong>
               <span class="metric-foot">Cost per million</span>
             </article>
 
@@ -330,7 +339,7 @@
                 <svg><use href="#icon-check"></use></svg>
               </div>
               <span class="metric-label">Fills</span>
-              <strong class="metric-value metric-mono" id="wc-fills">0</strong>
+              <strong class="metric-value metric-mono" id="outcome-fills">0</strong>
               <span class="metric-foot">Filled orders count</span>
             </article>
           </div>

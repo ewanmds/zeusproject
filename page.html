@@ -1,0 +1,1453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TRADOOR : Trade close to your edge</title>
+<meta property="og:title" content="TRADOOR" />
+<meta property="og:description" content="Automated market making on Hyperliquid. One click, zero infrastructure." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://tradoor0.xyz/" />
+<meta property="og:image" content="https://tradoor0.xyz/web/share-cover.jpg?v=6" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="TRADOOR" />
+<meta name="twitter:description" content="Automated market making on Hyperliquid. One click, zero infrastructure." />
+<meta name="twitter:image" content="https://tradoor0.xyz/web/share-cover.jpg?v=6" />
+<link rel="icon" type="image/svg+xml" href="/web/tradoor-icon.svg" />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0a0808;
+    --panel: #161210;
+    --text: #f5ede5;
+    --muted: #8a7d72;
+    --accent: #ff6b2c;
+    --accent-2: #ff9e5c;
+    --accent-deep: #6b1c00;
+    --border: rgba(255, 158, 92, 0.12);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Grotesk', -apple-system, sans-serif;
+    min-height: 100vh;
+  }
+  body { overflow-x: clip; }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 80% 60% at 75% 50%, rgba(255, 107, 44, 0.06), transparent 70%),
+      radial-gradient(ellipse 100% 80% at 50% 100%, rgba(255, 107, 44, 0.04), transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Subtle starfield */
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image:
+      radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.4), transparent),
+      radial-gradient(1px 1px at 60% 70%, rgba(255,255,255,0.3), transparent),
+      radial-gradient(1px 1px at 80% 20%, rgba(255,255,255,0.35), transparent),
+      radial-gradient(1px 1px at 40% 80%, rgba(255,255,255,0.25), transparent),
+      radial-gradient(1px 1px at 90% 60%, rgba(255,255,255,0.3), transparent),
+      radial-gradient(1px 1px at 15% 90%, rgba(255,255,255,0.2), transparent);
+    background-size: 200% 200%;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.6;
+  }
+
+  /* ── NAV ─────────────────────────── */
+  .nav {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    padding: 28px 56px;
+    gap: 40px;
+  }
+  .logo {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .logo span { color: var(--accent); }
+
+  .nav-links {
+    display: flex;
+    gap: 32px;
+  }
+  .nav-links a {
+    color: var(--muted);
+    font-size: 13px;
+    text-decoration: none;
+    font-weight: 500;
+    transition: color 0.2s;
+  }
+  .nav-links a:hover { color: var(--text); }
+
+  .nav-spacer { flex: 1; }
+
+  .nav-cta {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text);
+    padding: 9px 18px;
+    border-radius: 100px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.2s;
+    backdrop-filter: blur(8px);
+  }
+  .nav-cta:hover {
+    background: rgba(255, 107, 44, 0.12);
+    border-color: rgba(255, 107, 44, 0.4);
+  }
+
+  /* ── SCROLL SECTION with sticky portal ─────── */
+  .scroll-section {
+    position: relative;
+    height: 180vh;  /* shorter = content appears faster */
+  }
+
+  .scroll-sticky {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow: hidden;
+    z-index: 1;
+  }
+
+  /* WebGL canvas : fills the sticky container */
+  .hero-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+    animation: portalIn 1.8s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both;
+    display: block;
+  }
+
+  /* Fallback old class name */
+  .hero-wrap {
+    position: relative;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  /* Ambient orange glow behind the image */
+  .hero-wrap::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    right: 5%;
+    width: 60%;
+    height: 90%;
+    transform: translateY(-50%);
+    background: radial-gradient(ellipse at center,
+      rgba(255, 107, 44, 0.25) 0%,
+      rgba(255, 107, 44, 0.10) 35%,
+      transparent 65%);
+    filter: blur(80px);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Soft left scrim : keeps text readable */
+  .hero-wrap::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg,
+      var(--bg) 0%,
+      rgba(10, 8, 8, 0.7) 25%,
+      rgba(10, 8, 8, 0) 50%
+    );
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .hero {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    padding: 100px 56px 60px;
+    max-width: 1480px;
+    margin: 0 auto;
+    pointer-events: none;
+  }
+  .hero > * { pointer-events: auto; }
+
+  .hero-text {
+    width: 56%;
+    padding-right: 40px;
+    animation: fadeUp 1.1s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: opacity, transform;
+    position: relative;
+  }
+
+  .hero-title {
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: clamp(48px, 6.5vw, 92px);
+    font-weight: 400;
+    line-height: 1.02;
+    letter-spacing: -2px;
+    margin-bottom: 28px;
+    color: var(--text);
+  }
+  .hero-title .italic {
+    font-style: italic;
+    display: block;
+  }
+  .hero-title .accent {
+    color: var(--accent);
+    font-style: italic;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero-sub {
+    font-size: 15px;
+    line-height: 1.65;
+    color: var(--muted);
+    max-width: 480px;
+    margin-bottom: 36px;
+  }
+
+  .hero-cta-row {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+  }
+
+  .btn {
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 13px 24px;
+    border-radius: 100px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.25s ease;
+    border: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    position: relative;
+    isolation: isolate;
+  }
+  .btn > *:not(.edge-light) {
+    position: relative;
+    z-index: 2;
+  }
+  .btn.bg-glow {
+    --glow-padding: 24px;
+  }
+  .btn-ghost {
+    --card-bg: #111010;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text);
+    backdrop-filter: blur(8px);
+  }
+  .btn-ghost:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+  .btn-primary {
+    --card-bg: #ff7a32;
+    background: linear-gradient(135deg, var(--accent), #ff8240);
+    color: #1a0500;
+    box-shadow: 0 0 30px rgba(255, 107, 44, 0.35), 0 8px 24px rgba(255, 107, 44, 0.2);
+  }
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 0 40px rgba(255, 107, 44, 0.5), 0 12px 32px rgba(255, 107, 44, 0.3);
+  }
+  .btn-primary .arrow {
+    transition: transform 0.25s;
+  }
+  .btn-primary:hover .arrow {
+    transform: translateX(3px);
+  }
+
+
+  /* Scroll hint under hero CTAs */
+  .scroll-hint {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 48px;
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    opacity: 0.7;
+    animation: fadeUp 1.4s cubic-bezier(0.22, 1, 0.36, 1) 0.4s both;
+  }
+  .scroll-arrow {
+    animation: scrollBounce 2s ease-in-out infinite;
+    font-size: 14px;
+    color: var(--accent);
+  }
+  @keyframes scrollBounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(6px); }
+  }
+
+  /* ── CONTENT SECTIONS (post-portal) ─── */
+  .content {
+    position: relative;
+    z-index: 5;
+    background: var(--bg);
+    padding: 120px 56px 80px;
+  }
+
+  .content-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .content-eyebrow {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--accent);
+    margin-bottom: 16px;
+    font-weight: 600;
+  }
+
+  .content-title {
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: clamp(40px, 5vw, 64px);
+    font-weight: 400;
+    line-height: 1.05;
+    letter-spacing: -1px;
+    margin-bottom: 24px;
+    max-width: 720px;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 1s cubic-bezier(0.22, 1, 0.36, 1),
+                transform 1s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .content-title.is-visible { opacity: 1; transform: translateY(0); }
+  .content-title .italic { font-style: italic; color: var(--accent); }
+
+  .content-sub {
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--muted);
+    max-width: 640px;
+    margin-bottom: 72px;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 1s cubic-bezier(0.22, 1, 0.36, 1) 0.15s,
+                transform 1s cubic-bezier(0.22, 1, 0.36, 1) 0.15s;
+  }
+  .content-sub.is-visible { opacity: 1; transform: translateY(0); }
+
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+
+  .feature-card {
+    --card-bg: #161210;
+    background: var(--card-bg);
+    border: 1px solid rgba(255, 158, 92, 0.1);
+    border-radius: 14px;
+    padding: 32px 28px;
+    position: relative;
+    opacity: 0;
+    transform: translateY(60px) scale(0.93);
+    filter: blur(8px);
+    transition: opacity 1.6s cubic-bezier(0.08, 0.82, 0.17, 1),
+                transform 1.8s cubic-bezier(0.08, 0.82, 0.17, 1),
+                filter 1.6s cubic-bezier(0.08, 0.82, 0.17, 1),
+                border-color 0.3s ease,
+                box-shadow 0.3s ease;
+    will-change: opacity, transform, filter;
+  }
+  .feature-card > *:not(.edge-light) { position: relative; z-index: 2; }
+  .feature-card.is-visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+  .feature-card.is-visible:hover {
+    border-color: rgba(255, 107, 44, 0.35);
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35),
+                0 0 30px rgba(255, 107, 44, 0.08);
+  }
+  .feature-num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 1px;
+    margin-bottom: 16px;
+  }
+  .feature-card h3 {
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: 26px;
+    font-weight: 400;
+    margin-bottom: 12px;
+    color: var(--text);
+  }
+  .feature-card p {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+  a.feature-card--link { display: block; color: inherit; text-decoration: none; }
+  .feature-link {
+    display: inline-block;
+    margin-top: 16px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 1px;
+    color: var(--accent);
+  }
+
+  /* ── BORDER GLOW effect (hover-driven conic glow) ─────── */
+  .bg-glow {
+    --edge-proximity: 0;
+    --cursor-angle: 45deg;
+    --edge-sensitivity: 5;
+    --color-sensitivity: 15;
+    --glow-padding: 70px;
+    --cone-spread: 28;
+    --glow-color: hsl(22 100% 62% / 100%);
+    --glow-color-60: hsl(22 100% 62% / 90%);
+    --glow-color-50: hsl(22 100% 62% / 75%);
+    --glow-color-40: hsl(22 100% 62% / 60%);
+    --glow-color-30: hsl(22 100% 62% / 45%);
+    --glow-color-20: hsl(22 100% 62% / 30%);
+    --glow-color-10: hsl(22 100% 62% / 18%);
+    position: relative;
+    isolation: isolate;
+    transform: translate3d(0, 0, 0.01px);
+  }
+
+  .bg-glow::before,
+  .bg-glow::after,
+  .bg-glow > .edge-light {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    transition: opacity 0.25s ease-out;
+  }
+
+  .bg-glow:not(:hover)::before,
+  .bg-glow:not(:hover)::after,
+  .bg-glow:not(:hover) > .edge-light {
+    opacity: 0;
+    transition: opacity 0.75s ease-in-out;
+  }
+
+  /* Colored conic border */
+  .bg-glow::before {
+    z-index: 1;
+    border: 1px solid transparent;
+    background:
+      linear-gradient(var(--card-bg, #161210) 0 100%) padding-box,
+      radial-gradient(at 80% 55%, #ff6b2c 0px, transparent 50%) border-box,
+      radial-gradient(at 69% 34%, #ff9e5c 0px, transparent 50%) border-box,
+      radial-gradient(at 8% 6%, #ffb070 0px, transparent 50%) border-box,
+      radial-gradient(at 41% 38%, #ff7a30 0px, transparent 50%) border-box,
+      radial-gradient(at 86% 85%, #ff8240 0px, transparent 50%) border-box,
+      radial-gradient(at 82% 18%, #ffb070 0px, transparent 50%) border-box,
+      linear-gradient(#ff6b2c 0 100%) border-box;
+    opacity: calc((var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity)));
+    -webkit-mask-image:
+      conic-gradient(
+        from var(--cursor-angle) at center,
+        black calc(var(--cone-spread) * 1%),
+        transparent calc((var(--cone-spread) + 15) * 1%),
+        transparent calc((100 - var(--cone-spread) - 15) * 1%),
+        black calc((100 - var(--cone-spread)) * 1%)
+      );
+    mask-image:
+      conic-gradient(
+        from var(--cursor-angle) at center,
+        black calc(var(--cone-spread) * 1%),
+        transparent calc((var(--cone-spread) + 15) * 1%),
+        transparent calc((100 - var(--cone-spread) - 15) * 1%),
+        black calc((100 - var(--cone-spread)) * 1%)
+      );
+  }
+
+  /* Outer glow (halo around the card) */
+  .bg-glow > .edge-light {
+    inset: calc(var(--glow-padding) * -1);
+    z-index: 0;
+    border-radius: inherit;
+    -webkit-mask-image:
+      conic-gradient(from var(--cursor-angle) at center, black 2.5%, transparent 10%, transparent 90%, black 97.5%);
+    mask-image:
+      conic-gradient(from var(--cursor-angle) at center, black 2.5%, transparent 10%, transparent 90%, black 97.5%);
+    opacity: calc((var(--edge-proximity) - var(--edge-sensitivity)) / (100 - var(--edge-sensitivity)));
+    mix-blend-mode: plus-lighter;
+  }
+
+  .bg-glow > .edge-light::before {
+    content: "";
+    position: absolute;
+    inset: var(--glow-padding);
+    border-radius: inherit;
+    box-shadow:
+      inset 0 0 0 2px var(--glow-color),
+      inset 0 0 6px 0 var(--glow-color-60),
+      inset 0 0 12px 0 var(--glow-color-50),
+      inset 0 0 22px 0 var(--glow-color-40),
+      inset 0 0 40px 2px var(--glow-color-30),
+      inset 0 0 65px 3px var(--glow-color-20),
+      inset 0 0 100px 4px var(--glow-color-10),
+      0 0 2px 0 var(--glow-color),
+      0 0 8px 0 var(--glow-color-60),
+      0 0 16px 1px var(--glow-color-50),
+      0 0 30px 2px var(--glow-color-40),
+      0 0 55px 3px var(--glow-color-30),
+      0 0 90px 5px var(--glow-color-20),
+      0 0 140px 8px var(--glow-color-10);
+  }
+
+  /* ── TAGLINE SECTION ─────────────── */
+  .tagline-section {
+    position: relative;
+    z-index: 5;
+    background: var(--bg);
+    padding: 80px 56px 40px;
+    text-align: center;
+  }
+  .tagline-big {
+    font-family: var(--font-display);
+    font-size: clamp(44px, 6vw, 84px);
+    font-weight: 400;
+    line-height: 1.05;
+    letter-spacing: -1px;
+    max-width: 900px;
+    margin: 0 auto;
+    color: var(--text);
+    opacity: 0;
+    transform: translateY(12px);
+    transition: opacity 0.8s cubic-bezier(0.22, 1, 0.36, 1),
+                transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .tagline-big.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .tagline-big .accent {
+    font-style: italic;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* ── NUMBERS SECTION ────────────── */
+  .numbers-section {
+    position: relative;
+    z-index: 5;
+    background: var(--bg);
+    padding: 80px 56px 80px;
+  }
+  .numbers-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .numbers-eyebrow {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 16px;
+    text-align: center;
+  }
+  .numbers-title {
+    font-family: var(--font-display);
+    font-size: clamp(36px, 4.5vw, 56px);
+    font-weight: 400;
+    line-height: 1.05;
+    letter-spacing: -0.5px;
+    margin-bottom: 56px;
+    text-align: center;
+    color: var(--text);
+  }
+  .numbers-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+  .number-card {
+    --card-bg: #161210;
+    background: var(--card-bg);
+    border: 1px solid rgba(255, 158, 92, 0.1);
+    border-radius: 14px;
+    padding: 40px 32px;
+    text-align: center;
+    opacity: 0;
+    transform: translateY(50px) scale(0.92);
+    filter: blur(6px);
+    transition: opacity 1.8s cubic-bezier(0.08, 0.82, 0.17, 1),
+                transform 2s cubic-bezier(0.08, 0.82, 0.17, 1),
+                filter 1.8s cubic-bezier(0.08, 0.82, 0.17, 1),
+                border-color 0.3s ease;
+    will-change: opacity, transform, filter;
+  }
+  .number-card > *:not(.edge-light) { position: relative; z-index: 2; }
+  .number-card.is-visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+  .number-card.is-visible:hover {
+    border-color: rgba(255, 107, 44, 0.35);
+    transform: translateY(-4px);
+  }
+  .number-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: clamp(32px, 4vw, 48px);
+    font-weight: 600;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 12px;
+    letter-spacing: -1px;
+  }
+  .number-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+  }
+
+  @media (max-width: 900px) {
+    .tagline-section { padding: 60px 28px 32px; }
+    .numbers-section { padding: 60px 28px; }
+    .numbers-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ── FOOTER ─────────────────────── */
+  .footer {
+    position: relative;
+    z-index: 5;
+    padding: 60px 56px 80px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    background: var(--bg);
+  }
+  .footer-links {
+    display: flex;
+    gap: 22px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.4);
+    letter-spacing: 0.04em;
+  }
+  .footer-links a {
+    color: inherit;
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .footer-links a:hover { color: #ff8c3c; }
+  .social-proof {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 20px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 100px;
+    backdrop-filter: blur(10px);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .social-proof .dots {
+    display: flex;
+    align-items: center;
+  }
+  .social-proof .dot {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid var(--bg);
+    margin-right: -8px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  }
+  .social-proof .dot:nth-child(2) { background: linear-gradient(135deg, #ff8240, #ffb070); }
+  .social-proof .dot:nth-child(3) { background: linear-gradient(135deg, #d4541a, #ff7a30); }
+  .social-proof .dot:nth-child(4) { background: linear-gradient(135deg, #6b1c00, #ff6b2c); }
+
+  /* ── ANIMATIONS ─────────────────── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes portalIn {
+    from { opacity: 0; transform: scale(0.85); filter: blur(20px); }
+    to { opacity: 1; transform: scale(1); filter: blur(0); }
+  }
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.04); }
+  }
+  @keyframes floatY {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-12px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hero-bg { animation: none; }
+  }
+
+  /* ── RESPONSIVE ─────────────────── */
+  @media (max-width: 1200px) {
+    .nav { padding: 24px 40px; }
+    .hero { padding: 100px 40px 60px; }
+    .hero-text { width: 60%; }
+    .content { padding: 100px 40px 80px; }
+  }
+
+  @media (max-width: 900px) {
+    .nav { padding: 20px 28px; gap: 20px; }
+    .nav-links { display: none; }
+    .hero {
+      padding: 120px 28px 40px;
+      align-items: flex-start;
+      text-shadow: 0 2px 20px rgba(0,0,0,0.9);
+    }
+    .hero-text { width: 100%; padding-right: 0; }
+    .hero-text::before {
+      content: "";
+      position: absolute;
+      top: -40px; left: -20px; right: -20px; bottom: -40px;
+      background: radial-gradient(ellipse at center, rgba(10,8,8,0.85) 0%, rgba(10,8,8,0.4) 60%, transparent 100%);
+      z-index: -1;
+      pointer-events: none;
+    }
+    .hero-title { font-size: clamp(40px, 9vw, 64px); }
+    .content { padding: 80px 28px 60px; }
+    .feature-grid { grid-template-columns: 1fr; }
+    .footer { padding: 40px 28px 48px; }
+    .scroll-section { height: 150vh; }
+  }
+
+  @media (max-width: 600px) {
+    .nav { padding: 18px 20px; gap: 12px; }
+    .hero { padding: 100px 20px 32px; }
+    .hero-title { font-size: clamp(36px, 10vw, 52px); }
+    .hero-sub { font-size: 14px; margin-bottom: 28px; }
+    .hero-cta-row { flex-direction: column; align-items: stretch; }
+    .btn { justify-content: center; }
+    .content { padding: 60px 20px 48px; }
+    .content-title { font-size: clamp(32px, 9vw, 48px); }
+    .feature-card { padding: 24px 20px; }
+    .social-proof { font-size: 11px; padding: 8px 14px; }
+    .scroll-section { height: 130vh; }
+    .logo { font-size: 16px; }
+    .nav-cta { padding: 7px 14px; font-size: 12px; }
+  }
+
+  /* ── Adaptive layer ─────────────────────────────────────────────────────
+     Everything below is scoped to small screens / coarse pointers, so the
+     desktop rendering is untouched. */
+
+  /* The outer halo deliberately overflows its card (inset: -glow-padding).
+     On desktop the cards are narrower than the viewport so it never shows;
+     once a card spans the full width it stretched the page ~50px wider than
+     the screen. It only ever animates on hover, which touch devices lack. */
+  /* 900px is where .feature-grid / .numbers-grid go full-width. */
+  @media (hover: none), (max-width: 900px) {
+    .bg-glow > .edge-light { inset: 0; }
+  }
+  /* Above that the halo is kept (hover works), but the section clips it so the
+     outermost cards can't stretch the page. `clip` rather than `hidden`: it
+     creates no scroll container and leaves position:sticky intact. */
+  .content, .tagline-section, .numbers-section { overflow-x: clip; }
+
+  /* Media must never widen the page. */
+  img, svg, video { max-width: 100%; }
+
+  @media (max-width: 480px) {
+    .nav { padding: 14px 14px; }
+    .hero { padding: 88px 16px 28px; }
+    .hero-title { font-size: clamp(30px, 10.5vw, 44px); line-height: 1.08; }
+    .hero-sub { font-size: 13.5px; }
+    .content { padding: 48px 16px 40px; }
+    .content-title { font-size: clamp(26px, 9vw, 38px); }
+    .feature-card { padding: 20px 16px; }
+    .tagline-section, .numbers-section { padding: 48px 16px; }
+    .footer { padding: 32px 16px 40px; }
+    .footer-links { gap: 16px; flex-wrap: wrap; justify-content: center; }
+    /* Comfortable touch targets. */
+    .btn, .nav-cta { min-height: 44px; }
+  }
+
+  @media (max-width: 380px) {
+    .nav { padding: 12px 10px; gap: 8px; }
+    .logo { font-size: 15px; }
+    .nav-cta { padding: 7px 11px; font-size: 11px; }
+    .hero { padding: 80px 12px 24px; }
+    .hero-title { font-size: clamp(26px, 11vw, 36px); }
+    .content, .tagline-section, .numbers-section { padding-inline: 12px; }
+  }
+
+  /* Landscape phones: full-height sections would hide everything else. */
+  @media (max-height: 500px) and (orientation: landscape) {
+    .hero { padding: 72px 24px 32px; min-height: auto; }
+    .hero-title { font-size: clamp(24px, 5.5vw, 40px); }
+    .hero-sub { margin-bottom: 18px; }
+    .scroll-section { height: auto; min-height: 100vh; }
+    .scroll-hint { display: none; }
+    .content, .tagline-section, .numbers-section { padding-block: 40px; }
+  }
+</style>
+</head>
+<body>
+
+  <nav class="nav">
+    <a href="/" class="logo"><img src="/web/tradoor-logo.svg" alt="TRADOOR" style="height:24px;width:auto" /></a>
+    <div class="nav-links">
+    </div>
+    <div class="nav-spacer"></div>
+    <a href="/market-making" class="nav-cta">Launch app</a>
+  </nav>
+
+  <div class="scroll-section" id="scroll-section">
+    <div class="scroll-sticky">
+      <canvas class="hero-bg" id="portal-canvas"></canvas>
+      <section class="hero" id="hero-content">
+        <div class="hero-text">
+          <h1 class="hero-title">
+            Trade close to your
+            <span class="accent">edge.</span>
+          </h1>
+          <p class="hero-sub">
+            Automated market making on Hyperliquid, Extended and HIP-3.
+            Deploy delta-neutral strategies in one click. No infrastructure,
+            no Python scripts, no sleepless nights : just spreads working for you.
+          </p>
+          <div class="hero-cta-row">
+            <a href="#content" class="btn btn-ghost bg-glow">
+              <span class="edge-light"></span>
+              <span class="btn-label">See how it works</span>
+            </a>
+            <a href="/market-making" class="btn btn-primary bg-glow">
+              <span class="edge-light"></span>
+              <span class="btn-label">Launch Terminal</span>
+              <span class="arrow">→</span>
+            </a>
+          </div>
+          <div class="scroll-hint">
+            <span>Scroll to enter</span>
+            <div class="scroll-arrow">↓</div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <section class="content" id="content">
+    <div class="content-inner">
+      <div class="content-eyebrow">Welcome inside</div>
+      <h2 class="content-title">
+        Market making, <span class="italic">simplified.</span>
+      </h2>
+      <p class="content-sub">
+        Three pillars, one terminal. TRADOOR bridges Hyperliquid, Extended and HIP-3 perp DEXes
+        with a unified engine : so you run spreads, not servers.
+      </p>
+
+      <div class="feature-grid" id="feature-grid">
+        <div class="feature-card bg-glow">
+          <span class="edge-light"></span>
+          <div class="feature-num">01 / DEPLOY</div>
+          <h3>One-click strategies</h3>
+          <p>Pick a token, pick a mode, hit start. TRADOOR handles signing, nonces, position flattening and emergency stops : so you don't have to.</p>
+        </div>
+        <a class="feature-card feature-card--link bg-glow" href="/delta">
+          <span class="edge-light"></span>
+          <div class="feature-num">02 / DELTA</div>
+          <h3>Two legs, one loop</h3>
+          <p>Long on one exchange, short on another, flipped on a timer to farm volume and funding.</p>
+          <span class="feature-link">Open Delta <span aria-hidden="true">→</span></span>
+        </a>
+        <div class="feature-card bg-glow">
+          <span class="edge-light"></span>
+          <div class="feature-num">03 / SCALE</div>
+          <h3>Multi-venue access</h3>
+          <p>Hyperliquid, Extended and HIP-3 perp DEXes from a single terminal. Switch venues without switching tools. Real-time PnL across all sessions.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tagline-section">
+    <h2 class="tagline-big">
+      Trade smarter on <span class="accent">Hyperliquid.</span>
+    </h2>
+  </section>
+
+  <section class="numbers-section" id="numbers">
+    <div class="numbers-inner">
+      <div class="numbers-eyebrow">Tradoor in numbers</div>
+      <h2 class="numbers-title">Real volume. Real traders.</h2>
+      <div class="numbers-grid">
+        <div class="number-card bg-glow">
+          <span class="edge-light"></span>
+          <div class="number-value" id="landing_stat_volume">$0</div>
+          <div class="number-label">All-Time Volume</div>
+        </div>
+        <div class="number-card bg-glow">
+          <span class="edge-light"></span>
+          <div class="number-value" id="landing_stat_fees">$0</div>
+          <div class="number-label">Platform Fees</div>
+        </div>
+        <div class="number-card bg-glow">
+          <span class="edge-light"></span>
+          <div class="number-value" id="landing_stat_users">0</div>
+          <div class="number-label">Unique Addresses</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="social-proof">
+      <div class="dots">
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+      </div>
+      <span>Used by 100+ market makers on Hyperliquid</span>
+    </div>
+    <nav class="footer-links" aria-label="Footer">
+      <a href="/docs">Docs</a>
+      <a href="/tos">Terms</a>
+      <a href="https://x.com/tradoor0" target="_blank" rel="noopener noreferrer">X</a>
+    </nav>
+  </footer>
+
+  <script>
+  // ── Landing reveal effects (tagline / content / features / numbers / markets) ──
+  (() => {
+    const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // Stagger helper
+    function staggerReveal(parentEl, selector, baseDelay, interval) {
+      const gap = interval || 150;
+      const els = Array.from(parentEl.querySelectorAll(selector));
+      els.forEach((el, i) => {
+        setTimeout(() => el.classList.add('is-visible'), baseDelay + i * gap);
+      });
+    }
+
+    // Counter animation
+    function formatCompact(v) {
+      if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+      if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+      if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+      return Math.round(v).toString();
+    }
+    function animateCounter(el, target, prefix, suffix, isInt) {
+      if (!el || !Number.isFinite(target) || target <= 0) return;
+      const duration = 1800;
+      const startTime = performance.now();
+      const tick = (now) => {
+        const elapsed = now - startTime;
+        const progress = Math.min(1, elapsed / duration);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const current = target * eased;
+        const formatted = isInt ? Math.round(current).toLocaleString('en-US') : formatCompact(current);
+        el.textContent = (prefix || '') + formatted + (suffix || '');
+        if (progress < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }
+
+    // State for counter/number reveal race
+    let _statsReady = false;
+    let _numbersRevealed = false;
+    function triggerCounters() {
+      if (!_statsReady || !_numbersRevealed) return;
+      document.querySelectorAll('.number-value').forEach(el => {
+        const target = parseFloat(el.dataset.target);
+        if (!Number.isFinite(target) || target <= 0) return;
+        const prefix = el.dataset.prefix || '';
+        const suffix = el.dataset.suffix || '';
+        const isInt = el.dataset.integer === '1';
+        if (reduceMotion) {
+          el.textContent = prefix + (isInt ? Math.round(target).toLocaleString('en-US') : formatCompact(target)) + suffix;
+        } else {
+          animateCounter(el, target, prefix, suffix, isInt);
+        }
+      });
+    }
+
+    // Fetch stats early
+    fetch('/api/admin/stats/overview')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        const volEl = document.getElementById('landing_stat_volume');
+        const feesEl = document.getElementById('landing_stat_fees');
+        const usersEl = document.getElementById('landing_stat_users');
+        const vol = Number(data.all_time_volume_usd) || 0;
+        const fees = Number(data.all_time_fees_usd) || 0;
+        const users = Number(data.unique_connected_addresses) || 0;
+        if (volEl) { volEl.dataset.target = vol; volEl.dataset.prefix = '$'; }
+        if (feesEl) { feesEl.dataset.target = fees; feesEl.dataset.prefix = '$'; }
+        if (usersEl) { usersEl.dataset.target = users; usersEl.dataset.integer = '1'; }
+        _statsReady = true;
+        triggerCounters();
+      })
+      .catch(() => {});
+
+    // Reduce motion: show everything instantly
+    if (reduceMotion) {
+      document.querySelectorAll('.tagline-big, .content-title, .content-sub, .feature-card, .number-card').forEach(el => el.classList.add('is-visible'));
+      _numbersRevealed = true;
+      triggerCounters();
+      return;
+    }
+
+    // Content title / sub (standalone simple observer)
+    const contentTitle = document.querySelector('.content-title');
+    const contentSub = document.querySelector('.content-sub');
+    if (contentTitle) {
+      const contentObs = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          contentTitle.classList.add('is-visible');
+          if (contentSub) contentSub.classList.add('is-visible');
+        } else {
+          contentTitle.classList.remove('is-visible');
+          if (contentSub) contentSub.classList.remove('is-visible');
+        }
+      }, { threshold: 0.3 });
+      contentObs.observe(contentTitle);
+    }
+
+    // Tagline
+    const taglineEl = document.querySelector('.tagline-big');
+    if (taglineEl) {
+      const taglineObs = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) taglineEl.classList.add('is-visible');
+        else taglineEl.classList.remove('is-visible');
+      }, { threshold: 0.4 });
+      taglineObs.observe(taglineEl);
+    }
+
+    // Sections with stagger: feature grid, numbers
+    const featureGrid = document.querySelector('.feature-grid');
+    const numbersSection = document.getElementById('numbers');
+
+    const sectionMap = new Map();
+    if (featureGrid) sectionMap.set(featureGrid, '.feature-card');
+    if (numbersSection) sectionMap.set(numbersSection, '.number-card');
+
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const section = entry.target;
+        const selector = sectionMap.get(section);
+        if (!selector) continue;
+        if (entry.isIntersecting) {
+          const interval = section === featureGrid ? 200 : 180;
+          staggerReveal(section, selector, 0, interval);
+          if (section === numbersSection) {
+            _numbersRevealed = true;
+            setTimeout(triggerCounters, 300);
+          }
+        } else {
+          Array.from(section.querySelectorAll(selector)).forEach(el => el.classList.remove('is-visible'));
+        }
+      }
+    }, { threshold: 0.08, rootMargin: '0px 0px -10% 0px' });
+
+    sectionMap.forEach((_, section) => observer.observe(section));
+
+    // ── Border glow tracker : updates --edge-proximity and --cursor-angle on pointer move ──
+    document.querySelectorAll('.bg-glow').forEach(card => {
+      card.addEventListener('pointermove', (e) => {
+        const rect = card.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const cx = rect.width / 2;
+        const cy = rect.height / 2;
+        const dx = x - cx;
+        const dy = y - cy;
+
+        // Edge proximity (0 = center, 100 = on edge)
+        let kx = Infinity, ky = Infinity;
+        if (dx !== 0) kx = cx / Math.abs(dx);
+        if (dy !== 0) ky = cy / Math.abs(dy);
+        const edge = Math.min(Math.max(1 / Math.min(kx, ky), 0), 1);
+
+        // Angle from center
+        let angle = 0;
+        if (dx !== 0 || dy !== 0) {
+          angle = Math.atan2(dy, dx) * (180 / Math.PI) + 90;
+          if (angle < 0) angle += 360;
+        }
+
+        card.style.setProperty('--edge-proximity', (edge * 100).toFixed(2));
+        card.style.setProperty('--cursor-angle', angle.toFixed(2) + 'deg');
+      });
+    });
+  })();
+  </script>
+
+<script>
+(() => {
+  const canvas = document.getElementById('portal-canvas');
+  if (!canvas) return;
+
+  const gl = canvas.getContext('webgl2', { alpha: true, antialias: false, premultipliedAlpha: false });
+  if (!gl) {
+    console.warn('WebGL2 not available : portal will not render');
+    return;
+  }
+
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ── Vertex shader (fullscreen quad) ───────────────────────────
+  const VS = `#version 300 es
+in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+  // ── Fragment shader: portal of fire ───────────────────────────
+  const FS = `#version 300 es
+precision highp float;
+
+uniform float uTime;
+uniform vec2 uResolution;
+uniform float uScroll;   // 0 = top, 1 = fully inside portal
+uniform float uMobile;   // 0 = desktop, 1 = mobile
+out vec4 outColor;
+
+// ── Noise primitives ────────────────────────────────
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+float vnoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(hash(i + vec2(0,0)), hash(i + vec2(1,0)), u.x),
+    mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), u.x),
+    u.y);
+}
+float fbm(vec2 p) {
+  float v = 0.0;
+  float a = 0.5;
+  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+  for (int i = 0; i < 6; i++) {
+    v += a * vnoise(p);
+    p = rot * p * 2.02;
+    a *= 0.5;
+  }
+  return v;
+}
+
+// ── Portal SDF: vertical oval (size scales with scroll) ──
+float portalSDF(vec2 p, float scale) {
+  float w = 0.176 * scale;
+  float h = 0.288 * scale;
+  vec2 e = vec2(p.x / w, p.y / h);
+  return (length(e) - 1.0) * min(w, h);
+}
+
+// ── Starfield for portal interior ─────────────
+vec3 starfield(vec2 p) {
+  vec3 col = vec3(0.0);
+  // Layered stars at different densities/sizes
+  for (int layer = 0; layer < 4; layer++) {
+    float fl = float(layer);
+    float scale = 12.0 + fl * 10.0;
+    vec2 grid = floor(p * scale);
+    vec2 local = fract(p * scale) - 0.5;
+    float h = hash(grid + fl * 17.3);
+    float threshold = 0.92 - fl * 0.005;
+    if (h > threshold) {
+      float brightness = pow((h - threshold) / (1.0 - threshold), 1.0);
+      float d = length(local);
+      float falloff = 12.0 + fl * 6.0;
+      float star = exp(-d * falloff);
+      // Plus + cross spikes for the brightest stars
+      if (h > 0.985) {
+        float cross = exp(-abs(local.x) * 80.0) * exp(-abs(local.y) * 4.0)
+                    + exp(-abs(local.y) * 80.0) * exp(-abs(local.x) * 4.0);
+        star += cross * 0.35;
+      }
+      // Twinkle
+      float tw = 0.5 + 0.5 * sin(uTime * 2.5 + h * 30.0);
+      col += vec3(1.0, 0.95, 0.85) * star * brightness * tw * 1.8;
+    }
+  }
+  return col;
+}
+
+// ── Heat → color (Inferno palette) ─────────────────
+vec3 firePalette(float t) {
+  t = clamp(t, 0.0, 1.0);
+  vec3 c0 = vec3(0.00, 0.00, 0.00);
+  vec3 c1 = vec3(0.10, 0.02, 0.00);
+  vec3 c2 = vec3(0.42, 0.06, 0.00);
+  vec3 c3 = vec3(0.83, 0.20, 0.05);
+  vec3 c4 = vec3(1.00, 0.42, 0.10);
+  vec3 c5 = vec3(1.00, 0.70, 0.25);
+  vec3 c6 = vec3(1.00, 0.95, 0.80);
+  if (t < 0.12) return mix(c0, c1, t / 0.12);
+  if (t < 0.30) return mix(c1, c2, (t - 0.12) / 0.18);
+  if (t < 0.50) return mix(c2, c3, (t - 0.30) / 0.20);
+  if (t < 0.70) return mix(c3, c4, (t - 0.50) / 0.20);
+  if (t < 0.88) return mix(c4, c5, (t - 0.70) / 0.18);
+  return mix(c5, c6, (t - 0.88) / 0.12);
+}
+
+// ── Ember particle field ─────────────────────
+float embers(vec2 uv, float time) {
+  float total = 0.0;
+  for (int i = 0; i < 12; i++) {
+    float fi = float(i);
+    float speed = 0.15 + hash(vec2(fi, 1.0)) * 0.25;
+    float xOff = (hash(vec2(fi, 2.0)) - 0.5) * 0.7;
+    float life = mod(time * speed + hash(vec2(fi, 3.0)), 1.0);
+    vec2 pos = vec2(xOff + sin(time * 0.6 + fi) * 0.04, -0.45 + life * 0.8);
+    float d = length(uv - pos);
+    float fade = (1.0 - life);
+    total += exp(-d * 220.0) * fade * 1.5;
+  }
+  return total;
+}
+
+void main() {
+  // Normalized centered coords (origin = center, y up)
+  vec2 fc = gl_FragCoord.xy;
+  vec2 uv = (fc - 0.5 * uResolution) / uResolution.y;
+
+  // Anchor the portal:
+  // - desktop: shifted right (hero text is on the left)
+  // - mobile: centered
+  float aspect = uResolution.x / uResolution.y;
+  float anchorX = mix(aspect * 0.18, 0.0, uMobile);
+  uv.x -= anchorX;
+
+  // ── SCROLL: the portal grows to engulf the entire view ──
+  // Scale grows from 1 at uScroll=0 to ~20 at uScroll=1
+  float portalScale = 1.0 + uScroll * uScroll * 18.0;
+
+  // Anchor drift: as the portal opens, move back towards center
+  uv.x += uScroll * anchorX * 1.0;
+
+  // ── Rising fire noise (domain warped, multi-scale) ──
+  vec2 q = vec2(uv.x * 4.5, uv.y * 4.5 - uTime * 1.8);
+  float n1 = fbm(q);
+  vec2 rw = vec2(fbm(q + vec2(uTime * 0.4, 1.0)), fbm(q + vec2(0.0, uTime * 0.3)));
+  float n2 = fbm(q + rw * 2.0);
+  float nDetail = fbm(q * 2.5 + rw * 3.0);
+  float fire = n1 * 0.45 + n2 * 0.4 + nDetail * 0.25;
+
+  // ── Displace the portal SDF slightly : subtle flame ripple ──
+  vec2 dispQ = vec2(uv.x * 7.0, uv.y * 7.0 - uTime * 2.0);
+  float dispNoise = fbm(dispQ);
+  float displacement = (dispNoise - 0.5) * 0.035;
+
+  float d = portalSDF(uv, portalScale) + displacement;
+  float edge = abs(d);
+  float dOut = max(d, 0.0);
+
+  // ── Flames ONLY on the outside edge (d >= 0) ──
+  float outsideMask = step(0.0, d);
+  float flameMask = exp(-dOut * 30.0) * outsideMask;
+  float rimLine = exp(-edge * 60.0) * 0.8 * outsideMask;
+
+  float flameIntensity = (flameMask * (1.3 + fire * 0.6) + rimLine);
+
+  // Flicker
+  float flicker = 0.9 + 0.1 * vnoise(vec2(uTime * 3.5, 0.0));
+  flameIntensity *= flicker;
+
+  flameIntensity = pow(clamp(flameIntensity, 0.0, 2.0), 0.8);
+
+  // ── Inside: deep starry black ──
+  float inside = smoothstep(0.0, -0.02, d);
+
+  // Starfield: as user scrolls into the portal, stars zoom in (forward motion)
+  float starScale = 2.0 + uScroll * uScroll * 8.0;
+  vec2 starUV = uv * starScale + vec2(0.0, uScroll * 3.0);
+  vec3 stars = starfield(starUV) * inside;
+  // Boost star brightness during scroll transition
+  stars *= 1.0 + uScroll * 1.5;
+
+  // Almost no inner light : keep it dark
+  vec3 innerLight = vec3(0.0);
+
+  // ── Outer ambient halo : OUTSIDE only (d > 0) ──
+  float halo = exp(-dOut * 5.0) * 0.55 * outsideMask;
+  vec3 haloCol = vec3(1.0, 0.42, 0.13) * halo;
+
+  // Larger soft glow outward only
+  float bigGlow = exp(-dOut * 1.8) * 0.22 * outsideMask;
+  haloCol += vec3(1.0, 0.5, 0.18) * bigGlow;
+
+  // ── Embers ──
+  float em = embers(uv, uTime);
+  vec3 emberCol = vec3(1.0, 0.7, 0.35) * em;
+
+  // ── Combine ──
+  vec3 col = firePalette(flameIntensity);
+  col += innerLight;
+  col += stars;
+  col += haloCol;
+  col += emberCol;
+
+  // ── Alpha: transparent away from the portal ──
+  float alpha = clamp(
+    flameIntensity * 1.6 +
+    inside * 1.0 +
+    halo * 1.6 +
+    bigGlow * 1.2 +
+    em * 1.0,
+    0.0, 1.0
+  );
+
+  // Tone mapping (soft)
+  col = col / (col + 0.7);
+  col = pow(col, vec3(0.85));
+
+  outColor = vec4(col, alpha);
+}`;
+
+  // ── Compile helpers ──────────────────────────────────────────
+  function compile(type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(sh));
+      console.error(src);
+      return null;
+    }
+    return sh;
+  }
+  const vs = compile(gl.VERTEX_SHADER, VS);
+  const fs = compile(gl.FRAGMENT_SHADER, FS);
+  if (!vs || !fs) return;
+
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+    return;
+  }
+
+  // Fullscreen quad
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1, -1,  1, -1,  -1, 1,
+    -1,  1,  1, -1,   1, 1
+  ]), gl.STATIC_DRAW);
+
+  const aPos = gl.getAttribLocation(prog, 'aPos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  const uTime = gl.getUniformLocation(prog, 'uTime');
+  const uRes = gl.getUniformLocation(prog, 'uResolution');
+  const uScroll = gl.getUniformLocation(prog, 'uScroll');
+  const uMobile = gl.getUniformLocation(prog, 'uMobile');
+
+  // Resize handling
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  function resize() {
+    const r = canvas.getBoundingClientRect();
+    canvas.width = Math.floor(r.width * dpr);
+    canvas.height = Math.floor(r.height * dpr);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // Scroll progress tracker (0 = top, 1 = portal fully opened)
+  const scrollSection = document.getElementById('scroll-section');
+  const heroContent = document.getElementById('hero-content');
+  let scrollProgress = 0;
+  function updateScroll() {
+    if (!scrollSection) return;
+    const rect = scrollSection.getBoundingClientRect();
+    const total = scrollSection.offsetHeight - window.innerHeight;
+    const scrolled = Math.max(0, -rect.top);
+    scrollProgress = total > 0 ? Math.min(1, scrolled / total) : 0;
+    // Fade the hero text quickly as we scroll into the portal
+    if (heroContent) {
+      const fadeOut = Math.max(0, 1 - scrollProgress * 3.5);
+      heroContent.style.opacity = fadeOut;
+      heroContent.style.transform = `translateY(${scrollProgress * -60}px)`;
+    }
+  }
+  window.addEventListener('scroll', updateScroll, { passive: true });
+  updateScroll();
+
+  // Mobile detection
+  function isMobile() { return window.innerWidth <= 900 ? 1 : 0; }
+
+  // Render loop
+  gl.useProgram(prog);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+  const start = performance.now();
+  function frame() {
+    const t = (performance.now() - start) / 1000;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniform1f(uTime, reduceMotion ? 0 : t);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uScroll, scrollProgress);
+    gl.uniform1f(uMobile, isMobile());
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+
+</body>
+</html>

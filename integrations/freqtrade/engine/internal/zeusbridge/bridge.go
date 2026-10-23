@@ -123,9 +123,29 @@ func RecordAction(kind string, count int) {
 // ErrorHandler only forwards error messages, never startup/config/account dumps.
 type ErrorHandler struct{ State *State }
 
+const maxZeusErrorLen = 240
+
 func (h ErrorHandler) Enabled(_ context.Context, l slog.Level) bool { return l >= slog.LevelError }
 func (h ErrorHandler) Handle(_ context.Context, r slog.Record) error {
-	h.State.Update(map[string]any{"error": r.Message})
+	// Attrs carry the actionable context ("error=...", "reason=...", coin).
+	// Dropping them reduced the Zeus banner to a bare sentence with no way to
+	// tell a cancelled-order race from an outage. Keep the message text as the
+	// stable key; append attr values after it, capped for UI display.
+	msg := r.Message
+	var details []string
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Value.Kind() != slog.KindGroup {
+			details = append(details, fmt.Sprintf("%s=%v", a.Key, a.Value))
+		}
+		return true
+	})
+	if len(details) > 0 {
+		msg += ": " + strings.Join(details, ", ")
+	}
+	if runes := []rune(msg); len(runes) > maxZeusErrorLen {
+		msg = string(runes[:maxZeusErrorLen])
+	}
+	h.State.Update(map[string]any{"error": msg})
 	h.State.Emit()
 	return nil
 }

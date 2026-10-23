@@ -2,10 +2,18 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"hyperliquid-market-maker/internal/types"
 )
+
+// ErrRefreshSuperseded reports that a refresh was abandoned because the order
+// state changed underneath it (fill, reconciliation, or an order that was
+// already gone when we tried to cancel it). The executor has cleared its local
+// tracking; the next refresh will resync with a full cancel-and-replace. This
+// is a normal race and must not be treated as an operational API failure.
+var ErrRefreshSuperseded = errors.New("quote refresh superseded")
 
 // Executor defines the interface for order management, implemented by
 // PaperExecutor (simulation) and LiveExecutor (real trading).

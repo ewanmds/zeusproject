@@ -29,7 +29,7 @@ import eth_account
 from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
-from zeus.markets import PERP_DEXS, TOKENS
+from zeus.markets import PERP_DEXS, TOKENS, resolve_symbol, token_config
 
 from rich.console import Console
 from rich.table import Table
@@ -2414,17 +2414,11 @@ class OrderBookBot:
 # MAIN
 # =============================================================================
 def resolve_token(name: str) -> str:
-    key = name.strip().upper()
-    if key in TOKENS:
-        return TOKENS[key]["symbol"]
-    # Token hors presets: essayer xyz puis mkts via le meta live
-    for dex in PERP_DEXS:
-        try:
-            fetch_token_meta(f"{dex}:{key}")
-            return f"{dex}:{key}"
-        except Exception:
-            continue
-    raise SystemExit(f"❌ Token inconnu: {name}")
+    """Resolve a preset, a bare ticker or a dex-qualified HIP-3 market."""
+    try:
+        return resolve_symbol(name)
+    except ValueError as exc:
+        raise SystemExit(f"❌ Token inconnu: {name} ({exc})") from exc
 
 
 if __name__ == "__main__":
@@ -2453,7 +2447,9 @@ if __name__ == "__main__":
 
     SYMBOL = resolve_token(token)
     # Demi-spread par token (préset), sauf si forcé par variable d'env.
-    _tok_cfg = TOKENS.get(token.strip().upper(), {})
+    # token_config accepte les clés historiques (SP500) et les marchés
+    # qualifiés (XYZ:COPPER, PARA:10Y) résolus dans ce process enfant.
+    _tok_cfg = token_config(token)
     SESSION_WINDOWS_UTC = tuple(
         (int(start), int(end)) for start, end in _tok_cfg.get("session_utc", ())
     )

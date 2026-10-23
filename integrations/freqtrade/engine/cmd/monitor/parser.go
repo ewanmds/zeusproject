@@ -876,6 +876,17 @@ func (p *Parser) ParseLine(line string) {
 			Summary: "recon: soft mismatch threshold exceeded, cancelling",
 		})
 
+	case "reconciliation: drift within Zeus order-size cap, treating as soft correction":
+		delta := jsonFloat(raw, "delta_notional")
+		orderCap := jsonFloat(raw, "order_cap")
+		p.State.Events.Add(Event{
+			Time:    ts,
+			Level:   level,
+			Coin:    coin,
+			Type:    EventWarn,
+			Summary: fmt.Sprintf("recon: zeus soft drift %.2f (cap %.2f)", delta, orderCap),
+		})
+
 	case "reconciliation mismatch diagnostic":
 		tracked := jsonInt(raw, "tracked_count")
 		exchange := jsonInt(raw, "exchange_count")

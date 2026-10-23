@@ -2,8 +2,12 @@ package zeusbridge
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"log/slog"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestConfirmedFillsOnlyDedupAndCPM(t *testing.T) {
@@ -67,5 +71,69 @@ func TestIncompleteAccountingNeverPublishesCPM(t *testing.T) {
 	_ = json.Unmarshal(out.Bytes(), &got)
 	if got["cost_per_1m"] != nil {
 		t.Fatal("CPM published from incomplete closing accounting")
+	}
+}
+
+// lastJSONSnapshot keeps the last emitted snapshot, since a State.Emit call
+// appends exactly one JSON object per stream line and ErrorHandler.Handle
+// emits on its own.
+func lastJSONSnapshot(t *testing.T, out *bytes.Buffer) map[string]any {
+	t.Helper()
+	dec := json.NewDecoder(out)
+	var got map[string]any
+	for {
+		var next map[string]any
+		err := dec.Decode(&next)
+		if err != nil {
+			break
+		}
+		got = next
+	}
+	if got == nil {
+		t.Fatal("no snapshot emitted")
+	}
+	return got
+}
+
+func TestErrorHandlerAppendsAttrsAndCapsLength(t *testing.T) {
+	s := Configure("test", "xyz:SP500")
+	defer func() { active = nil }()
+	out := &bytes.Buffer{}
+	s.out = out
+	h := ErrorHandler{State: s}
+
+	record := slog.NewRecord(time.Now(), slog.LevelError, "quote manager entering fail-closed halt", 0)
+	record.AddAttrs(slog.String("reason", "quote_refresh_failure"))
+	record.Add(slog.Any("error", context.DeadlineExceeded))
+	record.AddAttrs(slog.Int("retry_count", 2))
+	if err := h.Handle(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+
+	shown := lastJSONSnapshot(t, out)["error"].(string)
+	for _, want := range []string{
+		"quote manager entering fail-closed halt",
+		"reason=quote_refresh_failure",
+		"retry_count=2",
+	} {
+		if !strings.Contains(shown, want) {
+			t.Fatalf("banner missing %q: %q", want, shown)
+		}
+	}
+
+	// A verbose attr value must not flood the Zeus banner.
+	verbose := strings.Repeat("x", 400)
+	rec := slog.NewRecord(time.Now(), slog.LevelError, "op failed", 0)
+	rec.AddAttrs(slog.String("error", verbose))
+	if err := h.Handle(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+
+	shown = lastJSONSnapshot(t, out)["error"].(string)
+	if runes := len([]rune(shown)); runes > maxZeusErrorLen {
+		t.Fatalf("banner not capped: %d runes", runes)
+	}
+	if !strings.HasPrefix(shown, "op failed") {
+		t.Fatalf("unexpected banner: %q", shown)
 	}
 }

@@ -1,8 +1,8 @@
 """
 Trading Bot Dashboard — FastAPI Backend Server
 ================================================
-Wraps the BBO/MID Order Book market maker and WorldCup Spread and exposes
-REST API + WebSocket endpoints for a frontend dashboard.
+Wraps the BBO/MID Order Book market maker and the Outcome (HIP-4) spread bot
+and exposes REST API + WebSocket endpoints for a frontend dashboard.
 (L'onglet "Grid" du frontend pilote le moteur BBO/MID.)
 """
 
@@ -21,11 +21,13 @@ import time
 import math
 import threading
 import asyncio
+import logging
 import signal
 import secrets
 import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -36,6 +38,7 @@ import uvicorn
 from zeus import PROJECT_ROOT
 
 GRID_NUM_LEVELS = 1
+logger = logging.getLogger("zeus.server")
 
 # ---------------------------------------------------------------------------
 # .env loader (manual, no external dependency)
@@ -114,7 +117,8 @@ class WorldcupStartRequest(BaseModel):
     # Legacy (vieux onglets): interprété en bps si max_spread_pct absent.
     max_spread_bps: float = 2.0
     max_position_usd: float = 250
-    # "ALL" = tous les marchés découverts, sinon un pays (ex "France").
+    # "ALL" = every live ``out`` outcome, otherwise an exact outcome coin
+    # ("#14881") or an outcome id/name resolved through zeus.outcomes.
     market: str = "ALL"
 
 
@@ -153,45 +157,93 @@ def _safe_import(module_name: str):
         return None
 
 
-def _grid_token_key(token: str) -> str:
-    """Normalize a HIP-3 coin name or dex-qualified symbol to a UI key."""
-    return str(token or "").split(":", 1)[-1].upper()
+LOGO_ROOT = PROJECT_ROOT / "frontend" / "assets" / "logos" / "hip3"
 
 
-def _token_logo_text(key: str) -> str:
-    """Small deterministic fallback mark; Hyperliquid HIP-3 meta has no image URL."""
-    cleaned = "".join(ch for ch in str(key).upper() if ch.isalnum())
+def _token_logo_text(ticker: str) -> str:
+    """Deterministic fallback mark when Hyperliquid publishes no icon."""
+    cleaned = "".join(ch for ch in str(ticker).upper() if ch.isalnum())
     return (cleaned[:2] or "?").ljust(2, " ")
 
 
+def _safe_path_part(value: str, *, allowed: str = "._-") -> str:
+    raw = str(value or "")
+    cleaned = "".join(ch for ch in raw if ch.isalnum() or ch in allowed)
+    return cleaned if cleaned == raw else ""
+
+
+def _logo_url(dex: str, ticker: str) -> Optional[str]:
+    """Return the locally cached Hyperliquid icon URL, or None."""
+    safe_dex = _safe_path_part(dex.lower())
+    safe_ticker = _safe_path_part(ticker)
+    if not safe_dex or not safe_ticker:
+        return None
+    path = LOGO_ROOT / safe_dex / f"{safe_ticker}.svg"
+    try:
+        if path.is_file() and path.stat().st_size > 0:
+            return f"/frontend/assets/logos/hip3/{safe_dex}/{quote(safe_ticker)}.svg"
+    except OSError:
+        return None
+    return None
+
+
 def _refresh_grid_token_catalog(grid_mod) -> Dict[str, Dict[str, Any]]:
-    """Merge local presets with the live HIP-3 universe exposed by the bot module."""
-    token_map: Dict[str, Dict[str, Any]] = dict(getattr(grid_mod, "TOKENS", {}))
-    if all(
-        hasattr(grid_mod, attr)
-        for attr in ("_fetch_hip3_meta", "_fetch_all_mids", "_dynamic_token_config")
-    ):
-        markets = grid_mod._fetch_hip3_meta()
-        mids = grid_mod._fetch_all_mids()
-        for item in markets:
-            built = grid_mod._dynamic_token_config(item, mids)
-            if built is None:
-                continue
-            key, cfg = built
-            token_map[key] = cfg
-        grid_mod.TOKENS.update(token_map)
+    """Merge presets with the live HIP-3 universe (60 s cache)."""
+    refresh = getattr(grid_mod, "refresh_catalog", None)
+    if callable(refresh):
+        try:
+            return refresh()
+        except Exception as exc:  # noqa: BLE001 - keep the picker usable offline
+            logger.warning("HIP-3 catalog refresh failed: %s", exc)
+
+    # Legacy fallback for an older markets module: merge whatever is available.
+    token_map: Dict[str, Dict[str, Any]] = {
+        str(key).upper(): dict(cfg)
+        for key, cfg in getattr(grid_mod, "TOKENS", {}).items()
+        if isinstance(cfg, dict) and cfg.get("symbol")
+    }
+    try:
+        if all(
+            hasattr(grid_mod, attr)
+            for attr in ("_fetch_hip3_meta", "_fetch_all_mids", "_dynamic_token_config")
+        ):
+            markets = grid_mod._fetch_hip3_meta()
+            mids = grid_mod._fetch_all_mids()
+            covered = {str(cfg["symbol"]).lower() for cfg in token_map.values()}
+            for item in markets:
+                built = grid_mod._dynamic_token_config(item, mids)
+                if built is None:
+                    continue
+                key, cfg = built
+                symbol = str(cfg.get("symbol", "")).lower()
+                if not symbol or symbol in covered:
+                    continue
+                covered.add(symbol)
+                token_map[key] = cfg
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("HIP-3 legacy catalog merge failed: %s", exc)
     return token_map
 
 
 def _grid_token_payload(key: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
     symbol = str(cfg.get("symbol", key))
+    dex, _, ticker = symbol.partition(":")
+    dex = str(cfg.get("dex") or dex or "xyz").lower()
+    ticker = str(cfg.get("ticker") or ticker or symbol).upper()
+    mid = _json_float(cfg.get("api_mid"), 8)
     return {
         "key": key,
         "symbol": symbol,
-        "logo": _token_logo_text(key),
-        "mid": cfg.get("api_mid", 0.0),
+        "dex": dex,
+        "ticker": ticker,
+        "name": cfg.get("name") or symbol,
+        "logo": _token_logo_text(ticker),
+        "logo_url": _logo_url(dex, ticker),
+        "mid": mid,
         "max_leverage": cfg.get("max_leverage"),
         "is_cross": cfg.get("is_cross", True),
+        "day_volume": _json_float(cfg.get("day_volume"), 2),
+        "sz_decimals": cfg.get("sz_decimals"),
     }
 
 
@@ -272,8 +324,8 @@ class BotManager:
         order_usd = max(10.5, float(config.order_size_usd))
         if strategy == "freqtrade":
             order_usd = float(config.order_size_usd)
-            if not math.isfinite(order_usd) or order_usd < 10:
-                raise ValueError("Montant Freqtrade minimal : 10 USD, valeur finie requise")
+            if not math.isfinite(order_usd) or order_usd < 40:
+                raise ValueError("Montant Freqtrade minimal : 40 USD (25 % par côté, ordre minimum 10 USD), valeur finie requise")
             obi_mod.require_binary()
 
         with self.lock:
@@ -478,6 +530,11 @@ class BotManager:
                     "spread_bps": _json_float(st.get("spread_bps", 0), 2),
                     "markout_bid_bps": _json_float(st.get("markout_bid_bps", 0), 3),
                     "markout_ask_bps": _json_float(st.get("markout_ask_bps", 0), 3),
+                    "quote_half_spread_bps": _json_float(st.get("quote_half_spread_bps", 0), 2),
+                    "edge_required_bps": _json_float(st.get("edge_required_bps", 0), 2),
+                    "edge_margin_bps": _json_float(st.get("edge_margin_bps", 0), 2),
+                    "fee_bps": (_json_float(st.get("fee_bps"), 2)
+                                if st.get("fee_bps") is not None else None),
                     "mid_offset_bps": _json_float(st.get("mid_offset_bps", 0), 2),
                     "position_known": position_known,
                     "position_usd": _json_float(st.get("position_usd", 0), 2) if position_known else None,
@@ -522,12 +579,12 @@ class BotManager:
             return self._grid_stats_cache or default
 
     # -----------------------------------------------------------------------
-    # WorldCup Spread Bot
+    # Outcome (HIP-4) Spread Bot
     # -----------------------------------------------------------------------
     def start_worldcup(self, config: WorldcupStartRequest) -> None:
         with self.lock:
             if self.wc_running:
-                raise RuntimeError("WorldCup bot is already running")
+                raise RuntimeError("Outcome bot is already running")
 
             wc_mod = _safe_import("zeus.bots.worldcup")
             if wc_mod is None:
@@ -535,19 +592,48 @@ class BotManager:
                     "Cannot import zeus.bots.worldcup — check the Zeus installation"
                 )
 
+            outcome_mod = _safe_import("zeus.outcomes")
+            if outcome_mod is None:
+                raise RuntimeError(
+                    "Cannot import zeus.outcomes — check the Zeus installation"
+                )
+
+            selected = str(config.market or "").strip()
+            if selected.upper() in ("", "ALL"):
+                symbols = outcome_mod.all_market_keys()
+                if not symbols:
+                    raise RuntimeError(
+                        "Outcome catalog unavailable: no live HIP-4 markets"
+                    )
+            else:
+                resolved = outcome_mod.resolve_market(selected)
+                if resolved is None:
+                    raise RuntimeError(
+                        f"Unknown Outcome market: {selected}. "
+                        "Refresh the Outcome market list and try again."
+                    )
+                symbols = [str(resolved["key"])]
+
             try:
                 from hyperliquid.utils import constants
                 base_url = constants.MAINNET_API_URL
             except ImportError:
                 base_url = "https://api.hyperliquid.xyz"
 
+            outcome_account = os.getenv("WALLET_ADDRESS_OUTCOME", "").strip()
+            outcome_key = os.getenv("PRIVATE_KEY_OUTCOME", "").strip()
+            if not outcome_account or not outcome_key:
+                raise RuntimeError(
+                    "Outcome requires WALLET_ADDRESS_OUTCOME and PRIVATE_KEY_OUTCOME in .env"
+                )
+
             cfg = wc_mod.BotConfig(
                 base_url=base_url,
                 perp_dex="xyz",
                 live=True,
-                symbols=[],
-                keywords=["WORLD", "CUP", "2026", "CHAMPION", "WINNER"],
-                max_symbols=8,
+                symbols=symbols,
+                keywords=[],
+                max_symbols=max(1, len(symbols)),
                 order_usd=config.order_size_usd,
                 min_order_usd=config.order_size_usd,
                 close_min_order_usd=0,
@@ -569,25 +655,11 @@ class BotManager:
                 market_slippage_bps=5,
                 market_cycle_cooldown_sec=0.12,
                 account_sync_sec=2,
-                account_address=(
-                    os.getenv("WALLET_ADDRESS_OUTCOME")
-                    or os.getenv("WALLET_ADDRESS", "")
-                ),
-                private_key=(
-                    os.getenv("PRIVATE_KEY_OUTCOME")
-                    or os.getenv("PRIVATE_KEY", "")
-                ),
+                account_address=outcome_account,
+                private_key=outcome_key,
                 scan_only=False,
                 worldcup=True,
-                countries=(
-                    [
-                        "France", "Argentina", "Spain", "England", "Portugal",
-                        "Germany", "Brazil", "Netherlands", "USA", "Norway",
-                        "Morocco",
-                    ]
-                    if str(config.market).strip().upper() in ("", "ALL")
-                    else [str(config.market).strip()]
-                ),
+                countries=[],
                 outcome_side="no",
             )
 
@@ -756,17 +828,25 @@ async def get_grid_tokens(_: None = Depends(_require_api_token)):
     try:
         from zeus import markets as grid_mod
         token_map = _refresh_grid_token_catalog(grid_mod)
-        tokens = [
-            _grid_token_payload(key, cfg)
-            for key, cfg in sorted(token_map.items())
-            if isinstance(cfg, dict) and cfg.get("symbol")
-        ]
+        tokens = []
+        seen_symbols = set()
+        for key, cfg in sorted(token_map.items()):
+            if not isinstance(cfg, dict) or not cfg.get("symbol"):
+                continue
+            symbol = str(cfg["symbol"]).lower()
+            # Legacy aliases (SKHX / SKHXUSD) must not create duplicate rows.
+            if symbol in seen_symbols:
+                continue
+            seen_symbols.add(symbol)
+            tokens.append(_grid_token_payload(key, cfg))
         return {
-            "dex": getattr(grid_mod, "PERP_DEX", "xyz"),
+            "dex": "multi",
+            "dexes": list(getattr(grid_mod, "PERP_DEXS", [])),
             "count": len(tokens),
             "tokens": tokens,
         }
-    except Exception:
+    except Exception as exc:
+        logger.exception("HIP-3 token catalog unavailable: %s", exc)
         # Fallback list when the module isn't available
         # Keep the catalog aligned with markets the current bot can resolve.
         fallback = {
@@ -779,10 +859,43 @@ async def get_grid_tokens(_: None = Depends(_require_api_token)):
             "TSLA": "xyz:TSLA", "IO_SNDK": "io:SNDK",
             "IO_ANTH": "io:ANTH",
         }
-        return {"dex": "multi", "count": len(fallback), "tokens": [
-            {"key": key, "symbol": symbol, "logo": _token_logo_text(symbol.split(":")[-1])}
-            for key, symbol in fallback.items()
-        ]}
+        tokens = []
+        for key, symbol in fallback.items():
+            dex, _, ticker = symbol.partition(":")
+            tokens.append({
+                "key": key,
+                "symbol": symbol,
+                "dex": dex,
+                "ticker": ticker,
+                "name": symbol,
+                "logo": _token_logo_text(ticker),
+                "logo_url": _logo_url(dex, ticker),
+                "mid": 0,
+                "max_leverage": None,
+                "is_cross": True,
+                "day_volume": 0,
+                "sz_decimals": None,
+            })
+        return {"dex": "multi", "dexes": ["xyz", "mkts", "io"],
+                "count": len(tokens), "tokens": tokens}
+
+
+@app.get("/api/outcomes/markets")
+async def get_outcome_markets(_: None = Depends(_require_api_token)):
+    """Return every live HIP-4 outcome from Hyperliquid's ``out`` deployer."""
+    try:
+        from zeus import outcomes as outcome_mod
+        rows = outcome_mod.catalog_snapshot()
+        return outcome_mod.market_payload(rows)
+    except Exception as exc:
+        logger.exception("HIP-4 outcome catalog unavailable: %s", exc)
+        return {
+            "venue": "out",
+            "count": 0,
+            "categories": [],
+            "outcomes": [],
+            "error": str(exc),
+        }
 
 
 @app.get("/api/health")
@@ -844,13 +957,14 @@ async def grid_status(_: None = Depends(_require_api_token)):
 
 
 # ---------------------------------------------------------------------------
-# REST API — WorldCup Bot
+# REST API — Outcome (HIP-4) Bot
 # ---------------------------------------------------------------------------
+@app.post("/api/outcomes/start")
 @app.post("/api/worldcup/start")
-async def start_worldcup(req: WorldcupStartRequest, _: None = Depends(_require_api_token)):
+async def start_outcome(req: WorldcupStartRequest, _: None = Depends(_require_api_token)):
     try:
         manager.start_worldcup(req)
-        return {"status": "ok", "message": "WorldCup bot started"}
+        return {"status": "ok", "message": "Outcome bot started"}
     except Exception as e:
         return JSONResponse(
             status_code=400,
@@ -858,11 +972,12 @@ async def start_worldcup(req: WorldcupStartRequest, _: None = Depends(_require_a
         )
 
 
+@app.post("/api/outcomes/stop")
 @app.post("/api/worldcup/stop")
-async def stop_worldcup(_: None = Depends(_require_api_token)):
+async def stop_outcome(_: None = Depends(_require_api_token)):
     try:
         manager.stop_worldcup()
-        return {"status": "ok", "message": "WorldCup bot stopped"}
+        return {"status": "ok", "message": "Outcome bot stopped"}
     except Exception as e:
         return JSONResponse(
             status_code=400,
@@ -870,8 +985,9 @@ async def stop_worldcup(_: None = Depends(_require_api_token)):
         )
 
 
+@app.get("/api/outcomes/status")
 @app.get("/api/worldcup/status")
-async def worldcup_status(_: None = Depends(_require_api_token)):
+async def outcome_status(_: None = Depends(_require_api_token)):
     return manager.get_worldcup_stats()
 
 

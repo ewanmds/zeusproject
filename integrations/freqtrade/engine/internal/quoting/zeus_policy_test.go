@@ -29,6 +29,57 @@ func TestZeusOrderCapUsesQuotePrice(t *testing.T) {
 	}
 }
 
+func TestZeusLifetimeQuotaDoesNotPreventBootstrap(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.ZeusMode = true
+	cfg.RateLimit = defaultRLConfig()
+	mgr := &Manager{cfg: cfg, executor: newMockExecutor(), supervisor: NewSupervisor()}
+	// Reproduce the account's shape: large lifetime usage, viable credit.
+	mgr.UpdateRateLimit(733, 731870)
+	if mgr.supervisor.IsRLCritical() {
+		t.Fatal("lifetime cap falsely prevented the first order")
+	}
+	if got := mgr.rateLimitRemainingPctLocked(733); got != 100 {
+		t.Fatal(got)
+	}
+	// Absolute safety reserve still prevents new exposure.
+	mgr.UpdateRateLimit(299, 731870)
+	if !mgr.supervisor.IsRLCritical() {
+		t.Fatal("absolute API reserve bypassed")
+	}
+	status, blocked := mgr.ZeusQuoteStatus("xyz:SP500")
+	if !blocked || status == "" {
+		t.Fatal("API halt missing from dashboard status")
+	}
+	// A viable credit level can recover; independent risk halts remain.
+	mgr.UpdateRateLimit(733, 731870)
+	if mgr.supervisor.IsRLCritical() {
+		t.Fatal("API guard failed to recover")
+	}
+	mgr.supervisor.Signal(SignalRiskHalt)
+	mgr.UpdateRateLimit(733, 731870)
+	if mgr.supervisor.CanQuote() {
+		t.Fatal("independent risk halt cleared")
+	}
+	// The standalone bot keeps its existing percentage policy.
+	cfg.ZeusMode = false
+	if got := mgr.rateLimitRemainingPctLocked(733); got >= 3 {
+		t.Fatal("standalone policy changed")
+	}
+}
+
+func TestZeusQuotaRetainsExhaustionProtection(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.ZeusMode = true
+	cfg.RateLimit = defaultRLConfig()
+	mgr := &Manager{cfg: cfg, rlBootSeeded: true, rlBootRemaining: 733, rateLimitCap: 731870}
+	fillHistory(mgr, 5000, 15)
+	tier, _, _ := mgr.computeRateLimitTierLocked()
+	if tier != rlTierCritical {
+		t.Fatal("rapid API budget depletion no longer triggers protection")
+	}
+}
+
 func TestZeusSignalGatesKeepBothSidesButHardHealthStillBlocks(t *testing.T) {
 	for _, scenario := range []string{"trend", "flow", "regime", "shock", "optimizer"} {
 		t.Run(scenario, func(t *testing.T) {

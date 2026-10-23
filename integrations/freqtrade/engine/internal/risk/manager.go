@@ -347,11 +347,14 @@ func (m *Manager) evaluate() {
 			continue
 		}
 		ac := m.cfg.ForAsset(pos.Coin)
-		if pos.Notional >= ac.Risk.MaxPositionNotional {
+		haltCap := positionHaltCap(ac.Risk.MaxPositionNotional, ac.Risk.MaxPositionHaltTolerancePct)
+		if pos.Notional >= haltCap {
 			slog.Warn("position notional at/above limit",
 				"coin", pos.Coin,
 				"notional", pos.Notional,
-				"limit", ac.Risk.MaxPositionNotional,
+				"limit", haltCap,
+				"configured_limit", ac.Risk.MaxPositionNotional,
+				"tolerance_pct", ac.Risk.MaxPositionHaltTolerancePct,
 			)
 			m.emitActionForce(types.RiskHalt)
 			return
@@ -364,11 +367,13 @@ func (m *Manager) evaluate() {
 			continue
 		}
 		ac := m.cfg.ForAsset(pos.Coin)
-		if pos.Notional >= ac.Risk.MaxSpreadExposure {
+		haltCap := positionHaltCap(ac.Risk.MaxSpreadExposure, ac.Risk.MaxPositionHaltTolerancePct)
+		if pos.Notional >= haltCap {
 			slog.Warn("spread exposure at/above per-asset limit",
 				"coin", pos.Coin,
 				"notional", pos.Notional,
-				"limit", ac.Risk.MaxSpreadExposure,
+				"limit", haltCap,
+				"configured_limit", ac.Risk.MaxSpreadExposure,
 			)
 			m.emitActionForce(types.RiskHalt)
 			return
@@ -393,6 +398,18 @@ func (m *Manager) evaluate() {
 	if m.lastAction != types.RiskResume {
 		m.emitAction(types.RiskResume)
 	}
+}
+
+// positionHaltCap applies the configured tolerance to a notional limit. A zero
+// tolerance keeps the historical behaviour (halt exactly at the limit).
+func positionHaltCap(limit, tolerancePct float64) float64 {
+	if limit <= 0 {
+		return limit
+	}
+	if tolerancePct <= 0 {
+		return limit
+	}
+	return limit * (1.0 + tolerancePct/100.0)
 }
 
 func (m *Manager) emitAction(action types.RiskAction) {

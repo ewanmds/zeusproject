@@ -62,9 +62,7 @@ except Exception as exc:  # pragma: no cover - startup guard
 
 DEFAULT_KEYWORDS = "WORLD,CUP,2026,CHAMPION,WINNER"
 DEFAULT_MAX_SPREAD_PCT = 0.020  # percent. 0.020% = 2 bps.
-DEFAULT_WORLDCUP_COUNTRIES = (
-    "France,Argentina,Spain,England,Portugal,Brazil,USA,Norway,Morocco"
-)
+DEFAULT_WORLDCUP_COUNTRIES = "ALL"
 WORLDCUP_DESCRIPTION_NEEDLE = "officially declared the 2026 FIFA World Cup champion"
 OUTCOME_ASSET_OFFSET = 100_000_000
 
@@ -512,15 +510,33 @@ class HyperliquidSpreadBot:
             self.patch_outcome_assets(self.info, self.outcome_meta)
 
         outcomes = self.outcome_meta.get("outcomes", []) if isinstance(self.outcome_meta, dict) else []
-        country_by_slug: Dict[str, Dict[str, Any]] = {}
-        for outcome in outcomes:
-            description = str(outcome.get("description", ""))
-            if WORLDCUP_DESCRIPTION_NEEDLE.lower() not in description.lower():
-                continue
-            name = str(outcome.get("name", ""))
-            if not name:
-                continue
-            country_by_slug[slugify(name)] = outcome
+
+        # The dashboard catalog renders template names (sports tournaments,
+        # awards, price markets...).  Fall back to the raw outcomeMeta rows if
+        # the catalog module is unavailable, so explicit #N coins still work.
+        catalog: List[Dict[str, Any]] = []
+        try:
+            from zeus import outcomes as outcome_mod
+            catalog = outcome_mod.catalog_snapshot()
+        except Exception:
+            catalog = []
+        if not catalog:
+            catalog = [
+                {
+                    "id": int(outcome.get("outcome")),
+                    "name": str(outcome.get("name") or outcome.get("outcome")),
+                    "key": outcome_coin(int(outcome.get("outcome")), 1),
+                }
+                for outcome in outcomes
+                if str(outcome.get("venue") or "").lower() == "out"
+                and str(outcome.get("outcome") or "").isdigit()
+            ]
+
+        by_slug: Dict[str, Dict[str, Any]] = {}
+        for row in catalog:
+            for label in (row.get("name"), row.get("question_title")):
+                if label:
+                    by_slug.setdefault(slugify(str(label)), row)
 
         requested: List[Tuple[str, str]] = []
         if self.cfg.symbols:
@@ -538,14 +554,17 @@ class HyperliquidSpreadBot:
                 else:
                     requested.append((slugify(raw), self.cfg.outcome_side))
         else:
-            requested = [(slugify(country), self.cfg.outcome_side) for country in self.cfg.countries]
-            if not requested or any(country.lower() == "all" for country, _ in requested):
+            countries = [str(country).strip() for country in self.cfg.countries if str(country).strip()]
+            if not countries or any(country.lower() == "all" for country in countries):
+                side_name = "yes" if str(self.cfg.outcome_side).lower() == "yes" else "no"
+                side_idx = 0 if side_name == "yes" else 1
                 requested = [
-                    (slugify(str(outcome.get("name", ""))), self.cfg.outcome_side)
-                    for outcome in outcomes
-                    if WORLDCUP_DESCRIPTION_NEEDLE.lower() in str(outcome.get("description", "")).lower()
-                    and outcome.get("name")
+                    (outcome_coin(int(row["id"]), side_idx), side_name)
+                    for row in catalog
+                    if row.get("id") is not None
                 ]
+            else:
+                requested = [(slugify(country), self.cfg.outcome_side) for country in countries]
 
         specs: List[MarketSpec] = []
         missing: List[str] = []
@@ -556,6 +575,13 @@ class HyperliquidSpreadBot:
                 symbol = country_slug
                 display = symbol
                 outcome_id = int(symbol[1:]) // 10
+                try:
+                    from zeus import outcomes as outcome_mod
+                    resolved = outcome_mod.resolve_market(symbol)
+                    if resolved:
+                        display = str(resolved.get("name") or symbol)
+                except Exception:
+                    pass
                 specs.append(
                     MarketSpec(
                         symbol=symbol,
@@ -568,20 +594,19 @@ class HyperliquidSpreadBot:
                 )
                 continue
 
-            outcome = country_by_slug.get(country_slug)
-            if not outcome:
+            row = by_slug.get(country_slug)
+            if not row:
                 missing.append(country_slug)
                 continue
-            outcome_id = int(outcome["outcome"])
+            outcome_id = int(row["id"])
             symbol = outcome_coin(outcome_id, side_idx)
-            country_name = str(outcome.get("name", country_slug))
-            slug = worldcup_slug(country_name, side_name)
+            display_name = str(row.get("name") or country_slug)
             specs.append(
                 MarketSpec(
                     symbol=symbol,
                     sz_decimals=0,
                     max_leverage=1.0,
-                    display_name=slug,
+                    display_name=display_name,
                     outcome_id=outcome_id,
                     outcome_side=side_name,
                     balance_coin=outcome_balance_coin(outcome_id, side_idx),
@@ -589,14 +614,14 @@ class HyperliquidSpreadBot:
             )
 
         if missing:
-            available = ", ".join(sorted(country_by_slug.keys())[:80])
+            available = ", ".join(sorted(by_slug.keys())[:80])
             self.console.print(
-                "Some World Cup countries were not found in outcomeMeta: "
+                "Some Outcome markets were not found in outcomeMeta: "
                 f"{', '.join(missing)}\nAvailable slugs: {available}",
                 style="yellow",
             )
         if not specs:
-            raise SystemExit("No HIP-4 World Cup outcome markets selected.")
+            raise SystemExit("No HIP-4 Outcome markets selected.")
         return specs
 
     def scan_table(self) -> Table:
@@ -1476,7 +1501,7 @@ class HyperliquidSpreadBot:
             )
 
         footer = (
-            f"Status: {status} | Mode: {'HIP-4 World Cup' if cfg.worldcup else 'perp/spot'} | "
+            f"Status: {status} | Mode: {'HIP-4 Outcome' if cfg.worldcup else 'perp/spot'} | "
             f"Dex: {cfg.perp_dex or 'main'} | "
             f"Order: {fmt_usd(cfg.order_usd)} per leg | "
             f"Cap: {fmt_usd(cfg.max_position_usd)} per market | "
@@ -1498,10 +1523,10 @@ def build_config(argv: Optional[List[str]] = None) -> BotConfig:
     parser.add_argument("--live", action="store_true", help="send real orders; default is dry-run")
     parser.add_argument("--testnet", action="store_true", help="use Hyperliquid testnet")
     parser.add_argument("--dex", default=os.getenv("HL_PERP_DEX", "xyz"), help="perp dex, e.g. xyz or empty")
-    parser.add_argument("--symbols", default=os.getenv("HL_SYMBOLS", ""), help="comma-separated exact symbols, #N coins, or World Cup slugs")
+    parser.add_argument("--symbols", default=os.getenv("HL_SYMBOLS", ""), help="comma-separated exact symbols, #N coins, or Outcome slugs")
     parser.add_argument("--keywords", default=os.getenv("HL_KEYWORDS", DEFAULT_KEYWORDS), help="comma keywords")
-    parser.add_argument("--worldcup", action="store_true", help="force HIP-4 World Cup outcome mode")
-    parser.add_argument("--legacy-scan", action="store_true", help="use old perp/HIP-3 keyword discovery instead of HIP-4 World Cup")
+    parser.add_argument("--worldcup", action="store_true", help="force HIP-4 Outcome mode")
+    parser.add_argument("--legacy-scan", action="store_true", help="use old perp/HIP-3 keyword discovery instead of HIP-4 Outcome")
     parser.add_argument("--countries", default=os.getenv("HL_WORLDCUP_COUNTRIES", DEFAULT_WORLDCUP_COUNTRIES))
     parser.add_argument("--outcome-side", choices=("yes", "no"), default=os.getenv("HL_OUTCOME_SIDE", "no"))
     parser.add_argument("--max-symbols", type=int, default=int(os.getenv("HL_MAX_SYMBOLS", "8")))
@@ -1555,6 +1580,18 @@ def build_config(argv: Optional[List[str]] = None) -> BotConfig:
         for symbol in symbols
     )
     worldcup = bool(args.worldcup or looks_hip4 or (not args.legacy_scan and not symbols))
+    if worldcup:
+        # HIP-4 must never silently sign with the general trading wallet.
+        account_address = (
+            os.getenv("HL_OUTCOME_ACCOUNT_ADDRESS")
+            or os.getenv("WALLET_ADDRESS_OUTCOME", "")
+        ).strip()
+        private_key = (
+            os.getenv("HL_OUTCOME_PRIVATE_KEY")
+            or os.getenv("PRIVATE_KEY_OUTCOME", "")
+        ).strip()
+    else:
+        account_address = args.account.strip()
 
     return BotConfig(
         base_url=base_url,
@@ -1580,7 +1617,7 @@ def build_config(argv: Optional[List[str]] = None) -> BotConfig:
         market_slippage_bps=max(0.0, args.market_slippage_bps),
         market_cycle_cooldown_sec=max(0.02, args.market_cycle_cooldown),
         account_sync_sec=max(0.5, args.account_sync_sec),
-        account_address=args.account.strip(),
+        account_address=account_address,
         private_key=private_key.strip(),
         scan_only=bool(args.scan_only),
         worldcup=worldcup,

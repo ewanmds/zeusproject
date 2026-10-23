@@ -593,10 +593,6 @@ func main() {
 	}
 
 	// Session PnL tracker — shared by manager + status loop (P0).
-	if bridge != nil {
-		bridgeDone = make(chan struct{})
-		go func() { defer close(bridgeDone); emitZeusState(ctx, bridge, liveExec, *zeusSymbol) }()
-	}
 	sessionPnL := quoting.NewSessionPnLTracker(exec.Equity(), cfg.Risk.SessionPnLWindowMinutes)
 
 	// Create spread engine (only with 2+ assets).
@@ -613,6 +609,10 @@ func main() {
 	quoteMgr := quoting.New(cfg, bookChQuote, signalCh, riskCh, exec, szDecimals, shortVWAPs, longVWAPs, imbalanceCalcs, fillDecays, sessionPnL)
 	if bootRLRemaining > 0 {
 		quoteMgr.UpdateRateLimit(bootRLRemaining, bootRLCap)
+	}
+	if bridge != nil {
+		bridgeDone = make(chan struct{})
+		go func() { defer close(bridgeDone); emitZeusState(ctx, bridge, liveExec, quoteMgr, *zeusSymbol) }()
 	}
 	// P13: post-mortem dumper (no-op when disabled).
 	pmDumper := quoting.NewPostMortemDumper(cfg.PostMortem)

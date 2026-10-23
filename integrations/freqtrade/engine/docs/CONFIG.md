@@ -187,6 +187,25 @@ Snap the nearest ladder level in front of large resting orders (walls) detected 
 | `builder_fee_bps`   | float64 | `0`, `≥0` | Paper-model builder fee only; keep at zero for the local direct execution path. |
 | `fee_floor_enabled` | bool    | `false`   | Widen quotes to cover round-trip maker + builder fees.  |
 
+### Edge gate
+
+The edge gate floors the **exposure-increasing** side at measured fees + measured
+adverse selection + a target net edge. Exit-side quotes keep the normal skew /
+position-age / idle-breaker pipeline so inventory can always be reduced. It is
+off by default; the Zeus Freqtrade preset enables it.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `edge_gate_enabled` | bool | `false` | Enable the per-side cost floor. |
+| `edge_target_bps` | float64 | `1.0`, `[0, 50]` | Target net edge per round trip. The per-side requirement adds half of it. |
+| `edge_adverse_floor_bps` | float64 | `0.75`, `[0, 50]` | Adverse-selection buffer used before the markout EWMA is warm. |
+| `edge_max_width_bps` | float64 | `10.0`, `[0, 200]` | Maximum half-spread the gate may impose; above it the side is not quoted. |
+| `edge_fee_floor_bps` | float64 | `0.5`, `[0, 50]` | Floor applied to the measured fee so one cheap fill cannot collapse the gate. |
+
+Required half-spread formula: `fee_bps + adverse_bps + edge_target_bps / 2`.
+The fee is the EWMA of `(fill.Fee + fill.BuilderFee) / notional` once a fill has
+been seen, otherwise `maker_fee_bps + builder_fee_bps`.
+
 ### Trade flow (imbalance & post-fill decay)
 
 | Field                           | Type    | Default                       | Description                                                                      |
@@ -632,6 +651,7 @@ Swap the optimizer's 4th state dimension between budget pressure and session PnL
 | Field                        | Type    | Default                                            | Description                                             |
 | ---------------------------- | ------- | -------------------------------------------------- | ------------------------------------------------------- |
 | `max_position_notional`      | float64 | required (`>0`)                                    | Position cap.                                           |
+| `max_position_halt_tolerance_pct` | float64 | `0`, `[0, 50]`                                | Allow the position to reach `cap × (1 + tol/100)` before a forced flatten. The quote manager already stops entries at the cap; use `10` in Zeus to avoid liquidating normal max inventory. |
 | `max_spread_exposure`        | float64 | required (`>0`); must be `≥ max_position_notional` | Combined long+short open-order notional cap.            |
 | `max_drawdown_pct`           | float64 | required, `(0, 100]`                               | Hard equity-drawdown stop.                              |
 | `max_open_orders`            | int     | required (`>0`)                                    | Open-order cap.                                         |
@@ -889,3 +909,10 @@ data and `execution.live_mode: false`. No private key is needed for paper mode.
   included in the generated JSON/YAML configuration.
 - The snapshot protocol is enabled only with the `-zeus-*` flags; standalone
   monitor logging and original config behavior remain unchanged outside Zeus.
+- In Zeus, percentage rate-limit thresholds refer to the session's initial
+  available request credit, not the lifetime cumulative exchange cap. The
+  configured absolute reserve and time-to-exhaustion protections still apply.
+- Zeus session configs set `fail_closed_cooldown_sec: 15` and
+  `max_fail_closed_retries: 5` so a transient API or order-state race cannot
+  end the session permanently. Superseded refreshes (fill/reconciliation or an
+  already-gone order) are retried without entering fail-closed at all.

@@ -36,15 +36,45 @@ Dans Zeus, choisir **Freqtrade**, le marché et le montant, puis **Lancer**.
 Ce mode est réel uniquement ; cette action autorise la validation du compte
 puis les ordres. Aucune stratégie n'est lancée par l'installation ou les tests.
 
-Le montant est un plafond, sans augmentation automatique au minimum d'échange.
-Une seule taille d'ordre d'inventaire est autorisée ; les tailles sont arrondies
-vers le bas, et les sorties sont reduce-only. Les suspensions sur signaux sont
-retirées, mais les protections de données, compte, budget API et pertes restent
-actives. Le levier provient de `OBI_LEVERAGE` (20 par défaut), plafonné au contrat.
+Le montant est un plafond de position. **25 % de ce montant est coté par côté**
+(ordre minimum Hyperliquid : 10 USD), donc le minimum utilisable est **40 USD**.
+Le nombre de niveaux est déduit de cette taille : 1 niveau de 40 à 79 USD,
+2 niveaux de 80 à 159 USD, 3 niveaux dès 160 USD. Les tailles sont arrondies vers
+le bas et les sorties sont reduce-only. Les suspensions sur signaux sont conservées comme sur le
+Bureau, et les protections de données, compte, budget API et pertes restent
+actives. Le levier provient de `OBI_LEVERAGE` (30 par défaut, comme
+`config.live.yaml`), plafonné au contrat.
+
+### Économie et edge gate
+
+Chaque session applique une formule de coût, pas un spread fixe :
+
+```text
+demi-spread requis = frais mesurés + sélection adverse mesurée + edge cible / 2
+```
+
+Les frais sont l'EWMA des frais réels par fill (repli sur `maker_fee_bps` avant le
+premier fill), la sélection adverse est le markout EWMA du côté concerné (repli
+sur `edge_adverse_floor_bps` pendant le warmup), et l'edge cible vaut 1 bps net
+par aller-retour. Le moteur élargit le côté qui augmente l'inventaire jusqu'à ce
+niveau ; au-delà de `edge_max_width_bps`, il ne cote pas ce côté. Le côté sortie
+reste géré par le skew, l'âge de position et l'idle-breaker pour ne pas
+emprisonner l'inventaire.
+
+Au lancement, le mode lit le carnet public et signale un demi-spread venu
+inférieur à l'edge requis. Le moteur applique ensuite son edge gate à chaque
+cotation : il élargit le côté qui augmente l'inventaire ou ne le cote pas si
+la largeur maximale serait dépassée. Un carnet momentanément étroit ne fait
+donc plus échouer le démarrage.
 
 **Arrêter** demande au Go d'annuler et fermer, puis de vérifier la mise à plat
 par REST. En cas de panne réseau ou de position résiduelle, la session reste en
 échec avec position inconnue ; l'interface n'annonce pas une clôture confirmée.
+
+Le démarrage suit le lanceur du Bureau : un seul `-check-account`, puis le
+processus live directement (aucun `-validate` supplémentaire). Une fois le carnet
+validé, l'état reste **Live** même si une garde temporaire bloque un côté ; le
+motif est affiché dans le détail de la session.
 
 ## Télémétrie et validation
 
@@ -53,7 +83,10 @@ consommé en mémoire ; seul le snapshot courant du dashboard est remplacé dans
 le répertoire temporaire. Les verrouillages Windows sont non fatals.
 
 CPM = `(frais − PnL réalisé) / volume confirmé × 1 000 000`, hors funding.
-Sans fills confirmés, le CPM reste nul au sens JSON `null` et s'affiche `—`.
+Un CPM positif est un coût net ; un CPM négatif est un gain net après frais. Le
+snapshot expose aussi `fee_bps`, `net_pnl`, le markout par côté et la comparaison
+`edge requis / demi-spread coté`. Sans fills confirmés, le CPM reste nul au sens
+JSON `null` et s'affiche `—`.
 Les tentatives d'ordres sont comptées séparément ; elles incluent les échecs.
 Les réponses de placement/modification ambiguës ne sont pas renvoyées en boucle :
 elles suspendent les nouvelles quotes jusqu'à réconciliation. Une confirmation

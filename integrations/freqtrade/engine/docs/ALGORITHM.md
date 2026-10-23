@@ -1043,6 +1043,16 @@ If smoothed equity drops below `absolute_equity_floor` for 3 consecutive reading
 
 If the executor fails to refresh orders (API error, timeout), the bot enters **fail-closed mode**: cancels all outstanding orders and halts. It will attempt automatic recovery after `fail_closed_cooldown_sec`, up to `max_fail_closed_retries` times.
 
+A refresh that is superseded by an expected order-state change is **not** a
+failure. This includes a fill or reconciliation changing the order epoch, and a
+cancel whose order has already filled or disappeared. The executor aborts the
+refresh before placing new orders, clears its stale tracking, and returns
+`ErrRefreshSuperseded`; the quote manager retries on the next tick with a full
+cancel-and-replace instead of entering fail-closed. Reconciliation also
+re-checks the in-flight refresh flag after its network query, so a stale
+exchange snapshot cannot abort a healthy requote. Zeus sessions default to a
+15-second fail-closed cooldown with 5 bounded recovery attempts.
+
 ### Position Close Strategy
 
 When the risk manager triggers a halt, the executor attempts to close positions in three tiers:
@@ -1093,6 +1103,7 @@ Every 30 seconds (15 seconds when halted) the live executor queries the exchange
 - **Dust** differences (< $10 notional) are ignored
 - **Hard** mismatches (side flip or > $50) trigger coin-level quoting halt
 - **Side flip within exposure:** Side flips where the notional delta is within `max_spread_exposure` are treated as **soft corrections** (not hard drift). This handles the common case where rapid fills on resting orders flip the on-chain position, but the WS/poller hasn't delivered all fills yet. The position is corrected from chain state and a synthetic fill is generated, but quoting is not halted.
+- **Zeus order-size cap:** In Zeus mode, inventory is hard-capped at one order size (`risk.max_position_notional` == `order_size_usd`), so any position divergence within that bound is fully explainable by a missed own fill (WS drop + REST poller latency) and is treated as a **soft correction** regardless of direction or side — chain state adopted, synthetic fill generated, no halt. Without this, the default threshold `max($50, 25% × quote_notional)` equals half the allowed inventory for a single-order Zeus config, so a single slipped fill would halt quoting for ~30s on every occurrence. Divergence **beyond** the cap necessarily exceeds anything the bot's own fills can produce (external wallet activity or a tracking bug) and still hard-halts. Persistent sub-cap drift still escalates via the consecutive-soft-mismatch cancel path (3 within 30s). Standalone (non-Zeus) behavior is unchanged.
 - **Post-fill grace period:** When any fill was recently processed (not just sign-flip fills), hard-mismatch classification is suppressed for `recon_grace_period_ms`. The position is still corrected from chain state, but the halt is suppressed. This prevents false-positive halts when fills arrive rapidly and the reconciliation ticker fires before all fills are reflected in local state.
 - **Refresh-in-progress guard:** Order-count reconciliation is skipped while any `Refresh` / `RefreshMulti` is executing. During a refresh, the exchange order state is transitional (cancels/modifies in flight), so count comparisons are unreliable. Real drift is caught on the next reconciliation tick when no refresh is active.
 - **Order generation grace:** An order-generation timestamp is recorded whenever refresh, cancel-all, side-cancel, fill reconciliation, or tracking-clear mutates tracked order state. If order-count reconciliation sees a mismatch inside `recon_grace_period_ms` after that generation, it defers the mismatch instead of clearing tracking. This separates expected in-flight exchange skew from real drift.
@@ -1540,3 +1551,12 @@ ordinary logs are suppressed. Confirmed exchange fill IDs and exchange
 `closedPnl`/fees drive accounting; inferred reconciliation fills are excluded.
 Shutdown explicitly verifies positions and orders by fresh REST reads and
 reports unknown state on any failure. No post-mortem files are written by Zeus.
+
+In Zeus only, percentage API-budget thresholds use the initial available
+request credit (`nRequestsCap - nRequestsUsed`), bounded below by the absolute
+reserve, as their denominator. The exchange's lifetime cumulative cap is still
+recorded for accounting; historical usage must not make a viable new session
+critical at bootstrap. Absolute-reserve and measured time-to-exhaustion guards
+remain active. Standalone percentage semantics are unchanged.
+The dashboard status reports the manager's actual halt or cached live quote
+count; receipt of a fresh book alone does not mean orders are active.

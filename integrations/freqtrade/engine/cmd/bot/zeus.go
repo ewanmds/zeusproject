@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/quiknode-labs/hyperliquid-sdk/go/hyperliquid"
 	"hyperliquid-market-maker/internal/execution"
+	"hyperliquid-market-maker/internal/quoting"
 	"hyperliquid-market-maker/internal/zeusbridge"
 	"math"
 	"os"
@@ -28,7 +29,7 @@ func watchZeusStop(ctx context.Context, cancel context.CancelFunc, path string) 
 		}
 	}
 }
-func emitZeusState(ctx context.Context, s *zeusbridge.State, exec *execution.LiveExecutor, coin string) {
+func emitZeusState(ctx context.Context, s *zeusbridge.State, exec *execution.LiveExecutor, manager *quoting.Manager, coin string) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -50,6 +51,12 @@ func emitZeusState(ctx context.Context, s *zeusbridge.State, exec *execution.Liv
 			if fresh {
 				phase = "running"
 				action = "FREQTRADE | moteur actif"
+				// L'erreur vient du dernier log ERROR et reste collée. Dès que le
+				// moteur peut requoter normalement, on efface l'alerte périmée ;
+				// en halt réel, blocked reste vrai et le message est conservé.
+				if _, blocked := manager.ZeusQuoteStatus(coin); !blocked && !health.Coins[coin].QuoteHalt {
+					s.Update(map[string]any{"error": ""})
+				}
 			}
 			if h := health.Coins[coin]; h.QuoteHalt {
 				action = "FREQTRADE | execution suspendue: " + h.Reason
@@ -58,7 +65,26 @@ func emitZeusState(ctx context.Context, s *zeusbridge.State, exec *execution.Liv
 			if book.Mid > 0 {
 				spread = (book.BestAsk - book.BestBid) / book.Mid * 10000
 			}
-			s.Update(map[string]any{"phase": phase, "running": true, "position_known": known, "position": qty, "position_usd": qty * book.Mid, "entry": pos.AvgEntry, "mid": book.Mid, "spread_bps": spread, "upnl": qty * (book.Mid - pos.AvgEntry), "action": action})
+			// Measured quality: per-side markout and the edge gate's view of the
+			// entry side. The entry side increases inventory; when flat both
+			// sides do, so report the tighter one.
+			markout := manager.MarkoutSnapshot(coin)
+			diag := manager.Diagnostics()[coin]
+			quoteHalf, required := 0.0, 0.0
+			switch pos.Side {
+			case "long":
+				quoteHalf, required = diag.QuoteHalfBidBps, diag.EdgeRequiredBidBps
+			case "short":
+				quoteHalf, required = diag.QuoteHalfAskBps, diag.EdgeRequiredAskBps
+			default:
+				quoteHalf = math.Min(diag.QuoteHalfBidBps, diag.QuoteHalfAskBps)
+				required = math.Max(diag.EdgeRequiredBidBps, diag.EdgeRequiredAskBps)
+			}
+			margin := quoteHalf - required
+			s.Update(map[string]any{"phase": phase, "running": true, "position_known": known, "position": qty, "position_usd": qty * book.Mid, "entry": pos.AvgEntry, "mid": book.Mid, "spread_bps": spread, "upnl": qty * (book.Mid - pos.AvgEntry), "action": action,
+				"markout_bid_bps": markout.BuyComposite, "markout_ask_bps": markout.SellComposite,
+				"quote_half_spread_bps": quoteHalf, "edge_required_bps": required, "edge_margin_bps": margin,
+				"measured_fee_bps": diag.MeasuredFeeBps})
 			s.Emit()
 		}
 	}

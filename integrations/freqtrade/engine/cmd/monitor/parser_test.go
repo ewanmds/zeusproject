@@ -192,6 +192,19 @@ func TestParseErrorEvent(t *testing.T) {
 	}
 }
 
+func TestParseReconZeusSoftCorrection(t *testing.T) {
+	p := NewParser()
+	p.ParseLine(`{"time":"2026-04-04T00:35:18.168018-04:00","level":"INFO","msg":"reconciliation: drift within Zeus order-size cap, treating as soft correction","coin":"io:ANTH","delta_notional":"100.00","order_cap":"100.00"}`)
+
+	events := p.State.Events.Items()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != EventWarn || events[0].Coin != "io:ANTH" {
+		t.Errorf("expected EventWarn for io:ANTH, got %+v", events[0])
+	}
+}
+
 func TestParseOptimizerState(t *testing.T) {
 	p := NewParser()
 	p.ParseLine(`{"time":"2026-04-04T21:04:05.759699-04:00","level":"INFO","msg":"[OptimizerV2] state","coin":"xyz:CL","eval":1,"tox":0,"tox_markout":0,"tox_burst":0,"tox_emergency":0,"opp":0.26,"opp_fill_rate":0.5,"opp_autocorr":0,"opp_vwap_dev":0.21,"opp_spread_bbo":0.23,"inv":0.24,"inv_pos_util":0,"inv_ctrl":0.81,"inv_duration":0,"budget":0.5}`)

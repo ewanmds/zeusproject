@@ -1,0 +1,2431 @@
+{
+  "generated_at": "2026-10-23T14:22:12.064696+00:00",
+  "source": "https://app.hyperliquid.xyz/coins/<symbol>.svg",
+  "venue": "out",
+  "counts": {
+    "live": 184,
+    "covered": 184,
+    "missing": 0,
+    "icons": 17
+  },
+  "icons": {
+    "BTC": {
+      "path": "BTC.svg",
+      "sha256": "45ea9984b7923557d5006c6567510e02734079ded21767bcbbd2bcdf7bd6940b",
+      "bytes": 1532,
+      "content_type": "image/svg+xml",
+      "kind": "underlying",
+      "source": "https://app.hyperliquid.xyz/coins/BTC.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "ETH": {
+      "path": "ETH.svg",
+      "sha256": "1186309d94304915c012eda14b70c2f008b8f846c7167dfc5de631ede211b36f",
+      "bytes": 3493,
+      "content_type": "image/svg+xml",
+      "kind": "underlying",
+      "source": "https://app.hyperliquid.xyz/coins/ETH.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "HYPE": {
+      "path": "HYPE.svg",
+      "sha256": "4ef1f539cdd3472fd5ae3cfce4f9f2d85ef747587ae72a191e95e5e171a13f54",
+      "bytes": 497,
+      "content_type": "image/svg+xml",
+      "kind": "underlying",
+      "source": "https://app.hyperliquid.xyz/coins/HYPE.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "basketball_outcome": {
+      "path": "basketball_outcome.svg",
+      "sha256": "0ac4e008f6769bf3bea28b978d819e441f1b87ea7693d1c71d4e485349115802",
+      "bytes": 2502,
+      "content_type": "image/svg+xml",
+      "kind": "category",
+      "source": "https://app.hyperliquid.xyz/coins/basketball_outcome.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "culture_outcome": {
+      "path": "culture_outcome.svg",
+      "sha256": "7865f269868368e672fe91a9130fdee7d496b38b65b111a531dd7471159162fd",
+      "bytes": 499,
+      "content_type": "image/svg+xml",
+      "kind": "category",
+      "source": "https://app.hyperliquid.xyz/coins/culture_outcome.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "economics_outcome": {
+      "path": "economics_outcome.svg",
+      "sha256": "de9f54ea211d6ad97123403fce765d9a62c1d91753fa5ef37560c5a46f686d30",
+      "bytes": 1565,
+      "content_type": "image/svg+xml",
+      "kind": "category",
+      "source": "https://app.hyperliquid.xyz/coins/economics_outcome.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "esports_outcome": {
+      "path": "esports_outcome.svg",
+      "sha256": "06589afbfb471dfa090f64245948025ac993957df35393a28bcb5a554fd30d5b",
+      "bytes": 550,
+      "content_type": "image/svg+xml",
+      "kind": "category",
+      "source": "https://app.hyperliquid.xyz/coins/esports_outcome.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "football_outcome": {
+      "path": "football_outcome.svg",
+      "sha256": "1680db847a829fbbb91bb0d5f83c04ba374c95b56c24ac6299e3003d99fcc2a5",
+      "bytes": 512,
+      "content_type": "image/svg+xml",
+      "kind": "category",
+      "source": "https://app.hyperliquid.xyz/coins/football_outcome.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "missing": {
+      "path": "missing.svg",
+      "sha256": "3318b62e9bd9a622d7673270cb816457af8d974b361ae28f02cf4a447e785b19",
+      "bytes": 103,
+      "content_type": "image/svg+xml",
+      "kind": "missing",
+      "source": "https://app.hyperliquid.xyz/coins/missing.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "soccer_outcome": {
+      "path": "soccer_outcome.svg",
+      "sha256": "e84d934f9f603e23356436bd33620b073f3781980ac7318915418b943ba1cf97",
+      "bytes": 2671,
+      "content_type": "image/svg+xml",
+      "kind": "category",
+      "source": "https://app.hyperliquid.xyz/coins/soccer_outcome.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "xyz:CL": {
+      "path": "xyz_CL.svg",
+      "sha256": "a5d392705e8167f602c05a6a1fed7da1e265d66e1f68e09df039c4a1eb243a8b",
+      "bytes": 837,
+      "content_type": "image/svg+xml",
+      "kind": "underlying",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CL.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "xyz:GOLD": {
+      "path": "xyz_GOLD.svg",
+      "sha256": "37ae359aee01520ff5216c202e5ec9eb31705bac42ce1b1c040620c5ec5391b0",
+      "bytes": 2019,
+      "content_type": "image/svg+xml",
+      "kind": "underlying",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:GOLD.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "xyz:MU": {
+      "path": "xyz_MU.svg",
+      "sha256": "97261ebbf039a32f36a59884ab386c6bdd7d88580c671944f1d757a0be322a19",
+      "bytes": 1256,
+      "content_type": "image/svg+xml",
+      "kind": "underlying",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:MU.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "xyz:SILVER": {
+      "path": "xyz_SILVER.svg",
+      "sha256": "8ebead9b39f626fa61b84fcf4a7be336890bbd1a768d91d35e4ce7b46aa54014",
+      "bytes": 1573,
+      "content_type": "image/svg+xml",
+      "kind": "underlying",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SILVER.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "xyz:SP500": {
+      "path": "xyz_SP500.svg",
+      "sha256": "e1db17e553c3d9fe02aebbba2faf599f6edf5ab83c3d0c9de89cbdc60e853609",
+      "bytes": 7077,
+      "content_type": "image/svg+xml",
+      "kind": "underlying",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SP500.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "xyz:SPCX": {
+      "path": "xyz_SPCX.svg",
+      "sha256": "8931e0f00e513352728e7639d1cd2cf52bf41a8dae370a8601f8df8e5919d21e",
+      "bytes": 1172,
+      "content_type": "image/svg+xml",
+      "kind": "underlying",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SPCX.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "xyz:XYZ100": {
+      "path": "xyz_XYZ100.svg",
+      "sha256": "c0baf0a5e34a152f0bc8b7945006f98018000a2179f49e051f939f25ca7b1ccb",
+      "bytes": 1375,
+      "content_type": "image/svg+xml",
+      "kind": "underlying",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:XYZ100.svg",
+      "fetched_at": "2026-10-23T13:52:43.649874+00:00"
+    }
+  },
+  "outcomes": {
+    "1472": {
+      "key": "#14721",
+      "name": "No winner",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1473": {
+      "key": "#14731",
+      "name": "Arsenal",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1474": {
+      "key": "#14741",
+      "name": "Manchester City",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1475": {
+      "key": "#14751",
+      "name": "Liverpool",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1476": {
+      "key": "#14761",
+      "name": "Chelsea",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1477": {
+      "key": "#14771",
+      "name": "Manchester United",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1478": {
+      "key": "#14781",
+      "name": "Tottenham Hotspur",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1479": {
+      "key": "#14791",
+      "name": "No winner",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1480": {
+      "key": "#14801",
+      "name": "Barcelona",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1481": {
+      "key": "#14811",
+      "name": "Arsenal",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1482": {
+      "key": "#14821",
+      "name": "Bayern Munich",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1483": {
+      "key": "#14831",
+      "name": "Real Madrid",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1484": {
+      "key": "#14841",
+      "name": "Manchester City",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1485": {
+      "key": "#14851",
+      "name": "Paris Saint-Germain",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "1486": {
+      "key": "#14861",
+      "name": "No winner",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "1487": {
+      "key": "#14871",
+      "name": "Los Angeles Rams",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "1488": {
+      "key": "#14881",
+      "name": "Buffalo Bills",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "1489": {
+      "key": "#14891",
+      "name": "Baltimore Ravens",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "1490": {
+      "key": "#14901",
+      "name": "Seattle Seahawks",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "1491": {
+      "key": "#14911",
+      "name": "Kansas City Chiefs",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "1492": {
+      "key": "#14921",
+      "name": "Dallas Cowboys",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "3599": {
+      "key": "#35991",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "economics_outcome",
+      "file": "economics_outcome.svg"
+    },
+    "3600": {
+      "key": "#36001",
+      "name": "No change",
+      "icon_kind": "category",
+      "icon_symbol": "economics_outcome",
+      "file": "economics_outcome.svg"
+    },
+    "3601": {
+      "key": "#36011",
+      "name": "Decrease",
+      "icon_kind": "category",
+      "icon_symbol": "economics_outcome",
+      "file": "economics_outcome.svg"
+    },
+    "3602": {
+      "key": "#36021",
+      "name": "Increase",
+      "icon_kind": "category",
+      "icon_symbol": "economics_outcome",
+      "file": "economics_outcome.svg"
+    },
+    "7173": {
+      "key": "#71731",
+      "name": "BTC touches 87,500 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "BTC",
+      "file": "BTC.svg"
+    },
+    "7174": {
+      "key": "#71741",
+      "name": "BTC touches 90,000 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "BTC",
+      "file": "BTC.svg"
+    },
+    "7175": {
+      "key": "#71751",
+      "name": "BTC touches 92,500 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "BTC",
+      "file": "BTC.svg"
+    },
+    "7177": {
+      "key": "#71771",
+      "name": "BTC touches 77,500 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "BTC",
+      "file": "BTC.svg"
+    },
+    "7178": {
+      "key": "#71781",
+      "name": "BTC touches 75,000 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "BTC",
+      "file": "BTC.svg"
+    },
+    "7180": {
+      "key": "#71801",
+      "name": "HYPE touches 100 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "HYPE",
+      "file": "HYPE.svg"
+    },
+    "7181": {
+      "key": "#71811",
+      "name": "HYPE touches 105 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "HYPE",
+      "file": "HYPE.svg"
+    },
+    "7186": {
+      "key": "#71861",
+      "name": "HYPE touches 75 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "HYPE",
+      "file": "HYPE.svg"
+    },
+    "7947": {
+      "key": "#79471",
+      "name": "xyz:CL touches 105 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "xyz:CL",
+      "file": "xyz_CL.svg"
+    },
+    "7948": {
+      "key": "#79481",
+      "name": "xyz:CL touches 85 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "xyz:CL",
+      "file": "xyz_CL.svg"
+    },
+    "7949": {
+      "key": "#79491",
+      "name": "xyz:CL touches 80 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "xyz:CL",
+      "file": "xyz_CL.svg"
+    },
+    "7950": {
+      "key": "#79501",
+      "name": "xyz:CL touches 75 by Nov 01, 2026 00:00 UTC",
+      "icon_kind": "underlying",
+      "icon_symbol": "xyz:CL",
+      "file": "xyz_CL.svg"
+    },
+    "8566": {
+      "key": "#85661",
+      "name": "Anthropic first-day market cap above $2,500B?",
+      "icon_kind": "category",
+      "icon_symbol": "economics_outcome",
+      "file": "economics_outcome.svg"
+    },
+    "8567": {
+      "key": "#85671",
+      "name": "Anthropic first-day market cap above $2,250B?",
+      "icon_kind": "category",
+      "icon_symbol": "economics_outcome",
+      "file": "economics_outcome.svg"
+    },
+    "8568": {
+      "key": "#85681",
+      "name": "Anthropic first-day market cap above $2,000B?",
+      "icon_kind": "category",
+      "icon_symbol": "economics_outcome",
+      "file": "economics_outcome.svg"
+    },
+    "8572": {
+      "key": "#85721",
+      "name": "Anthropic first-day market cap above $1,750B?",
+      "icon_kind": "category",
+      "icon_symbol": "economics_outcome",
+      "file": "economics_outcome.svg"
+    },
+    "8573": {
+      "key": "#85731",
+      "name": "Anthropic first-day market cap above $1,500B?",
+      "icon_kind": "category",
+      "icon_symbol": "economics_outcome",
+      "file": "economics_outcome.svg"
+    },
+    "8656": {
+      "key": "#86561",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "culture_outcome",
+      "file": "culture_outcome.svg"
+    },
+    "8657": {
+      "key": "#86571",
+      "name": "Harry Kane",
+      "icon_kind": "category",
+      "icon_symbol": "culture_outcome",
+      "file": "culture_outcome.svg"
+    },
+    "8658": {
+      "key": "#86581",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "culture_outcome",
+      "file": "culture_outcome.svg"
+    },
+    "8659": {
+      "key": "#86591",
+      "name": "Lamine Yamal",
+      "icon_kind": "category",
+      "icon_symbol": "culture_outcome",
+      "file": "culture_outcome.svg"
+    },
+    "8660": {
+      "key": "#86601",
+      "name": "Kylian Mbappe",
+      "icon_kind": "category",
+      "icon_symbol": "culture_outcome",
+      "file": "culture_outcome.svg"
+    },
+    "8661": {
+      "key": "#86611",
+      "name": "Jude Bellingham",
+      "icon_kind": "category",
+      "icon_symbol": "culture_outcome",
+      "file": "culture_outcome.svg"
+    },
+    "8662": {
+      "key": "#86621",
+      "name": "Ousmane Dembele",
+      "icon_kind": "category",
+      "icon_symbol": "culture_outcome",
+      "file": "culture_outcome.svg"
+    },
+    "8663": {
+      "key": "#86631",
+      "name": "Erling Haaland",
+      "icon_kind": "category",
+      "icon_symbol": "culture_outcome",
+      "file": "culture_outcome.svg"
+    },
+    "8664": {
+      "key": "#86641",
+      "name": "Lionel Messi",
+      "icon_kind": "category",
+      "icon_symbol": "culture_outcome",
+      "file": "culture_outcome.svg"
+    },
+    "11491": {
+      "key": "#114911",
+      "name": "No winner",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "11492": {
+      "key": "#114921",
+      "name": "Oklahoma City Thunder",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "11493": {
+      "key": "#114931",
+      "name": "San Antonio Spurs",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "11494": {
+      "key": "#114941",
+      "name": "New York Knicks",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "11495": {
+      "key": "#114951",
+      "name": "Philadelphia 76ers",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "11496": {
+      "key": "#114961",
+      "name": "Minnesota Timberwolves",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "11497": {
+      "key": "#114971",
+      "name": "Boston Celtics",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "11498": {
+      "key": "#114981",
+      "name": "Miami Heat",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "11499": {
+      "key": "#114991",
+      "name": "Cleveland Cavaliers",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "14419": {
+      "key": "#144191",
+      "name": "LoL: Worlds Swiss Stage Round 1: Gen.G Esports v Invictus Gaming",
+      "icon_kind": "category",
+      "icon_symbol": "esports_outcome",
+      "file": "esports_outcome.svg"
+    },
+    "14420": {
+      "key": "#144201",
+      "name": "LoL: Worlds Swiss Stage Round 1: Team Liquid v CTBC Flying Oyster",
+      "icon_kind": "category",
+      "icon_symbol": "esports_outcome",
+      "file": "esports_outcome.svg"
+    },
+    "14428": {
+      "key": "#144281",
+      "name": "LoL: Worlds Swiss Stage Round 1: Anyone's Legend v Karmine Corp",
+      "icon_kind": "category",
+      "icon_symbol": "esports_outcome",
+      "file": "esports_outcome.svg"
+    },
+    "14429": {
+      "key": "#144291",
+      "name": "LoL: Worlds Swiss Stage Round 1: G2 Esports v Dplus KIA",
+      "icon_kind": "category",
+      "icon_symbol": "esports_outcome",
+      "file": "esports_outcome.svg"
+    },
+    "14433": {
+      "key": "#144331",
+      "name": "LoL: Worlds Swiss Stage Round 1: Hanwha Life Esports v Top Esports",
+      "icon_kind": "category",
+      "icon_symbol": "esports_outcome",
+      "file": "esports_outcome.svg"
+    },
+    "14437": {
+      "key": "#144371",
+      "name": "LoL: Worlds Swiss Stage Round 1: LOS v T1",
+      "icon_kind": "category",
+      "icon_symbol": "esports_outcome",
+      "file": "esports_outcome.svg"
+    },
+    "14438": {
+      "key": "#144381",
+      "name": "LoL: Worlds Swiss Stage Round 1: Team Secret Whales v Lyon Gaming",
+      "icon_kind": "category",
+      "icon_symbol": "esports_outcome",
+      "file": "esports_outcome.svg"
+    },
+    "14439": {
+      "key": "#144391",
+      "name": "LoL: Worlds Swiss Stage Round 1: Bilibili Gaming v Movistar KOI",
+      "icon_kind": "category",
+      "icon_symbol": "esports_outcome",
+      "file": "esports_outcome.svg"
+    },
+    "14937": {
+      "key": "#149371",
+      "name": "NBA Regular Season: Charlotte Hornets v Atlanta Hawks",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "14938": {
+      "key": "#149381",
+      "name": "NBA Regular Season: Boston Celtics v New York Knicks",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "14943": {
+      "key": "#149431",
+      "name": "NBA Regular Season: Milwaukee Bucks v Chicago Bulls",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "14947": {
+      "key": "#149471",
+      "name": "NBA Regular Season: Washington Wizards v Toronto Raptors",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "14964": {
+      "key": "#149641",
+      "name": "NBA Regular Season: Indiana Pacers v Dallas Mavericks",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "14965": {
+      "key": "#149651",
+      "name": "NBA Regular Season: Orlando Magic v Minnesota Timberwolves",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "15276": {
+      "key": "#152761",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15277": {
+      "key": "#152771",
+      "name": "Ipswich Town",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15278": {
+      "key": "#152781",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15279": {
+      "key": "#152791",
+      "name": "Nottingham Forest",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15280": {
+      "key": "#152801",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15281": {
+      "key": "#152811",
+      "name": "Aston Villa",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15282": {
+      "key": "#152821",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15283": {
+      "key": "#152831",
+      "name": "Manchester City",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15287": {
+      "key": "#152871",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15288": {
+      "key": "#152881",
+      "name": "Arsenal",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15289": {
+      "key": "#152891",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15290": {
+      "key": "#152901",
+      "name": "Everton",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15291": {
+      "key": "#152911",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15292": {
+      "key": "#152921",
+      "name": "Coventry City",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15293": {
+      "key": "#152931",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15294": {
+      "key": "#152941",
+      "name": "Fulham",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15295": {
+      "key": "#152951",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15296": {
+      "key": "#152961",
+      "name": "Chelsea",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15297": {
+      "key": "#152971",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15298": {
+      "key": "#152981",
+      "name": "Tottenham Hotspur",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15300": {
+      "key": "#153001",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15301": {
+      "key": "#153011",
+      "name": "Napoli",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15302": {
+      "key": "#153021",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15303": {
+      "key": "#153031",
+      "name": "AS Roma",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15309": {
+      "key": "#153091",
+      "name": "NBA Regular Season: Miami Heat v Detroit Pistons",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "15310": {
+      "key": "#153101",
+      "name": "NBA Regular Season: Utah Jazz v New Orleans Pelicans",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "15318": {
+      "key": "#153181",
+      "name": "NBA Regular Season: San Antonio Spurs v Houston Rockets",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "15319": {
+      "key": "#153191",
+      "name": "NBA Regular Season: Sacramento Kings v Portland Trail Blazers",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "15323": {
+      "key": "#153231",
+      "name": "NBA Regular Season: Los Angeles Lakers v Los Angeles Clippers",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "15324": {
+      "key": "#153241",
+      "name": "NBA Regular Season: Golden State Warriors v Memphis Grizzlies",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "15325": {
+      "key": "#153251",
+      "name": "NBA Regular Season: Charlotte Hornets v Miami Heat",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "15329": {
+      "key": "#153291",
+      "name": "NBA Regular Season: Philadelphia 76ers v Milwaukee Bucks",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "15330": {
+      "key": "#153301",
+      "name": "NBA Regular Season: Cleveland Cavaliers v Brooklyn Nets",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "15338": {
+      "key": "#153381",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15339": {
+      "key": "#153391",
+      "name": "Valencia CF",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15340": {
+      "key": "#153401",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15341": {
+      "key": "#153411",
+      "name": "Villarreal CF",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15342": {
+      "key": "#153421",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15343": {
+      "key": "#153431",
+      "name": "FC Barcelona",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15344": {
+      "key": "#153441",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15345": {
+      "key": "#153451",
+      "name": "Real Madrid",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15615": {
+      "key": "#156151",
+      "name": "NFL Regular Season: New Orleans Saints v Pittsburgh Steelers",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "15616": {
+      "key": "#156161",
+      "name": "NFL Regular Season: Minnesota Vikings v Indianapolis Colts",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "15617": {
+      "key": "#156171",
+      "name": "NFL Regular Season: Houston Texans v New York Giants",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "15618": {
+      "key": "#156181",
+      "name": "NFL Regular Season: Tennessee Titans v Cleveland Browns",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "15622": {
+      "key": "#156221",
+      "name": "NFL Regular Season: Baltimore Ravens v Cincinnati Bengals",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "15623": {
+      "key": "#156231",
+      "name": "NFL Regular Season: Carolina Panthers v Tampa Bay Buccaneers",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "15624": {
+      "key": "#156241",
+      "name": "NFL Regular Season: Atlanta Falcons v San Francisco 49ers",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "15625": {
+      "key": "#156251",
+      "name": "NFL Regular Season: New York Jets v Miami Dolphins",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "15630": {
+      "key": "#156301",
+      "name": "NFL Regular Season: Arizona Cardinals v Denver Broncos",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "15631": {
+      "key": "#156311",
+      "name": "NFL Regular Season: Las Vegas Raiders v Los Angeles Rams",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "15632": {
+      "key": "#156321",
+      "name": "NFL Regular Season: Detroit Lions v Green Bay Packers",
+      "icon_kind": "category",
+      "icon_symbol": "football_outcome",
+      "file": "football_outcome.svg"
+    },
+    "15633": {
+      "key": "#156331",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15634": {
+      "key": "#156341",
+      "name": "Hull City",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15635": {
+      "key": "#156351",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15636": {
+      "key": "#156361",
+      "name": "Brentford",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15637": {
+      "key": "#156371",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15638": {
+      "key": "#156381",
+      "name": "Manchester United",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15639": {
+      "key": "#156391",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15640": {
+      "key": "#156401",
+      "name": "Bournemouth AFC",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15644": {
+      "key": "#156441",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15645": {
+      "key": "#156451",
+      "name": "Liverpool",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15646": {
+      "key": "#156461",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15647": {
+      "key": "#156471",
+      "name": "Brighton Hove Albion",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15648": {
+      "key": "#156481",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15649": {
+      "key": "#156491",
+      "name": "Crystal Palace",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15650": {
+      "key": "#156501",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15651": {
+      "key": "#156511",
+      "name": "Newcastle United",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15652": {
+      "key": "#156521",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15653": {
+      "key": "#156531",
+      "name": "Sunderland",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15654": {
+      "key": "#156541",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15655": {
+      "key": "#156551",
+      "name": "Leeds United",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15656": {
+      "key": "#156561",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15657": {
+      "key": "#156571",
+      "name": "Atletico Madrid",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15658": {
+      "key": "#156581",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15659": {
+      "key": "#156591",
+      "name": "RC Deportivo",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15660": {
+      "key": "#156601",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15661": {
+      "key": "#156611",
+      "name": "Paris Saint Germain",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15662": {
+      "key": "#156621",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15663": {
+      "key": "#156631",
+      "name": "Lyon",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15664": {
+      "key": "#156641",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15665": {
+      "key": "#156651",
+      "name": "SC Freiburg",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15666": {
+      "key": "#156661",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15667": {
+      "key": "#156671",
+      "name": "FC Bayern Munich",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15671": {
+      "key": "#156711",
+      "name": "Other",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15672": {
+      "key": "#156721",
+      "name": "Borussia Dortmund",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15673": {
+      "key": "#156731",
+      "name": "Draw",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15674": {
+      "key": "#156741",
+      "name": "Eintracht Frankfurt",
+      "icon_kind": "category",
+      "icon_symbol": "soccer_outcome",
+      "file": "soccer_outcome.svg"
+    },
+    "15885": {
+      "key": "#158851",
+      "name": "xyz:SPCX above 144.23 at Oct 23, 2026 20:00 UTC?",
+      "icon_kind": "underlying",
+      "icon_symbol": "xyz:SPCX",
+      "file": "xyz_SPCX.svg"
+    },
+    "15886": {
+      "key": "#158861",
+      "name": "xyz:SP500 above 7,660.4 at Oct 23, 2026 20:00 UTC?",
+      "icon_kind": "underlying",
+      "icon_symbol": "xyz:SP500",
+      "file": "xyz_SP500.svg"
+    },
+    "15887": {
+      "key": "#158871",
+      "name": "xyz:MU above 857.13 at Oct 23, 2026 20:00 UTC?",
+      "icon_kind": "underlying",
+      "icon_symbol": "xyz:MU",
+      "file": "xyz_MU.svg"
+    },
+    "15888": {
+      "key": "#158881",
+      "name": "xyz:XYZ100 above 28,963 at Oct 23, 2026 20:00 UTC?",
+      "icon_kind": "underlying",
+      "icon_symbol": "xyz:XYZ100",
+      "file": "xyz_XYZ100.svg"
+    },
+    "15922": {
+      "key": "#159221",
+      "name": "xyz:CL above 99.03 at Oct 23, 2026 21:00 UTC?",
+      "icon_kind": "underlying",
+      "icon_symbol": "xyz:CL",
+      "file": "xyz_CL.svg"
+    },
+    "15923": {
+      "key": "#159231",
+      "name": "xyz:GOLD above 4,025.9 at Oct 23, 2026 21:00 UTC?",
+      "icon_kind": "underlying",
+      "icon_symbol": "xyz:GOLD",
+      "file": "xyz_GOLD.svg"
+    },
+    "15924": {
+      "key": "#159241",
+      "name": "xyz:SILVER above 54.607 at Oct 23, 2026 21:00 UTC?",
+      "icon_kind": "underlying",
+      "icon_symbol": "xyz:SILVER",
+      "file": "xyz_SILVER.svg"
+    },
+    "16123": {
+      "key": "#161231",
+      "name": "NBA Regular Season: Chicago Bulls v Washington Wizards",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16124": {
+      "key": "#161241",
+      "name": "NBA Regular Season: Dallas Mavericks v San Antonio Spurs",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16129": {
+      "key": "#161291",
+      "name": "NBA Regular Season: Atlanta Hawks v Houston Rockets",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16130": {
+      "key": "#161301",
+      "name": "NBA Regular Season: Denver Nuggets v New Orleans Pelicans",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16131": {
+      "key": "#161311",
+      "name": "NBA Regular Season: Phoenix Suns v Golden State Warriors",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16132": {
+      "key": "#161321",
+      "name": "NBA Regular Season: Utah Jazz v Los Angeles Lakers",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16133": {
+      "key": "#161331",
+      "name": "NBA Regular Season: Brooklyn Nets v Indiana Pacers",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16134": {
+      "key": "#161341",
+      "name": "NBA Regular Season: Minnesota Timberwolves v Toronto Raptors",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16135": {
+      "key": "#161351",
+      "name": "NBA Regular Season: New York Knicks v Orlando Magic",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16139": {
+      "key": "#161391",
+      "name": "NBA Regular Season: Oklahoma City Thunder v Los Angeles Clippers",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16140": {
+      "key": "#161401",
+      "name": "NBA Regular Season: Philadelphia 76ers v Detroit Pistons",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16141": {
+      "key": "#161411",
+      "name": "NBA Regular Season: Sacramento Kings v Memphis Grizzlies",
+      "icon_kind": "category",
+      "icon_symbol": "basketball_outcome",
+      "file": "basketball_outcome.svg"
+    },
+    "16224": {
+      "key": "#162241",
+      "name": "BTC above 81,618 at Oct 23, 2026 14:30 UTC?",
+      "icon_kind": "underlying",
+      "icon_symbol": "BTC",
+      "file": "BTC.svg"
+    },
+    "16225": {
+      "key": "#162251",
+      "name": "HYPE above 77.804 at Oct 23, 2026 14:30 UTC?",
+      "icon_kind": "underlying",
+      "icon_symbol": "HYPE",
+      "file": "HYPE.svg"
+    },
+    "16226": {
+      "key": "#162261",
+      "name": "ETH above 2,400.2 at Oct 23, 2026 14:30 UTC?",
+      "icon_kind": "underlying",
+      "icon_symbol": "ETH",
+      "file": "ETH.svg"
+    }
+  },
+  "missing": {
+    "198_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/198_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "199_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/199_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "200_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/200_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "289_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/289_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "391_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/391_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "430_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/430_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "487_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/487_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "488_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/488_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "489_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/489_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "490_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/490_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "491_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/491_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "492_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/492_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "493_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/493_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "494_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/494_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "496_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/496_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "497_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/497_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "498_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/498_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "499_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/499_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "500_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/500_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "501_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/501_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "502_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/502_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "503_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/503_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "504_question": {
+      "kind": "question",
+      "source": "https://app.hyperliquid.xyz/coins/504_question.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "AS Roma_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/AS%20Roma_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Anthropic first-day market cap above $1,500B?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Anthropic%20first-day%20market%20cap%20above%20%241%2C500B%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Anthropic first-day market cap above $1,750B?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Anthropic%20first-day%20market%20cap%20above%20%241%2C750B%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Anthropic first-day market cap above $2,000B?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Anthropic%20first-day%20market%20cap%20above%20%242%2C000B%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Anthropic first-day market cap above $2,250B?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Anthropic%20first-day%20market%20cap%20above%20%242%2C250B%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Anthropic first-day market cap above $2,500B?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Anthropic%20first-day%20market%20cap%20above%20%242%2C500B%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Arsenal_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Arsenal_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Aston Villa_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Aston%20Villa_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Atletico Madrid_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Atletico%20Madrid_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "BTC above 81,618 at Oct 23, 2026 14:30 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/BTC%20above%2081%2C618%20at%20Oct%2023%2C%202026%2014:30%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "BTC above 82,009 at Oct 23, 2026 14:00 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/BTC%20above%2082%2C009%20at%20Oct%2023%2C%202026%2014:00%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "BTC touches 75,000 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/BTC%20touches%2075%2C000%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "BTC touches 77,500 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/BTC%20touches%2077%2C500%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "BTC touches 87,500 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/BTC%20touches%2087%2C500%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "BTC touches 90,000 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/BTC%20touches%2090%2C000%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "BTC touches 92,500 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/BTC%20touches%2092%2C500%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Baltimore Ravens_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Baltimore%20Ravens_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Barcelona_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Barcelona_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Bayern Munich_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Bayern%20Munich_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Borussia Dortmund_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Borussia%20Dortmund_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Boston Celtics_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Boston%20Celtics_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Bournemouth AFC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Bournemouth%20AFC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Brentford_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Brentford_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Brighton Hove Albion_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Brighton%20Hove%20Albion_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Buffalo Bills_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Buffalo%20Bills_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Chelsea_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Chelsea_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Cleveland Cavaliers_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Cleveland%20Cavaliers_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Coventry City_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Coventry%20City_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Crystal Palace_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Crystal%20Palace_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Dallas Cowboys_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Dallas%20Cowboys_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Decrease_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Decrease_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Draw_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Draw_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "ETH above 2,400.2 at Oct 23, 2026 14:30 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/ETH%20above%202%2C400.2%20at%20Oct%2023%2C%202026%2014:30%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "ETH above 2,413.8 at Oct 23, 2026 14:00 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/ETH%20above%202%2C413.8%20at%20Oct%2023%2C%202026%2014:00%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "Eintracht Frankfurt_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Eintracht%20Frankfurt_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Erling Haaland_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Erling%20Haaland_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Everton_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Everton_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "FC Barcelona_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/FC%20Barcelona_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "FC Bayern Munich_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/FC%20Bayern%20Munich_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Fulham_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Fulham_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "HYPE above 77.804 at Oct 23, 2026 14:30 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/HYPE%20above%2077.804%20at%20Oct%2023%2C%202026%2014:30%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "HYPE above 78.198 at Oct 23, 2026 14:00 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/HYPE%20above%2078.198%20at%20Oct%2023%2C%202026%2014:00%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T13:52:43.649874+00:00"
+    },
+    "HYPE touches 100 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/HYPE%20touches%20100%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "HYPE touches 105 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/HYPE%20touches%20105%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "HYPE touches 75 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/HYPE%20touches%2075%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Harry Kane_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Harry%20Kane_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Hull City_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Hull%20City_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Increase_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Increase_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Ipswich Town_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Ipswich%20Town_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Jude Bellingham_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Jude%20Bellingham_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Kansas City Chiefs_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Kansas%20City%20Chiefs_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Kylian Mbappe_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Kylian%20Mbappe_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Lamine Yamal_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Lamine%20Yamal_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Leeds United_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Leeds%20United_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Lionel Messi_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Lionel%20Messi_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Liverpool_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Liverpool_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "LoL: Worlds Swiss Stage Round 1: Anyone's Legend v Karmine Corp_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/LoL:%20Worlds%20Swiss%20Stage%20Round%201:%20Anyone%27s%20Legend%20v%20Karmine%20Corp_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "LoL: Worlds Swiss Stage Round 1: Bilibili Gaming v Movistar KOI_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/LoL:%20Worlds%20Swiss%20Stage%20Round%201:%20Bilibili%20Gaming%20v%20Movistar%20KOI_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "LoL: Worlds Swiss Stage Round 1: G2 Esports v Dplus KIA_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/LoL:%20Worlds%20Swiss%20Stage%20Round%201:%20G2%20Esports%20v%20Dplus%20KIA_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "LoL: Worlds Swiss Stage Round 1: Gen.G Esports v Invictus Gaming_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/LoL:%20Worlds%20Swiss%20Stage%20Round%201:%20Gen.G%20Esports%20v%20Invictus%20Gaming_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "LoL: Worlds Swiss Stage Round 1: Hanwha Life Esports v Top Esports_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/LoL:%20Worlds%20Swiss%20Stage%20Round%201:%20Hanwha%20Life%20Esports%20v%20Top%20Esports_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "LoL: Worlds Swiss Stage Round 1: LOS v T1_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/LoL:%20Worlds%20Swiss%20Stage%20Round%201:%20LOS%20v%20T1_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "LoL: Worlds Swiss Stage Round 1: Team Liquid v CTBC Flying Oyster_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/LoL:%20Worlds%20Swiss%20Stage%20Round%201:%20Team%20Liquid%20v%20CTBC%20Flying%20Oyster_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "LoL: Worlds Swiss Stage Round 1: Team Secret Whales v Lyon Gaming_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/LoL:%20Worlds%20Swiss%20Stage%20Round%201:%20Team%20Secret%20Whales%20v%20Lyon%20Gaming_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Los Angeles Rams_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Los%20Angeles%20Rams_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Lyon_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Lyon_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Manchester City_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Manchester%20City_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Manchester United_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Manchester%20United_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Miami Heat_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Miami%20Heat_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Minnesota Timberwolves_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Minnesota%20Timberwolves_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Atlanta Hawks v Houston Rockets_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Atlanta%20Hawks%20v%20Houston%20Rockets_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Boston Celtics v New York Knicks_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Boston%20Celtics%20v%20New%20York%20Knicks_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Brooklyn Nets v Indiana Pacers_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Brooklyn%20Nets%20v%20Indiana%20Pacers_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Charlotte Hornets v Atlanta Hawks_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Charlotte%20Hornets%20v%20Atlanta%20Hawks_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Charlotte Hornets v Miami Heat_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Charlotte%20Hornets%20v%20Miami%20Heat_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Chicago Bulls v Washington Wizards_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Chicago%20Bulls%20v%20Washington%20Wizards_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Cleveland Cavaliers v Brooklyn Nets_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Cleveland%20Cavaliers%20v%20Brooklyn%20Nets_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Dallas Mavericks v San Antonio Spurs_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Dallas%20Mavericks%20v%20San%20Antonio%20Spurs_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Denver Nuggets v New Orleans Pelicans_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Denver%20Nuggets%20v%20New%20Orleans%20Pelicans_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Golden State Warriors v Memphis Grizzlies_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Golden%20State%20Warriors%20v%20Memphis%20Grizzlies_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Indiana Pacers v Dallas Mavericks_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Indiana%20Pacers%20v%20Dallas%20Mavericks_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Los Angeles Lakers v Los Angeles Clippers_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Los%20Angeles%20Lakers%20v%20Los%20Angeles%20Clippers_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Miami Heat v Detroit Pistons_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Miami%20Heat%20v%20Detroit%20Pistons_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Milwaukee Bucks v Chicago Bulls_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Milwaukee%20Bucks%20v%20Chicago%20Bulls_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Minnesota Timberwolves v Toronto Raptors_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Minnesota%20Timberwolves%20v%20Toronto%20Raptors_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: New York Knicks v Orlando Magic_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20New%20York%20Knicks%20v%20Orlando%20Magic_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Oklahoma City Thunder v Los Angeles Clippers_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Oklahoma%20City%20Thunder%20v%20Los%20Angeles%20Clippers_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Orlando Magic v Minnesota Timberwolves_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Orlando%20Magic%20v%20Minnesota%20Timberwolves_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Philadelphia 76ers v Detroit Pistons_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Philadelphia%2076ers%20v%20Detroit%20Pistons_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Philadelphia 76ers v Milwaukee Bucks_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Philadelphia%2076ers%20v%20Milwaukee%20Bucks_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Phoenix Suns v Golden State Warriors_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Phoenix%20Suns%20v%20Golden%20State%20Warriors_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Sacramento Kings v Memphis Grizzlies_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Sacramento%20Kings%20v%20Memphis%20Grizzlies_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Sacramento Kings v Portland Trail Blazers_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Sacramento%20Kings%20v%20Portland%20Trail%20Blazers_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: San Antonio Spurs v Houston Rockets_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20San%20Antonio%20Spurs%20v%20Houston%20Rockets_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Utah Jazz v Los Angeles Lakers_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Utah%20Jazz%20v%20Los%20Angeles%20Lakers_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Utah Jazz v New Orleans Pelicans_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Utah%20Jazz%20v%20New%20Orleans%20Pelicans_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NBA Regular Season: Washington Wizards v Toronto Raptors_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NBA%20Regular%20Season:%20Washington%20Wizards%20v%20Toronto%20Raptors_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NFL Regular Season: Arizona Cardinals v Denver Broncos_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NFL%20Regular%20Season:%20Arizona%20Cardinals%20v%20Denver%20Broncos_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NFL Regular Season: Atlanta Falcons v San Francisco 49ers_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NFL%20Regular%20Season:%20Atlanta%20Falcons%20v%20San%20Francisco%2049ers_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NFL Regular Season: Baltimore Ravens v Cincinnati Bengals_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NFL%20Regular%20Season:%20Baltimore%20Ravens%20v%20Cincinnati%20Bengals_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NFL Regular Season: Carolina Panthers v Tampa Bay Buccaneers_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NFL%20Regular%20Season:%20Carolina%20Panthers%20v%20Tampa%20Bay%20Buccaneers_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NFL Regular Season: Detroit Lions v Green Bay Packers_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NFL%20Regular%20Season:%20Detroit%20Lions%20v%20Green%20Bay%20Packers_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NFL Regular Season: Houston Texans v New York Giants_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NFL%20Regular%20Season:%20Houston%20Texans%20v%20New%20York%20Giants_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NFL Regular Season: Las Vegas Raiders v Los Angeles Rams_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NFL%20Regular%20Season:%20Las%20Vegas%20Raiders%20v%20Los%20Angeles%20Rams_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NFL Regular Season: Minnesota Vikings v Indianapolis Colts_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NFL%20Regular%20Season:%20Minnesota%20Vikings%20v%20Indianapolis%20Colts_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NFL Regular Season: New Orleans Saints v Pittsburgh Steelers_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NFL%20Regular%20Season:%20New%20Orleans%20Saints%20v%20Pittsburgh%20Steelers_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NFL Regular Season: New York Jets v Miami Dolphins_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NFL%20Regular%20Season:%20New%20York%20Jets%20v%20Miami%20Dolphins_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "NFL Regular Season: Tennessee Titans v Cleveland Browns_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/NFL%20Regular%20Season:%20Tennessee%20Titans%20v%20Cleveland%20Browns_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Napoli_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Napoli_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "New York Knicks_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/New%20York%20Knicks_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Newcastle United_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Newcastle%20United_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "No change_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/No%20change_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Nottingham Forest_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Nottingham%20Forest_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Oklahoma City Thunder_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Oklahoma%20City%20Thunder_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Other_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Other_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Ousmane Dembele_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Ousmane%20Dembele_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Paris Saint Germain_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Paris%20Saint%20Germain_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Paris Saint-Germain_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Paris%20Saint-Germain_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Philadelphia 76ers_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Philadelphia%2076ers_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "RC Deportivo_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/RC%20Deportivo_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Real Madrid_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Real%20Madrid_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "SC Freiburg_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/SC%20Freiburg_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "San Antonio Spurs_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/San%20Antonio%20Spurs_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Seattle Seahawks_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Seattle%20Seahawks_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Sunderland_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Sunderland_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Tottenham Hotspur_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Tottenham%20Hotspur_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Valencia CF_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Valencia%20CF_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "Villarreal CF_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/Villarreal%20CF_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "xyz:CL above 99.03 at Oct 23, 2026 21:00 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CL%20above%2099.03%20at%20Oct%2023%2C%202026%2021:00%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "xyz:CL touches 105 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CL%20touches%20105%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "xyz:CL touches 75 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CL%20touches%2075%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "xyz:CL touches 80 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CL%20touches%2080%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "xyz:CL touches 85 by Nov 01, 2026 00:00 UTC_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CL%20touches%2085%20by%20Nov%2001%2C%202026%2000:00%20UTC_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "xyz:GOLD above 4,025.9 at Oct 23, 2026 21:00 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:GOLD%20above%204%2C025.9%20at%20Oct%2023%2C%202026%2021:00%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "xyz:MU above 857.13 at Oct 23, 2026 20:00 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:MU%20above%20857.13%20at%20Oct%2023%2C%202026%2020:00%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "xyz:SILVER above 54.607 at Oct 23, 2026 21:00 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SILVER%20above%2054.607%20at%20Oct%2023%2C%202026%2021:00%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "xyz:SP500 above 7,660.4 at Oct 23, 2026 20:00 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SP500%20above%207%2C660.4%20at%20Oct%2023%2C%202026%2020:00%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "xyz:SPCX above 144.23 at Oct 23, 2026 20:00 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SPCX%20above%20144.23%20at%20Oct%2023%2C%202026%2020:00%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    },
+    "xyz:XYZ100 above 28,963 at Oct 23, 2026 20:00 UTC?_outcome": {
+      "kind": "outcome",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:XYZ100%20above%2028%2C963%20at%20Oct%2023%2C%202026%2020:00%20UTC%3F_outcome.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T14:21:01.814033+00:00"
+    }
+  },
+  "unresolved": []
+}

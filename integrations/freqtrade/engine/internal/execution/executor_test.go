@@ -678,6 +678,76 @@ func TestClassifyReconcileDriftSideFlipExceedsExposure(t *testing.T) {
 	}
 }
 
+func TestClassifyReconcileDriftZeusSoftWithinCap(t *testing.T) {
+	// Zeus mode: inventory is capped at one order size, so a same-side
+	// divergence within risk.max_position_notional is fully explainable by a
+	// missed own fill and must be soft, not hard.
+	le := &LiveExecutor{
+		cfg: &config.Config{
+			ZeusMode: true,
+			Strategy: config.StrategyConfig{Assets: []string{"xyz:CL"}},
+			MarketMaking: config.MarketMakingConfig{
+				QuoteNotional: 100,
+			},
+			Risk: config.RiskConfig{
+				MaxPositionNotional: 100,
+			},
+			Resolved: map[string]config.AssetConfig{
+				"xyz:CL": {
+					MarketMaking: config.MarketMakingConfig{QuoteNotional: 100},
+					Risk:         config.RiskConfig{MaxPositionNotional: 100},
+				},
+			},
+		},
+		transport: &testTransport{},
+	}
+
+	// Same-side missed fill: local long 0.2 -> chain long 1.0 at 100 = delta $80.
+	deltaNotional, dust, hard := le.classifyReconcileDrift("xyz:CL", "long", 0.2, "long", 1.0, 100.0, 100.0)
+	if deltaNotional != 80.0 {
+		t.Fatalf("expected delta notional 80, got %f", deltaNotional)
+	}
+	if dust {
+		t.Fatal("expected non-dust mismatch")
+	}
+	if hard {
+		t.Fatal("expected drift within Zeus order-size cap to be treated as SOFT")
+	}
+}
+
+func TestClassifyReconcileDriftZeusHardBeyondCap(t *testing.T) {
+	// Zeus mode: divergence beyond the order-size cap cannot come from the
+	// bot's own fills (inventory capped at one order) — must stay hard.
+	le := &LiveExecutor{
+		cfg: &config.Config{
+			ZeusMode: true,
+			Strategy: config.StrategyConfig{Assets: []string{"xyz:CL"}},
+			MarketMaking: config.MarketMakingConfig{
+				QuoteNotional: 100,
+			},
+			Risk: config.RiskConfig{
+				MaxPositionNotional: 100,
+			},
+			Resolved: map[string]config.AssetConfig{
+				"xyz:CL": {
+					MarketMaking: config.MarketMakingConfig{QuoteNotional: 100},
+					Risk:         config.RiskConfig{MaxPositionNotional: 100},
+				},
+			},
+		},
+		transport: &testTransport{},
+	}
+
+	// Chain long 1.5 vs local flat at 100 = delta $150 > $100 cap.
+	_, dust, hard := le.classifyReconcileDrift("xyz:CL", "", 0, "long", 1.5, 100.0, 100.0)
+	if dust {
+		t.Fatal("expected non-dust mismatch")
+	}
+	if !hard {
+		t.Fatal("expected drift beyond Zeus order-size cap to be treated as HARD")
+	}
+}
+
 func TestNormalizedTIF(t *testing.T) {
 	tests := []struct {
 		value, fallback, expected string
@@ -1943,9 +2013,12 @@ func TestRefreshClearsTrackingOnCancelFailure(t *testing.T) {
 		{Coin: "xyz:CL", Side: "sell", Price: 71.0, Size: 1.0},
 	})
 
-	// Should return error since cancel failed.
+	// Should return a retryable superseded error since cancel failed.
 	if err == nil {
 		t.Fatal("expected error when cancel fails")
+	}
+	if !errors.Is(err, ErrRefreshSuperseded) {
+		t.Fatalf("cancel failure must be retryable, got: %v", err)
 	}
 
 	// Tracking should be cleared so next refresh does full cancel+replace.

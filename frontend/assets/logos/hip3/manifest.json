@@ -1,0 +1,1178 @@
+{
+  "generated_at": "2026-10-23T12:44:55.940238+00:00",
+  "source": "https://app.hyperliquid.xyz/coins/<symbol>.svg",
+  "counts": {
+    "live": 164,
+    "downloaded": 115,
+    "missing": 49
+  },
+  "logos": {
+    "io:ANTH": {
+      "path": "io/ANTH.svg",
+      "sha256": "e1d709d8b685376fe6640c108feb19a1a99882b43e2072e0c23392d760742e83",
+      "bytes": 1124,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/io:ANTH.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "io:GPRO": {
+      "path": "io/GPRO.svg",
+      "sha256": "3ef46a03db29afa23426d7c467d00e41858ecc69c94a0ea6aa2f7bfd8334f3d6",
+      "bytes": 30187,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/io:GPRO.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "io:NBIS": {
+      "path": "io/NBIS.svg",
+      "sha256": "e75ad28c71ddc70928ce831abd2f6e58d32f58ee99934a4a9ab1cd3e73f6fa09",
+      "bytes": 8705,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/io:NBIS.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "io:OAI": {
+      "path": "io/OAI.svg",
+      "sha256": "652bd6ead2c08712162f0e8a99da97bfa56b9ed2551f23ab7b54eb60c50ccc25",
+      "bytes": 22948,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/io:OAI.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "io:SNDK": {
+      "path": "io/SNDK.svg",
+      "sha256": "c59f063ce379c3cbe20191fa06cb8cef87a5939b975af0978cdb7544d33b895e",
+      "bytes": 788,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/io:SNDK.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:AAOI": {
+      "path": "para/AAOI.svg",
+      "sha256": "6c2e656d770cbb55affb670501af1463c2bc5b5606ef99b2e975f8806074b9c8",
+      "bytes": 11376,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:AAOI.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:AVGO": {
+      "path": "para/AVGO.svg",
+      "sha256": "f1faab12c82dbf56149aad52e4e56c70d48794ad885ff5fd1e2ee3961fa12437",
+      "bytes": 2422,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:AVGO.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:BTCD": {
+      "path": "para/BTCD.svg",
+      "sha256": "c64351d75ae5eb771ef41829bf53a146c03c12d925c061ece7b2710c336802ee",
+      "bytes": 3406,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:BTCD.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:CIEN": {
+      "path": "para/CIEN.svg",
+      "sha256": "e99c239b3bc8bd5b50d45d7889b5071fd69d94c39e1467325ff645431d1d4b2c",
+      "bytes": 3735,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:CIEN.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:COHR": {
+      "path": "para/COHR.svg",
+      "sha256": "c041169f11908f281f1dbb8be03ac4c55eda9a55fee8ff0219404ef7105d6cdc",
+      "bytes": 2247,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:COHR.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:CRDO": {
+      "path": "para/CRDO.svg",
+      "sha256": "7f44c6c6fdc9076925f52d7ba8fd20eca4408188efe3b30a6c5e28d456ab1bf0",
+      "bytes": 26357,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:CRDO.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:GLW": {
+      "path": "para/GLW.svg",
+      "sha256": "dc28df027577b7353b8691c7f40bac380ee73c38303690872391a3352c12855f",
+      "bytes": 815,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:GLW.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:IREN": {
+      "path": "para/IREN.svg",
+      "sha256": "a0dbcc49b4fc1cc3d3318a42ac480b0bef30507a1ef8e2a7c539c22cc9ce99c9",
+      "bytes": 32847,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:IREN.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:LRCX": {
+      "path": "para/LRCX.svg",
+      "sha256": "c2f02fe35d6a21d6f6cb0ec6925e5bec47b87dff3e10041035ce1a2e03118061",
+      "bytes": 719,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:LRCX.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:NET": {
+      "path": "para/NET.svg",
+      "sha256": "a78c89f64f70084fdc5e6f2e9734e001da9d772bd0e4f175546236eb02c4a8a4",
+      "bytes": 15391,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:NET.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:OTHERS": {
+      "path": "para/OTHERS.svg",
+      "sha256": "cee45edd554d929c5820b5a02677737f027e474e6d139ddd8cdfb62e8af2d941",
+      "bytes": 2772,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:OTHERS.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:RDDT": {
+      "path": "para/RDDT.svg",
+      "sha256": "166347b0053227ec7e61725577083c852f960469f20b25dd3c336a3ed46ac070",
+      "bytes": 23407,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:RDDT.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:STX": {
+      "path": "para/STX.svg",
+      "sha256": "df3fa14813c52f08caef7571792cbe9f74afa7680faa1e8bbc390e263954bbd9",
+      "bytes": 44248,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:STX.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:TER": {
+      "path": "para/TER.svg",
+      "sha256": "a09729243927d9d361775b3676681606ba4e73b1973ba91e875d6f88d1bd183b",
+      "bytes": 21994,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:TER.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:TOTAL2": {
+      "path": "para/TOTAL2.svg",
+      "sha256": "6af190acf0e307cc500a44cb9009ccedb09e9e752c3735800be4e0450d8b89c3",
+      "bytes": 1577,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:TOTAL2.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:UNITREE": {
+      "path": "para/UNITREE.svg",
+      "sha256": "f05f72b93e52960ab98a1a62c09d90748e0f3791267c00cd0d69fc1278cd99a3",
+      "bytes": 29072,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:UNITREE.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:VST": {
+      "path": "para/VST.svg",
+      "sha256": "f959bb632b0c358b287fee06c6584fa344faa05a819058ea76096287a07b5d0f",
+      "bytes": 22110,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/para:VST.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:AAOI": {
+      "path": "xyz/AAOI.svg",
+      "sha256": "386412197af097a27ac83d1d9e1c06ce2027c3d7163a988ba5b5505bad15b9bd",
+      "bytes": 1288,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:AAOI.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:AAPL": {
+      "path": "xyz/AAPL.svg",
+      "sha256": "a792691f67ad6b9607c093fd9b8afe724fa26faebc8aa779c663d46cfb8d0290",
+      "bytes": 1253,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:AAPL.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:AMAT": {
+      "path": "xyz/AMAT.svg",
+      "sha256": "fe922085f4f3d1881ad4beecab3172403a187479af6a8478e9e66a72b1548e2f",
+      "bytes": 1169,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:AMAT.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:AMD": {
+      "path": "xyz/AMD.svg",
+      "sha256": "7143fcad3c44bf2ce5652a397fbc11741363afb1b1434360d332861877687136",
+      "bytes": 526,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:AMD.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:AMZN": {
+      "path": "xyz/AMZN.svg",
+      "sha256": "d23e467aa78c5ab52ecb65c27f09e63b2fd4318f8cc2ab864761533af79d73ca",
+      "bytes": 1927,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:AMZN.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:ASML": {
+      "path": "xyz/ASML.svg",
+      "sha256": "d07a8c4b9a5c888c0484a4c32a500ad7d6d23fc9b986947195bdc5b5ff45562c",
+      "bytes": 2180,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:ASML.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:BABA": {
+      "path": "xyz/BABA.svg",
+      "sha256": "c449fdb948edafe858ae6463496ed03bcd365705def1aaed6659a5d1fb225e2c",
+      "bytes": 2960,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:BABA.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:BB": {
+      "path": "xyz/BB.svg",
+      "sha256": "8b8f1861e29ca3334ba8ee532c85b7edd4f8fe9a21dfc02581f0d0c9b3cc6ab8",
+      "bytes": 2238,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:BB.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:BMNR": {
+      "path": "xyz/BMNR.svg",
+      "sha256": "c422498887f0f601af9633cd5cfc5b29e26c3d58f43de28513c61c4a5babaa56",
+      "bytes": 175560,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:BMNR.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:BRENTOIL": {
+      "path": "xyz/BRENTOIL.svg",
+      "sha256": "2a3bef0c265b29040270ceb09633732d1908f2efa168693a559a27842fdca0f3",
+      "bytes": 697,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:BRENTOIL.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:BX": {
+      "path": "xyz/BX.svg",
+      "sha256": "1c900b236645550c69a96188a9652c8880bed28084a83e3cca4ae32cec698fdc",
+      "bytes": 1083,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:BX.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:CBRS": {
+      "path": "xyz/CBRS.svg",
+      "sha256": "8b0d899475de753ebf54cb4292a0bdba67bebee1e07e9806474246fd7ac634c3",
+      "bytes": 24978,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CBRS.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:CL": {
+      "path": "xyz/CL.svg",
+      "sha256": "a5d392705e8167f602c05a6a1fed7da1e265d66e1f68e09df039c4a1eb243a8b",
+      "bytes": 837,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CL.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:COIN": {
+      "path": "xyz/COIN.svg",
+      "sha256": "1cdb3cfa00cf46457ec20dd7e1912c37dbb1e322622e0ce80552e757dd6c2dae",
+      "bytes": 561,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:COIN.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:COST": {
+      "path": "xyz/COST.svg",
+      "sha256": "e836b55e6ba50eead72ff236fb07adfa11e333a69b738b69e03b1026c03b93c1",
+      "bytes": 584,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:COST.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:CRCL": {
+      "path": "xyz/CRCL.svg",
+      "sha256": "de06b8303af7c9c5ff79c7345490b4987af8bcad4824c8c333cf916d247e386b",
+      "bytes": 3076,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CRCL.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:CRWD": {
+      "path": "xyz/CRWD.svg",
+      "sha256": "5c35d5c642ddd5b99f25cf1ca67acf83af9371347aae20a9230c8f60f9aa85dd",
+      "bytes": 6052,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CRWD.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:CRWV": {
+      "path": "xyz/CRWV.svg",
+      "sha256": "6118144c0fc7de3eb00ea86220239eb3915b7d122dde88b475ef763a09b034cd",
+      "bytes": 2084,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CRWV.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:CVX": {
+      "path": "xyz/CVX.svg",
+      "sha256": "30b8bc050d52c7833885ff06c54c9f20955ae48023950c28a047ad9eff52fdd7",
+      "bytes": 691,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CVX.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:CXMT": {
+      "path": "xyz/CXMT.svg",
+      "sha256": "5bf263b90e647cf5eeed756245f0391fc7a90f000a5c620a90148d2bda2c3cb4",
+      "bytes": 8286,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CXMT.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:DELL": {
+      "path": "xyz/DELL.svg",
+      "sha256": "176bf510d4d6caabb2898d0c379dd58fd243b51e37b1c2e79f54ad1aa50ec930",
+      "bytes": 1200,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:DELL.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:DKNG": {
+      "path": "xyz/DKNG.svg",
+      "sha256": "0a144096d320a1de1f083ccd30b35479a60dbcaf5af0d0b0ebecec0044352612",
+      "bytes": 2447,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:DKNG.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:DRAM": {
+      "path": "xyz/DRAM.svg",
+      "sha256": "9ddea90de42c6b1ee42b719ee4591e3a0cc8b46cac3985eac6ad664605eb86ad",
+      "bytes": 1984,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:DRAM.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:EUR": {
+      "path": "xyz/EUR.svg",
+      "sha256": "2b781f3667797b8f7f5754cb2f280d651e83022565e69a21a5c3f946c4e878dd",
+      "bytes": 1864,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:EUR.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:EWJ": {
+      "path": "xyz/EWJ.svg",
+      "sha256": "91ea8008b7a1cf60bc908e13dbc40139904b66ef432f5b8a341f325bb48840a5",
+      "bytes": 1236,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:EWJ.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:EWY": {
+      "path": "xyz/EWY.svg",
+      "sha256": "f2edf3fe0b9f06112be81d50b9b785924166e596e6ea258b74c74fc249ad9f7e",
+      "bytes": 745,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:EWY.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:EWZ": {
+      "path": "xyz/EWZ.svg",
+      "sha256": "e34c6a8321b4c94387c737e8bbe5f0f4d36341306be8a26c270a342414bad943",
+      "bytes": 781,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:EWZ.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:GBP": {
+      "path": "xyz/GBP.svg",
+      "sha256": "322080580fc5a482c2e940a6e4d76ea9eacf178e3bce6ed5e4e858c21803c91e",
+      "bytes": 1024,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:GBP.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:GEV": {
+      "path": "xyz/GEV.svg",
+      "sha256": "e7c6264d53ed99b32ca2f9f0d720c27c3dfabdf0d3e0659793fe93bfd4416e12",
+      "bytes": 5849,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:GEV.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:GME": {
+      "path": "xyz/GME.svg",
+      "sha256": "08478383549c7cbb4b33ca54c0f8e33c3703c3c70d6428291ed0ea89a5babd13",
+      "bytes": 2823,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:GME.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:GOLD": {
+      "path": "xyz/GOLD.svg",
+      "sha256": "37ae359aee01520ff5216c202e5ec9eb31705bac42ce1b1c040620c5ec5391b0",
+      "bytes": 2019,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:GOLD.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:GOOGL": {
+      "path": "xyz/GOOGL.svg",
+      "sha256": "fbd339c4c088ea0aca68c19d8d07c57aeb5a9b7bb830b76f2278ed518868bf38",
+      "bytes": 12738,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:GOOGL.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:HIMS": {
+      "path": "xyz/HIMS.svg",
+      "sha256": "94a0ef9ccca038f22b07b60e1b6cb3eeb1a9ff083419eb4b7e35dd1e116e8a64",
+      "bytes": 4886,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:HIMS.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:HO": {
+      "path": "xyz/HO.svg",
+      "sha256": "6527c8c7af154f96449ef4294a055e7c4423e5aa40fca9c1a43add0c0447d499",
+      "bytes": 2765,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:HO.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:HOOD": {
+      "path": "xyz/HOOD.svg",
+      "sha256": "3a5a0f2522c5e446f12238fe74cef1f6c5c1b8b2f66cf6aa12085170de0c2556",
+      "bytes": 1362,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:HOOD.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:HYUNDAI": {
+      "path": "xyz/HYUNDAI.svg",
+      "sha256": "93b5589a366bc8248068e26bb6757265a147b1bf9f7e9aedc7b30d4810db81c2",
+      "bytes": 2551,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:HYUNDAI.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:IBM": {
+      "path": "xyz/IBM.svg",
+      "sha256": "a147f2beb77b8eb872bda1c359b750bd46ba5af4fc647f344b3e1f13cee6ed14",
+      "bytes": 3082,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:IBM.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:INTC": {
+      "path": "xyz/INTC.svg",
+      "sha256": "c3e1cd6736b013f4a280ad7ad83141f83fdf209d05cfae1289e84a2dc8302436",
+      "bytes": 4577,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:INTC.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:IREN": {
+      "path": "xyz/IREN.svg",
+      "sha256": "a6509b025311b1811cdb51911373456cd507c482fda8aa9c57dd300d336d960f",
+      "bytes": 2859,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:IREN.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:JP225": {
+      "path": "xyz/JP225.svg",
+      "sha256": "9f5be79d64b272a854a821d409fb55aa9a64a4da127ab999a31654bf04014b4f",
+      "bytes": 874,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:JP225.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:JPY": {
+      "path": "xyz/JPY.svg",
+      "sha256": "76cebad43d07823da77b50c1c5fb475d12431d353f5774ac15ee6b8986d1c9fa",
+      "bytes": 1030,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:JPY.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:KIOXIA": {
+      "path": "xyz/KIOXIA.svg",
+      "sha256": "25e7017fd359498320d937cebb69adf06cc52ff69c5e01cb0994f80e0ebf4140",
+      "bytes": 8047,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:KIOXIA.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:KORU": {
+      "path": "xyz/KORU.svg",
+      "sha256": "6ff773615bef4705a99fc13b35bbdc3d13504f8f0945b551ba2ccf6a0eba1fe8",
+      "bytes": 6876,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:KORU.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:KR200": {
+      "path": "xyz/KR200.svg",
+      "sha256": "a63c66dd5dd9461882ed612884e4c6a6ba74130af0aa5113e1b6bfa41e3f073a",
+      "bytes": 80221,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:KR200.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:LITE": {
+      "path": "xyz/LITE.svg",
+      "sha256": "81ee85fc578b72455051f479131d3540dfc9633a645e7f9ad647d1656df0983a",
+      "bytes": 2080,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:LITE.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:LLY": {
+      "path": "xyz/LLY.svg",
+      "sha256": "f56de296fbdfa5814649903a056deedc13e75d15a7b8ad4ad4e1217cf97b7786",
+      "bytes": 4074,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:LLY.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:LYTE": {
+      "path": "xyz/LYTE.svg",
+      "sha256": "de0b859571f1b1caa94d3b5c876f53f9b1d2db71a54280de4b12678247fb4add",
+      "bytes": 731,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:LYTE.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:MAGS": {
+      "path": "xyz/MAGS.svg",
+      "sha256": "ed64c7c5770c5fc70d9f26be42a005694fef39d632debf06a7fdf247e5687be9",
+      "bytes": 2978,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:MAGS.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:META": {
+      "path": "xyz/META.svg",
+      "sha256": "61be0d4411e4ec5bb7a82bb963fa807356794578525bf48836aa90b1e89ba264",
+      "bytes": 372672,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:META.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:MINIMAX": {
+      "path": "xyz/MINIMAX.svg",
+      "sha256": "626aee7e80bf6dc4255c0b2c18b033e1d3af29333ddcee1d38d32ded3e53334d",
+      "bytes": 4576,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:MINIMAX.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:MRVL": {
+      "path": "xyz/MRVL.svg",
+      "sha256": "6cebf7251676762548377a1a24b1fe82b459375a35f354f673d424dafa06b8ec",
+      "bytes": 999,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:MRVL.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:MSFT": {
+      "path": "xyz/MSFT.svg",
+      "sha256": "050832e2957a4c20fa81c8a84fa5d1ad285607d556f1d1bbd60325c8d4b8d809",
+      "bytes": 604,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:MSFT.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:MSTR": {
+      "path": "xyz/MSTR.svg",
+      "sha256": "a628ecf488f70951b58507c3e7fa20f9a5690467aca679dba13767503956398d",
+      "bytes": 996,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:MSTR.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:MU": {
+      "path": "xyz/MU.svg",
+      "sha256": "97261ebbf039a32f36a59884ab386c6bdd7d88580c671944f1d757a0be322a19",
+      "bytes": 1256,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:MU.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:NBIS": {
+      "path": "xyz/NBIS.svg",
+      "sha256": "d08a30e8e8f4aaf55b47ea40227efaf1f90a85a3464c2b82b6b6f6a69a7752be",
+      "bytes": 809,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:NBIS.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:NCLD": {
+      "path": "xyz/NCLD.svg",
+      "sha256": "ac7ddffb295fb688bbfa55c5f4929c1b195ca71c3bd79f1d398c5c083a92598a",
+      "bytes": 1701,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:NCLD.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:NET": {
+      "path": "xyz/NET.svg",
+      "sha256": "37fb6d425fc5ed7d52b3306ca05bd80dfb583a5c3346a17c55ea9d74e150fa34",
+      "bytes": 1482,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:NET.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:NFLX": {
+      "path": "xyz/NFLX.svg",
+      "sha256": "dad79bb36c42914404359e6ca780a5e8ed4f4595628465b6581577d443933753",
+      "bytes": 4774,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:NFLX.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:NOK": {
+      "path": "xyz/NOK.svg",
+      "sha256": "3284c4479e0da0a764bc7e27e69a2f0793957211fa0a0fcecc8f2227dd06e493",
+      "bytes": 2026,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:NOK.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:NOW": {
+      "path": "xyz/NOW.svg",
+      "sha256": "824a2c6b930507f1333c873add5859dd7c39b4dbe974a7d08ff839377816a2bb",
+      "bytes": 1089,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:NOW.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:NVDA": {
+      "path": "xyz/NVDA.svg",
+      "sha256": "2f9e12d724c8ceffec44d1dd23358659e0ede99aac44592a42dda0899df453c3",
+      "bytes": 1647,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:NVDA.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:ORCL": {
+      "path": "xyz/ORCL.svg",
+      "sha256": "ccf58c2f20333ada3c9d796c1e606de9537455567d17a2311cc9c4fe254f1e39",
+      "bytes": 865,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:ORCL.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:OURA": {
+      "path": "xyz/OURA.svg",
+      "sha256": "0a98e6f503c4f08c90f38ef476e7db3073fb55e23e0223c0bb866374d17ed60f",
+      "bytes": 781,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:OURA.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:PALLADIUM": {
+      "path": "xyz/PALLADIUM.svg",
+      "sha256": "11c1a1e77c2d76dcad6fc0494e014b0b2699ca114c15c4b0d746bd7feeea19e7",
+      "bytes": 1841,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:PALLADIUM.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:PLATINUM": {
+      "path": "xyz/PLATINUM.svg",
+      "sha256": "4ca19171bf5aa873132ce6ff637981b9d322b21c9053afa00f59abdf2961a4ee",
+      "bytes": 1623,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:PLATINUM.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:PLTR": {
+      "path": "xyz/PLTR.svg",
+      "sha256": "46f55997cec181255019c6a3963046929e03f196f35f1a47d1e938a23b6053d7",
+      "bytes": 858,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:PLTR.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:QNT": {
+      "path": "xyz/QNT.svg",
+      "sha256": "6dedd5b82b9b9151a830115538050fa334bf0559aacf68d8e3ca011f5f8354f7",
+      "bytes": 936,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:QNT.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:RDDT": {
+      "path": "xyz/RDDT.svg",
+      "sha256": "e4e69f9f24a8aee4d8df643a6155531b8f0b5d89d9fe0607b42e1415db14b7ae",
+      "bytes": 6252,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:RDDT.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:RIVN": {
+      "path": "xyz/RIVN.svg",
+      "sha256": "6d17e0c623a1104ef13169b39bb4ca757e0ff755f84e6a0703afabade344f607",
+      "bytes": 2937,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:RIVN.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:RKLB": {
+      "path": "xyz/RKLB.svg",
+      "sha256": "f2858109305ac51aee97d69396fd06e79eca8513ff436398be03875f328d9825",
+      "bytes": 1007,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:RKLB.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SHAZ": {
+      "path": "xyz/SHAZ.svg",
+      "sha256": "3c289400fb56f7dcbfa51453ed7740093fced2caca88fb78ba201c80bfc06510",
+      "bytes": 463,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SHAZ.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SILVER": {
+      "path": "xyz/SILVER.svg",
+      "sha256": "8ebead9b39f626fa61b84fcf4a7be336890bbd1a768d91d35e4ce7b46aa54014",
+      "bytes": 1573,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SILVER.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SKHX": {
+      "path": "xyz/SKHX.svg",
+      "sha256": "7ef9ad9366bab6c936fd3be4e19142ae0101bcc956a997ae8cb42f4079132405",
+      "bytes": 1988,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SKHX.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SKHY": {
+      "path": "xyz/SKHY.svg",
+      "sha256": "7ef9ad9366bab6c936fd3be4e19142ae0101bcc956a997ae8cb42f4079132405",
+      "bytes": 1988,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SKHY.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SMH": {
+      "path": "xyz/SMH.svg",
+      "sha256": "5bab58110b542341faf31628afb29411b8f6717efdad9860dab5b05b8887d6d0",
+      "bytes": 1172,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SMH.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SMSN": {
+      "path": "xyz/SMSN.svg",
+      "sha256": "87898f58052a5036db4f9d08bc4f4f7d78329665eb980708502a34f8624c0033",
+      "bytes": 922,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SMSN.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SNDK": {
+      "path": "xyz/SNDK.svg",
+      "sha256": "822b7159f86650f6efe6a127c9f421d328bced0c153134558642f804e42da76f",
+      "bytes": 578,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SNDK.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SNXX": {
+      "path": "xyz/SNXX.svg",
+      "sha256": "822b7159f86650f6efe6a127c9f421d328bced0c153134558642f804e42da76f",
+      "bytes": 578,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SNXX.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SOFTBANK": {
+      "path": "xyz/SOFTBANK.svg",
+      "sha256": "a83d1feb4a7d838c014cc772a5f601468fc77b75b0d8e825ca64b1d3d8735fd8",
+      "bytes": 536,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SOFTBANK.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SOXL": {
+      "path": "xyz/SOXL.svg",
+      "sha256": "272f317b1aeb0c308965e644e6ea11babd136c2ef128cec9c038f9a4b64d8fba",
+      "bytes": 2467,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SOXL.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SP500": {
+      "path": "xyz/SP500.svg",
+      "sha256": "e1db17e553c3d9fe02aebbba2faf599f6edf5ab83c3d0c9de89cbdc60e853609",
+      "bytes": 7077,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SP500.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SPCX": {
+      "path": "xyz/SPCX.svg",
+      "sha256": "8931e0f00e513352728e7639d1cd2cf52bf41a8dae370a8601f8df8e5919d21e",
+      "bytes": 1172,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SPCX.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:STRC": {
+      "path": "xyz/STRC.svg",
+      "sha256": "eee13d881651f414e47f5f1d02021bc5b99c44668bd557375cfaf083bbd775ff",
+      "bytes": 4071,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:STRC.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:TLT": {
+      "path": "xyz/TLT.svg",
+      "sha256": "1da91bbe57a7af93e51ec276c393905dce1adb1efd2be1c3f75ad473b1ea95c7",
+      "bytes": 583,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:TLT.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:TSLA": {
+      "path": "xyz/TSLA.svg",
+      "sha256": "7baed8299fa829b2efe7e48891bb52d6eb7dc31fe4ed0a889d80891c8d80aaac",
+      "bytes": 880,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:TSLA.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:TSM": {
+      "path": "xyz/TSM.svg",
+      "sha256": "df664445ca0f053f0fdfcf8b2cb6bd2ee4b72a9b8f2aeddc6f0cc500cddd62be",
+      "bytes": 40840,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:TSM.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:UNITREE": {
+      "path": "xyz/UNITREE.svg",
+      "sha256": "ff41bd39b7e18fb59ec190ad5aa4c1260e8a3a01096483e697a164e2a66d3dd0",
+      "bytes": 183643,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:UNITREE.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:USAR": {
+      "path": "xyz/USAR.svg",
+      "sha256": "222cf534d2d79c8f489fad3791fe3415be02d81b1f886fe92a1045ad5356e016",
+      "bytes": 30734,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:USAR.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:WDC": {
+      "path": "xyz/WDC.svg",
+      "sha256": "522d4cac38073ef63c5150271e66ca93cdec99ffbcee5019a634f40898c4b8e3",
+      "bytes": 2145,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:WDC.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:XLE": {
+      "path": "xyz/XLE.svg",
+      "sha256": "6cd27b3c7e4376d7a5fddb824d4211b2d39d55b6306c3d4044647d0cf33e5438",
+      "bytes": 4964,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:XLE.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:XYZ100": {
+      "path": "xyz/XYZ100.svg",
+      "sha256": "c0baf0a5e34a152f0bc8b7945006f98018000a2179f49e051f939f25ca7b1ccb",
+      "bytes": 1375,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:XYZ100.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:ZHIPU": {
+      "path": "xyz/ZHIPU.svg",
+      "sha256": "388fac2bc64dc78ce9badfd3d0795104abc59cbde729952a35e7f8817e5bcc95",
+      "bytes": 1188,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:ZHIPU.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:ZM": {
+      "path": "xyz/ZM.svg",
+      "sha256": "f600c172d0872c5e7cf5aa58236192db50a8ba46bd1c15679e30948d20b0db81",
+      "bytes": 588,
+      "content_type": "image/svg+xml",
+      "source": "https://app.hyperliquid.xyz/coins/xyz:ZM.svg",
+      "fetched_at": "2026-10-23T12:44:55.940238+00:00"
+    }
+  },
+  "missing": {
+    "io:DRAM": {
+      "source": "https://app.hyperliquid.xyz/coins/io:DRAM.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "io:EWY": {
+      "source": "https://app.hyperliquid.xyz/coins/io:EWY.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "io:IONQ": {
+      "source": "https://app.hyperliquid.xyz/coins/io:IONQ.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "io:PRL": {
+      "source": "https://app.hyperliquid.xyz/coins/io:PRL.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "io:TCNT": {
+      "source": "https://app.hyperliquid.xyz/coins/io:TCNT.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "io:XIAOMI": {
+      "source": "https://app.hyperliquid.xyz/coins/io:XIAOMI.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "mkts:BVIV": {
+      "source": "https://app.hyperliquid.xyz/coins/mkts:BVIV.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "mkts:SMALL2000": {
+      "source": "https://app.hyperliquid.xyz/coins/mkts:SMALL2000.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "mkts:US500": {
+      "source": "https://app.hyperliquid.xyz/coins/mkts:US500.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "mkts:USBOND": {
+      "source": "https://app.hyperliquid.xyz/coins/mkts:USBOND.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "mkts:USTECH": {
+      "source": "https://app.hyperliquid.xyz/coins/mkts:USTECH.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:10Y": {
+      "source": "https://app.hyperliquid.xyz/coins/para:10Y.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:2Y": {
+      "source": "https://app.hyperliquid.xyz/coins/para:2Y.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:30Y": {
+      "source": "https://app.hyperliquid.xyz/coins/para:30Y.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:ANSEM": {
+      "source": "https://app.hyperliquid.xyz/coins/para:ANSEM.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:CIFR": {
+      "source": "https://app.hyperliquid.xyz/coins/para:CIFR.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:CRWD": {
+      "source": "https://app.hyperliquid.xyz/coins/para:CRWD.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:DRV": {
+      "source": "https://app.hyperliquid.xyz/coins/para:DRV.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:GDX": {
+      "source": "https://app.hyperliquid.xyz/coins/para:GDX.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:IGV": {
+      "source": "https://app.hyperliquid.xyz/coins/para:IGV.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:MELI": {
+      "source": "https://app.hyperliquid.xyz/coins/para:MELI.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:SMCI": {
+      "source": "https://app.hyperliquid.xyz/coins/para:SMCI.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:SMH": {
+      "source": "https://app.hyperliquid.xyz/coins/para:SMH.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:SOFI": {
+      "source": "https://app.hyperliquid.xyz/coins/para:SOFI.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:TREAD": {
+      "source": "https://app.hyperliquid.xyz/coins/para:TREAD.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "para:TTWO": {
+      "source": "https://app.hyperliquid.xyz/coins/para:TTWO.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:ARM": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:ARM.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:AVGO": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:AVGO.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:BE": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:BE.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:BIRD": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:BIRD.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:BOT": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:BOT.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:CAMBRICON": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:CAMBRICON.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:COPPER": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:COPPER.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:EBAY": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:EBAY.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:EWT": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:EWT.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:GIGADEV": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:GIGADEV.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:GLW": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:GLW.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:JIO": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:JIO.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:KSTR": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:KSTR.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:LRCX": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:LRCX.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:MRNA": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:MRNA.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:NATGAS": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:NATGAS.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:PURRDAT": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:PURRDAT.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:QCOM": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:QCOM.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:SHEIN": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:SHEIN.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:TWST": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:TWST.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:UMC": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:UMC.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:URNM": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:URNM.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    },
+    "xyz:XBI": {
+      "source": "https://app.hyperliquid.xyz/coins/xyz:XBI.svg",
+      "reason": "no official icon (HTML fallback)",
+      "checked_at": "2026-10-23T12:44:55.940238+00:00"
+    }
+  }
+}

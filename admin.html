@@ -1,0 +1,3702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mega MM : Admin</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0a0f1e;
+      color: rgba(255,255,255,0.85);
+      min-height: 100vh;
+      font-size: 14px;
+    }
+    a { color: inherit; text-decoration: none; }
+
+    /* ── Login ── */
+    #login_page {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 20px;
+    }
+    .login-box {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 36px 32px;
+      width: 340px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .login-title {
+      font-size: 18px;
+      font-weight: 700;
+      text-align: center;
+      color: #fff;
+    }
+    .login-subtitle {
+      font-size: 12px;
+      color: rgba(255,255,255,0.4);
+      text-align: center;
+      margin-top: -8px;
+    }
+    .login-input {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: #fff;
+      font-size: 14px;
+      width: 100%;
+      outline: none;
+      font-family: monospace;
+    }
+    .login-input:focus { border-color: #ff6b2c; }
+    .login-btn {
+      background: linear-gradient(135deg, #ff6b2c, #1dd1a1);
+      color: #0a0f1e;
+      border: none;
+      border-radius: 8px;
+      padding: 11px 0;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      width: 100%;
+    }
+    .login-btn:hover { opacity: 0.85; }
+    .login-err {
+      color: #ff6b6b;
+      font-size: 12px;
+      text-align: center;
+      min-height: 16px;
+    }
+
+    /* ── App layout ── */
+    #app_page { display: none; flex-direction: column; min-height: 100vh; }
+    #app_page.visible { display: flex; }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 28px;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      background: rgba(255,255,255,0.02);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .topbar-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 0.02em;
+    }
+    .topbar-title span { color: #ff6b2c; }
+    .topbar-nav { display: flex; gap: 4px; }
+    .nav-btn {
+      background: none;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 7px;
+      padding: 6px 14px;
+      color: rgba(255,255,255,0.55);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .nav-btn.active, .nav-btn:hover {
+      background: rgba(255,140,60,0.1);
+      border-color: rgba(255,140,60,0.3);
+      color: #ff6b2c;
+    }
+    .logout-btn {
+      background: none;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 7px;
+      padding: 6px 14px;
+      color: rgba(255,255,255,0.4);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .logout-btn:hover { color: #ff6b6b; border-color: rgba(255,100,100,0.3); }
+
+    .content { padding: 28px; max-width: 960px; margin: 0 auto; width: 100%; }
+
+    /* ── Section ── */
+    .section { display: none; }
+    .section.visible { display: block; }
+
+    /* ── Sub-navigation (System tab) ── */
+    .subnav {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 22px;
+      flex-wrap: wrap;
+    }
+    .subnav-btn {
+      background: none;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 7px;
+      padding: 6px 14px;
+      color: rgba(255,255,255,0.55);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .subnav-btn.active, .subnav-btn:hover {
+      background: rgba(255,140,60,0.1);
+      border-color: rgba(255,140,60,0.3);
+      color: #ff6b2c;
+    }
+    .subsection { display: none; }
+    .subsection.visible { display: block; }
+
+    /* ── Topbar right group + hamburger (mobile) ── */
+    .topbar-right { display: flex; align-items: center; gap: 8px; }
+    .nav-toggle {
+      display: none;
+      background: none;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 7px;
+      padding: 4px 12px;
+      color: rgba(255,255,255,0.7);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .nav-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 9;
+    }
+
+    /* ── Stats cards ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .stat-card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .stat-label {
+      font-size: 12px;
+      color: rgba(255,255,255,0.4);
+      margin-bottom: 6px;
+    }
+    .stat-value {
+      font-size: 22px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .stat-value.accent { color: #ff6b2c; }
+
+    .graph-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 18px; margin-top: 16px; }
+    .graph-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+    .graph-row .graph-card { margin-top: 0; }
+    .graph-title { font-size: 12px; color: rgba(255,255,255,0.55); margin-bottom: 12px; letter-spacing: 0.05em; text-transform: uppercase; }
+    .graph-legend { display: flex; gap: 16px; margin-top: 10px; font-size: 12px; color: rgba(255,255,255,0.7); flex-wrap: wrap; }
+    .graph-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+    .range-toggle { display: flex; gap: 6px; }
+    .range-btn { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.6); padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; }
+    .range-btn.active, .range-btn:hover { border-color: rgb(255,140,60); color: rgb(255,140,60); }
+    #graph_tooltip { position: fixed; pointer-events: none; background: rgba(20,16,14,0.96); border: 1px solid rgba(255,255,255,0.14); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: #fff; z-index: 999; display: none; white-space: nowrap; line-height: 1.5; }
+
+    /* ── Table ── */
+    .table-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .table-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+    }
+    .hv-chevron {
+      display: inline-block;
+      font-size: 13px;
+      color: rgb(255,140,60);
+      transition: transform 0.18s ease;
+    }
+    .hv-collapse-title[aria-expanded="true"] .hv-chevron { transform: rotate(90deg); }
+    .filter-row { display: flex; gap: 8px; }
+    .filter-btn {
+      background: none;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      padding: 5px 12px;
+      color: rgba(255,255,255,0.45);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .filter-btn.active, .filter-btn:hover {
+      background: rgba(53,240,194,0.08);
+      border-color: rgba(53,240,194,0.3);
+      color: #ff6b2c;
+    }
+    .table-wrap {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .table-cols {
+      display: grid;
+      grid-template-columns: 1fr 90px 140px 100px 160px;
+      align-items: center;
+    }
+    .wallets-cols {
+      grid-template-columns: 36px 1fr 160px 120px 90px 70px;
+    }
+    .comp-admin-cols {
+      grid-template-columns: 36px 1fr 140px 120px 80px 70px;
+    }
+    .ms-admin-cols {
+      grid-template-columns: 36px 1fr 140px 100px 100px 120px;
+    }
+    .ms-tier-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+    .ms-tier-badge--explorer { background: rgba(255,140,60,0.15); color: #ff8c3c; }
+    .ms-tier-badge--dolphin  { background: rgba(96,165,250,0.15); color: #60a5fa; }
+    .ms-tier-badge--shark    { background: rgba(167,139,250,0.15); color: #a78bfa; }
+    .ms-tier-badge--whale    { background: rgba(255,140,60,0.15); color: #ff8c3c; }
+    .ms-tier-badge--legend   { background: rgba(255,215,0,0.15); color: #ffd700; }
+    .ms-ref-grid {
+      display: grid;
+      grid-template-columns: 110px 130px 1fr;
+      gap: 10px 16px;
+      align-items: center;
+    }
+    .ms-ref-vol { font-size: 13px; font-weight: 600; color: #fff; font-variant-numeric: tabular-nums; }
+    .ms-ref-reward { font-size: 12px; color: rgba(255,255,255,0.55); }
+    .ms-pct-bar {
+      height: 6px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 3px;
+      overflow: hidden;
+      min-width: 60px;
+    }
+    .ms-pct-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: linear-gradient(90deg, #ff8c3c, #ffd700);
+    }
+    .wallet-detail-panel {
+      padding: 16px 20px;
+      background: rgba(255,255,255,0.02);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .wallet-detail-panel .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .wallet-detail-panel .detail-card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .wallet-detail-panel .detail-label {
+      font-size: 11px;
+      color: rgba(255,255,255,0.35);
+      margin-bottom: 4px;
+    }
+    .wallet-detail-panel .detail-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .wallet-detail-panel .detail-value.accent { color: #ff6b2c; }
+    .wallet-detail-panel .detail-subtitle {
+      font-size: 13px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.7);
+      margin: 14px 0 8px;
+    }
+    .wallet-detail-panel .week-row {
+      display: grid;
+      grid-template-columns: 90px 1fr 1fr 1fr;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      font-size: 12px;
+      color: rgba(255,255,255,0.6);
+    }
+    .wallet-detail-panel .week-row.week-head {
+      color: rgba(255,255,255,0.3);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+    }
+    .wallet-detail-panel .ref-row {
+      display: grid;
+      grid-template-columns: 1fr 120px 120px;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      font-size: 12px;
+      color: rgba(255,255,255,0.6);
+    }
+    .wallet-detail-panel .ref-row.ref-head {
+      color: rgba(255,255,255,0.3);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+    }
+    .vip-cols {
+      grid-template-columns: 1fr 110px 120px 110px 150px 140px 90px;
+    }
+    .vip-link-cell {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .vip-link-text {
+      font-size: 12px;
+      color: #ff6b2c;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .vip-copy-btn {
+      background: rgba(53,240,194,0.1);
+      border: 1px solid rgba(53,240,194,0.25);
+      color: #ff6b2c;
+      border-radius: 6px;
+      padding: 2px 7px;
+      cursor: pointer;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+    .vip-copy-btn:hover {
+      background: rgba(53,240,194,0.2);
+    }
+    .vip-form {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 16px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+    }
+    .vip-form-fields {
+      display: flex;
+      gap: 12px;
+    }
+    .vip-field-label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.45);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      flex: 1;
+    }
+    .vip-num-input {
+      width: 100%;
+      margin: 0 !important;
+    }
+    .table-head {
+      padding: 10px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      background: rgba(255,255,255,0.03);
+    }
+    .table-head > div {
+      font-size: 11px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.35);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .table-row {
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      transition: background 0.1s;
+    }
+    .table-row:last-child { border-bottom: none; }
+    .table-row:hover { background: rgba(255,255,255,0.025); }
+    .table-row > div { font-size: 13px; color: rgba(255,255,255,0.75); }
+    .wallet-cell {
+      font-family: monospace;
+      font-size: 12px;
+      color: rgba(255,255,255,0.6);
+    }
+    .amount-cell { font-weight: 600; color: #ff6b2c; }
+    .status-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .status-pill.pending {
+      background: rgba(255,185,0,0.12);
+      color: #ffc107;
+      border: 1px solid rgba(255,185,0,0.25);
+    }
+    .status-pill.paid {
+      background: rgba(53,240,194,0.1);
+      color: #ff6b2c;
+      border: 1px solid rgba(53,240,194,0.2);
+    }
+    .action-btn {
+      background: rgba(53,240,194,0.1);
+      border: 1px solid rgba(53,240,194,0.25);
+      border-radius: 6px;
+      padding: 5px 12px;
+      color: #ff6b2c;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .action-btn:hover { background: rgba(53,240,194,0.2); }
+    .action-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .empty-state {
+      padding: 40px;
+      text-align: center;
+      color: rgba(255,255,255,0.3);
+      font-size: 13px;
+    }
+    .loading-state {
+      padding: 28px;
+      text-align: center;
+      color: rgba(255,255,255,0.3);
+      font-size: 13px;
+    }
+    .refresh-btn {
+      background: none;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      padding: 5px 12px;
+      color: rgba(255,255,255,0.45);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .refresh-btn:hover { color: #fff; border-color: rgba(255,255,255,0.25); }
+
+    /* ── Modal ── */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100;
+      opacity: 0; pointer-events: none; transition: opacity 0.2s;
+    }
+    .modal-overlay.visible { opacity: 1; pointer-events: all; }
+    .modal-box {
+      background: #131929;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px;
+      padding: 28px;
+      width: 380px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .modal-title { font-size: 16px; font-weight: 700; color: #fff; }
+    .modal-desc { font-size: 13px; color: rgba(255,255,255,0.5); line-height: 1.5; }
+    .modal-input {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px;
+      padding: 9px 12px;
+      color: #fff;
+      font-size: 13px;
+      width: 100%;
+      outline: none;
+    }
+    .modal-input:focus { border-color: #ff6b2c; }
+    .modal-actions { display: flex; gap: 10px; }
+    .modal-confirm {
+      flex: 1;
+      background: linear-gradient(135deg, #ff6b2c, #1dd1a1);
+      color: #0a0f1e;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 0;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .modal-confirm:hover { opacity: 0.85; }
+    .modal-confirm:disabled { opacity: 0.35; cursor: not-allowed; }
+    .modal-cancel {
+      flex: 1;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      padding: 10px 0;
+      color: rgba(255,255,255,0.6);
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .modal-cancel:hover { background: rgba(255,255,255,0.1); }
+    .modal-err { color: #ff6b6b; font-size: 12px; min-height: 16px; }
+
+    /* ── Feedback cards ── */
+    .feedback-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .feedback-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 12px;
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: border-color 0.15s;
+    }
+    .feedback-card:hover {
+      border-color: rgba(255,255,255,0.12);
+    }
+    .feedback-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .feedback-card-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.4);
+    }
+    .feedback-card-wallet {
+      font-family: monospace;
+      font-size: 11px;
+      color: rgba(53,240,194,0.7);
+      background: rgba(53,240,194,0.06);
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    .feedback-card-message {
+      font-size: 13px;
+      color: rgba(255,255,255,0.75);
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .feedback-delete-btn {
+      background: none;
+      border: 1px solid rgba(255,80,80,0.15);
+      border-radius: 6px;
+      padding: 3px 10px;
+      color: rgba(255,80,80,0.5);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+    .feedback-delete-btn:hover {
+      background: rgba(255,80,80,0.08);
+      border-color: rgba(255,80,80,0.35);
+      color: #ff6b6b;
+    }
+    .feedback-reply-btn {
+      background: none;
+      border: 1px solid rgba(255,140,60,0.2);
+      border-radius: 6px;
+      padding: 3px 10px;
+      color: rgba(255,140,60,0.6);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+    .feedback-reply-btn:hover {
+      background: rgba(255,140,60,0.08);
+      border-color: rgba(255,140,60,0.4);
+      color: #ff8c3c;
+    }
+    .feedback-replies {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-left: 14px;
+      border-left: 2px solid rgba(255,140,60,0.15);
+    }
+    .feedback-reply-item {
+      font-size: 12px;
+      color: rgba(255,255,255,0.65);
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .feedback-reply-item-ts {
+      font-size: 10px;
+      color: rgba(255,140,60,0.5);
+      margin-bottom: 2px;
+    }
+    .feedback-reply-form {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .feedback-reply-input {
+      flex: 1;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: #fff;
+      font-size: 12px;
+      font-family: inherit;
+      resize: none;
+      outline: none;
+      min-height: 36px;
+    }
+    .feedback-reply-input:focus {
+      border-color: rgba(255,140,60,0.3);
+    }
+    .feedback-reply-send {
+      background: rgba(255,140,60,0.1);
+      border: 1px solid rgba(255,140,60,0.25);
+      border-radius: 6px;
+      padding: 6px 14px;
+      color: #ff8c3c;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+      align-self: flex-end;
+    }
+    .feedback-reply-send:hover {
+      background: rgba(255,140,60,0.18);
+      border-color: rgba(255,140,60,0.4);
+    }
+    .feedback-reply-send:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* ── Mobile (≤820px) ── */
+    @media (max-width: 820px) {
+      .nav-toggle { display: block; }
+      .topbar { padding: 12px 16px; }
+      .topbar-title { font-size: 14px; }
+      .topbar-nav {
+        position: fixed;
+        top: 0; right: 0; bottom: 0;
+        width: 240px; max-width: 82vw;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        background: #14161c;
+        border-left: 1px solid rgba(255,255,255,0.1);
+        padding: 64px 16px 20px;
+        transform: translateX(100%);
+        transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+        z-index: 20;
+        overflow-y: auto;
+      }
+      body.nav-open .topbar-nav { transform: translateX(0); }
+      body.nav-open .nav-backdrop { display: block; }
+      .topbar-nav .nav-btn { text-align: left; font-size: 14px; padding: 10px 14px; }
+
+      .content { padding: 16px 14px; }
+      .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+      .subnav { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
+
+      /* Default: wide tables scroll horizontally (headers preserved) */
+      .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .table-wrap table { min-width: 560px; }
+      .table-cols.table-head, .table-cols.table-row { min-width: 560px; }
+
+      /* Opt-in: stacked cards (label : value) for prioritized tables */
+      .cards-mobile { overflow-x: visible; }
+      .cards-mobile table { min-width: 0; }
+      .cards-mobile table thead { display: none; }
+      .cards-mobile table, .cards-mobile table tbody { display: block; width: 100%; }
+      .cards-mobile table tr {
+        display: block;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 10px;
+        padding: 6px 12px;
+        margin-bottom: 10px;
+        background: rgba(255,255,255,0.02);
+      }
+      .cards-mobile table td {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 5px 0;
+        text-align: right;
+      }
+      .cards-mobile table td::before {
+        content: attr(data-label);
+        color: rgba(255,255,255,0.4);
+        font-size: 12px;
+        text-align: left;
+        flex-shrink: 0;
+      }
+      .cards-mobile table td[colspan] { justify-content: center; }
+      .cards-mobile table td[colspan]::before { content: ""; }
+
+      /* Opt-in cards for grid (.table-cols) tables */
+      .cards-mobile .table-head { display: none; }
+      .cards-mobile .table-row {
+        display: block !important;
+        min-width: 0;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 10px;
+        padding: 8px 12px;
+        margin-bottom: 10px;
+        background: rgba(255,255,255,0.02);
+      }
+      .cards-mobile .table-row > div {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 4px 0;
+        text-align: right;
+      }
+      .cards-mobile .table-row > div::before {
+        content: attr(data-label);
+        color: rgba(255,255,255,0.4);
+        font-size: 12px;
+        text-align: left;
+        flex-shrink: 0;
+      }
+
+      /* A full 0x… address has no break opportunity, so it overflowed its
+         card and got clipped. Let it wrap onto a second line. */
+      .cards-mobile table td,
+      .cards-mobile .table-row > div {
+        overflow-wrap: anywhere;
+        min-width: 0;
+      }
+    }
+
+    /* ── Adaptive layer ── */
+    img, svg, canvas { max-width: 100%; }
+
+    @media (max-width: 520px) {
+      .stats-grid { grid-template-columns: 1fr; }
+      .content { padding: 14px 10px; }
+      .stat-value { font-size: 20px; }
+      /* Touch targets */
+      .nav-btn, .action-btn, .subnav button { min-height: 40px; }
+    }
+    @media (max-width: 380px) {
+      .content { padding: 12px 8px; }
+      .topbar { padding: 10px 12px; }
+      .topbar-title { font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Login page -->
+<div id="login_page">
+  <div class="login-box">
+    <div class="login-title">Mega MM <span style="color:#ff6b2c">Admin</span></div>
+    <div class="login-subtitle">Enter your admin token to continue</div>
+    <input id="login_token" class="login-input" type="password" placeholder="Admin token" autocomplete="off" />
+    <button id="login_btn" class="login-btn">Sign in</button>
+    <div id="login_err" class="login-err"></div>
+  </div>
+</div>
+
+<!-- App page -->
+<div id="app_page">
+  <div class="topbar">
+    <div class="topbar-title">Mega MM <span>Admin</span></div>
+    <div class="topbar-nav" id="topbar_nav">
+      <button class="nav-btn active" data-section="claims">Claims</button>
+      <button class="nav-btn" data-section="stats">Stats</button>
+      <button class="nav-btn" data-section="graphs">Graphs</button>
+      <button class="nav-btn" data-section="builder">Builder</button>
+      <button class="nav-btn" data-section="points">Points</button>
+      <button class="nav-btn" data-section="hip4vol">HIP-4 Vol</button>
+      <button class="nav-btn" data-section="vip">VIP</button>
+      <button class="nav-btn" data-section="system">System</button>
+      <button class="nav-btn" data-section="milestones">Milestones</button>
+    </div>
+    <div class="topbar-right">
+      <button id="logout_btn" class="logout-btn">Sign out</button>
+      <button id="nav_toggle" class="nav-toggle" aria-label="Menu">☰</button>
+    </div>
+  </div>
+  <div id="nav_backdrop" class="nav-backdrop"></div>
+
+  <div class="content">
+    <!-- Claims section -->
+    <div id="section_claims" class="section visible">
+      <div class="stats-grid" id="claims_stats_grid">
+        <div class="stat-card">
+          <div class="stat-label">Pending claims</div>
+          <div id="stat_pending_count" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Pending amount</div>
+          <div id="stat_pending_amount" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total paid out</div>
+          <div id="stat_paid_amount" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total claims</div>
+          <div id="stat_total_count" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total dû (tous comptes)</div>
+          <div id="stat_total_owed" class="stat-value accent">-</div>
+        </div>
+      </div>
+
+      <div class="table-header">
+        <div class="table-title" id="claims_table_title">Claims</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div class="filter-row">
+            <button class="filter-btn active" data-filter="pending">Pending</button>
+            <button class="filter-btn" data-filter="paid">Paid</button>
+            <button class="filter-btn" data-filter="">All</button>
+          </div>
+          <button class="refresh-btn" id="refresh_claims_btn">↻ Refresh</button>
+        </div>
+      </div>
+
+      <div class="table-wrap cards-mobile">
+        <div class="table-cols table-head">
+          <div>Wallet</div>
+          <div>Amount</div>
+          <div>Requested</div>
+          <div>Status</div>
+          <div>Action</div>
+        </div>
+        <div id="claims_table_body">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:24px">
+        <div class="table-title">Détail par wallet (total dû)</div>
+      </div>
+      <div class="table-wrap cards-mobile">
+        <div class="table-cols table-head">
+          <div>Wallet</div>
+          <div>Gagné</div>
+          <div>Réclamé</div>
+          <div>Dû</div>
+        </div>
+        <div id="referral_summary_table_body">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="section_graphs" class="section">
+      <div class="table-header">
+        <div class="table-title">Volume by source</div>
+        <div style="display:flex; gap:8px; align-items:center">
+          <div class="range-toggle" id="graphs_range">
+            <button class="range-btn active" data-days="30">30d</button>
+            <button class="range-btn" data-days="90">90d</button>
+            <button class="range-btn" data-days="180">180d</button>
+          </div>
+          <button class="refresh-btn" id="refresh_graphs_btn">↻ Refresh</button>
+        </div>
+      </div>
+      <div id="graphs_error" class="empty-state" style="display:none"></div>
+
+      <div class="graph-card">
+        <div id="chart_volume_stacked"></div>
+        <div class="graph-legend" id="legend_volume"></div>
+      </div>
+      <div class="graph-row">
+        <div class="graph-card">
+          <div class="graph-title">HIP-4 share of volume</div>
+          <div id="chart_hip4_share"></div>
+        </div>
+        <div class="graph-card">
+          <div class="graph-title">Split over window</div>
+          <div id="chart_volume_donut"></div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:28px"><div class="table-title">Growth</div></div>
+      <div class="graph-card">
+        <div class="graph-title">Unique addresses (cumulative + new/day)</div>
+        <div id="chart_acquisition"></div>
+        <div class="graph-legend" id="legend_acquisition"></div>
+      </div>
+      <div class="graph-row">
+        <div class="graph-card">
+          <div class="graph-title">Weekly active wallets</div>
+          <div id="chart_active_weekly"></div>
+          <div class="graph-legend" id="legend_active_weekly"></div>
+        </div>
+        <div class="graph-card">
+          <div class="graph-title">Volume concentration</div>
+          <div class="stats-grid" style="grid-template-columns:1fr 1fr">
+            <div class="stat-card">
+              <div class="stat-label">Top 5 wallets</div>
+              <div id="stat_top5_pct" class="stat-value accent">-</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Top 10 wallets</div>
+              <div id="stat_top10_pct" class="stat-value">-</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:28px"><div class="table-title">Revenue</div></div>
+      <div class="graph-row">
+        <div class="graph-card">
+          <div class="graph-title">Builder revenue / day</div>
+          <div id="chart_builder_daily"></div>
+        </div>
+        <div class="graph-card">
+          <div class="graph-title">Revenue by token</div>
+          <div id="chart_builder_tokens"></div>
+        </div>
+      </div>
+      <div class="graph-row">
+        <div class="graph-card">
+          <div class="graph-title">Fees / day</div>
+          <div id="chart_fees_daily"></div>
+        </div>
+        <div class="graph-card">
+          <div class="graph-title">Effective fee rate (fees / volume, bps)</div>
+          <div id="chart_fee_ratio"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats section -->
+    <div id="section_builder" class="section">
+      <div class="table-header">
+        <div class="table-title">Builder revenue
+          <span id="builder_stale_badge" style="display:none;color:rgb(255,140,60);font-size:12px;font-weight:500;margin-left:8px">⚠ données live indisponibles</span>
+        </div>
+        <button class="refresh-btn" id="refresh_builder_btn">↻ Refresh</button>
+      </div>
+      <div id="builder_tracking_note" style="font-size:12px;color:rgba(255,255,255,0.4);margin-bottom:16px">—</div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total cumulé (tous tokens)</div>
+          <div id="builder_total" class="stat-value accent">-</div>
+          <div id="builder_total_breakdown" style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:6px"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Semaine en cours (dim. 00:00 Paris →) <span id="builder_wtd_partial" style="display:none;color:rgba(255,255,255,0.4);font-size:11px">partiel</span></div>
+          <div id="builder_wtd" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Aujourd'hui (00:00 Paris →) <span id="builder_dtd_partial" style="display:none;color:rgba(255,255,255,0.4);font-size:11px">partiel</span></div>
+          <div id="builder_dtd" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Semaine précédente</div>
+          <div id="builder_prev" class="stat-value">-</div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:28px">
+        <div class="table-title">Revenu hebdomadaire (lundi → dimanche)</div>
+      </div>
+      <div class="table-wrap">
+        <div class="table-cols table-head" style="grid-template-columns:1fr 1fr">
+          <div>Semaine (début dim. 00:00 Paris)</div>
+          <div>Revenu USDC</div>
+        </div>
+        <div id="builder_weekly_rows">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:28px">
+        <div class="table-title">Revenu quotidien (minuit → minuit, 30 derniers jours)</div>
+      </div>
+      <div class="table-wrap">
+        <div class="table-cols table-head" style="grid-template-columns:1fr 1fr">
+          <div>Jour (00:00 Paris)</div>
+          <div>Revenu USDC</div>
+        </div>
+        <div id="builder_daily_rows">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:28px">
+        <div class="table-title">Extended Builder <span style="font-size:10px;color:#34eda4;border:1px solid rgba(52,237,164,0.35);border-radius:999px;padding:1px 6px;vertical-align:middle">1 bps</span></div>
+        <button class="refresh-btn" id="refresh_ext_builder_btn">↻ Refresh</button>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Fees today</div>
+          <div id="extb_today" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Fees this week</div>
+          <div id="extb_week" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Fees last week</div>
+          <div id="extb_last_week" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Fees all-time</div>
+          <div id="extb_all_time" class="stat-value">-</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:14px" class="extb-tables">
+        <div class="table-wrap">
+          <div class="table-cols table-head" style="grid-template-columns:1.2fr 1fr 1fr 0.7fr">
+            <div>Day</div><div>Fees</div><div>Volume</div><div>Trades</div>
+          </div>
+          <div id="extb_days_body"><div class="loading-state">Loading…</div></div>
+        </div>
+        <div class="table-wrap">
+          <div class="table-cols table-head" style="grid-template-columns:1.2fr 1fr 1fr 0.7fr">
+            <div>Week</div><div>Fees</div><div>Volume</div><div>Trades</div>
+          </div>
+          <div id="extb_weeks_body"><div class="loading-state">Loading…</div></div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:28px">
+        <div class="table-title">RISEx Builder <span style="font-size:10px;color:rgb(255,140,60);border:1px solid rgba(255,140,60,0.4);border-radius:999px;padding:1px 6px;vertical-align:middle">1 bps · estimated</span></div>
+        <button class="refresh-btn" id="refresh_risex_builder_btn">↻ Refresh</button>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Fees today</div>
+          <div id="rxb_today" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Fees this week</div>
+          <div id="rxb_week" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Fees all-time</div>
+          <div id="rxb_all_time" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Accounts connected / approved</div>
+          <div id="rxb_accounts" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Relayer balance (RISE)</div>
+          <div id="rxb_relayer" class="stat-value">-</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:14px" class="extb-tables">
+        <div class="table-wrap">
+          <div class="table-cols table-head" style="grid-template-columns:1.2fr 1fr 1fr 0.7fr">
+            <div>Day (Paris)</div><div>Fees</div><div>Volume</div><div>Sessions</div>
+          </div>
+          <div id="rxb_days_body"><div class="loading-state">Loading…</div></div>
+        </div>
+        <div class="table-wrap">
+          <div class="table-cols table-head" style="grid-template-columns:1.2fr 1fr 1fr 0.7fr">
+            <div>Week</div><div>Fees</div><div>Volume</div><div>Sessions</div>
+          </div>
+          <div id="rxb_weeks_body"><div class="loading-state">Loading…</div></div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:28px">
+        <div class="table-title">QFEX Builder <span style="font-size:10px;color:rgb(255,140,60);border:1px solid rgba(255,140,60,0.4);border-radius:999px;padding:1px 6px;vertical-align:middle">50% of fees · sessions estimated</span></div>
+        <button class="refresh-btn" id="refresh_qfex_builder_btn">↻ Refresh</button>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Builder rewards (QFEX, real)</div>
+          <div id="qxb_rewards" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Estimated today</div>
+          <div id="qxb_today" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Estimated this week</div>
+          <div id="qxb_week" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Estimated all-time</div>
+          <div id="qxb_all_time" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Accounts connected</div>
+          <div id="qxb_accounts" class="stat-value">-</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:14px" class="extb-tables">
+        <div class="table-wrap">
+          <div class="table-cols table-head" style="grid-template-columns:1.2fr 1fr 1fr 0.7fr">
+            <div>Day (Paris)</div><div>Est. fees</div><div>Volume</div><div>Sessions</div>
+          </div>
+          <div id="qxb_days_body"><div class="loading-state">Loading…</div></div>
+        </div>
+        <div class="table-wrap">
+          <div class="table-cols table-head" style="grid-template-columns:1.2fr 1fr 1fr 0.7fr">
+            <div>Week</div><div>Est. fees</div><div>Volume</div><div>Sessions</div>
+          </div>
+          <div id="qxb_weeks_body"><div class="loading-state">Loading…</div></div>
+        </div>
+      </div>
+
+    </div>
+
+    <div id="section_stats" class="section">
+      <div class="stats-grid" id="global_stats_grid">
+        <div class="stat-card">
+          <div class="stat-label">Unique addresses</div>
+          <div id="stat_unique_addresses" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Active users</div>
+          <div id="stat_active_users" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Daily volume</div>
+          <div id="stat_daily_volume" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">All-time volume</div>
+          <div id="stat_all_time_volume" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Avg PnL / $100k</div>
+          <div id="stat_avg_ppm" class="stat-value">-</div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:28px">
+        <div class="table-title">Wallets</div>
+        <button class="refresh-btn" id="refresh_wallets_btn">↻ Refresh</button>
+      </div>
+      <div class="table-wrap cards-mobile">
+        <div class="table-cols table-head wallets-cols">
+          <div>#</div>
+          <div>Wallet</div>
+          <div>All-time volume</div>
+          <div>PnL / $100k</div>
+          <div>Status</div>
+          <div></div>
+        </div>
+        <div id="wallets_table_body">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Points section - preview du classement de points de campagne (retroactif) -->
+    <div id="section_points" class="section">
+      <div class="stats-grid" id="points_stats_grid">
+        <div class="stat-card">
+          <div class="stat-label">Wallets éligibles</div>
+          <div id="stat_points_wallets" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Pts / semaine (rétro)</div>
+          <div id="stat_points_weekly" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Semaines depuis lancement</div>
+          <div id="stat_points_weeks" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Points distribués (total)</div>
+          <div id="stat_points_total" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Wallets team exclus</div>
+          <div id="stat_points_team_excluded" class="stat-value">-</div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:28px">
+        <div class="table-title">Points (preview rétroactif · HL only · prorata volume)</div>
+        <button class="refresh-btn" id="refresh_points_btn">↻ Refresh</button>
+      </div>
+      <div class="table-wrap cards-mobile">
+        <div class="table-cols table-head points-cols" style="grid-template-columns:48px 1fr 140px 110px 90px">
+          <div>#</div>
+          <div>Wallet</div>
+          <div>Volume HL</div>
+          <div>Points</div>
+          <div>Semaines</div>
+        </div>
+        <div id="points_table_body">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- HIP-4 Volume section: special codes + privileged wallets -->
+    <div id="section_hip4vol" class="section">
+      <div class="stats-grid" id="hip4vol_stats_grid">
+        <div class="stat-card">
+          <div class="stat-label">HIP-4 Vol wallets</div>
+          <div id="stat_hip4vol_wallet_count" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">HIP-4 Vol all-time volume</div>
+          <div id="stat_hip4vol_total_volume" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">HIP-4 Vol daily volume</div>
+          <div id="stat_hip4vol_daily_volume" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">HIP-4 Vol active sessions</div>
+          <div id="stat_hip4vol_active_count" class="stat-value">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">HIP-4 total active</div>
+          <div id="stat_hip4_total_active" class="stat-value">-</div>
+          <div id="stat_hip4_mode_split" style="font-size:12px;color:rgba(255,255,255,0.45);margin-top:4px">Mode 1: - · Mode 2: -</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Avg PnL / $100k</div>
+          <div id="stat_hip4vol_avg_ppm" class="stat-value">-</div>
+        </div>
+      </div>
+
+      <!-- Most traded markets (all users) — collapsible -->
+      <div class="table-header" style="margin-top:28px">
+        <div class="table-title hv-collapse-title" id="hip4vol_markets_toggle" role="button" tabindex="0" aria-expanded="false" style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:10px">
+          <span class="hv-chevron" aria-hidden="true">▸</span>
+          <span>Most Traded Markets by Outcome <span style="color:rgba(255,255,255,0.4);font-weight:400">— all users</span></span>
+        </div>
+        <button class="refresh-btn" id="refresh_hip4vol_markets_btn">↻ Refresh</button>
+      </div>
+      <div class="table-wrap cards-mobile" id="hip4vol_markets_wrap" style="margin-bottom:32px;display:none">
+        <div class="table-cols table-head" style="grid-template-columns:2fr 1.1fr 90px 140px">
+          <div>Market</div>
+          <div>Volume</div>
+          <div>Trades</div>
+          <div>Cost / $100k</div>
+        </div>
+        <div id="hip4vol_markets_body">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:28px">
+        <div class="table-title">HIP-4 Volume Wallets</div>
+        <button class="refresh-btn" id="refresh_hip4vol_volume_btn">↻ Refresh</button>
+      </div>
+      <div class="table-wrap cards-mobile" style="margin-bottom:32px">
+        <div class="table-cols table-head wallets-cols">
+          <div>#</div>
+          <div>Wallet</div>
+          <div>HIP-4 Vol volume</div>
+          <div>PnL / $100k</div>
+          <div>Status</div>
+          <div></div>
+        </div>
+        <div id="hip4vol_volume_wallets_table_body">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+
+      <!-- Special codes subsection -->
+      <div class="table-header">
+        <div class="table-title">HIP-4 Volume — Special Codes</div>
+        <button class="refresh-btn" id="refresh_hip4vol_codes_btn">↻ Refresh</button>
+      </div>
+
+      <!-- Create code form -->
+      <div class="vip-form" style="margin-bottom:16px">
+        <div class="vip-form-fields">
+          <label class="vip-field-label" style="flex:2">Code
+            <input id="hip4vol_code_input" class="modal-input vip-num-input" type="text" placeholder="e.g. PARTNER2024" autocomplete="off" />
+          </label>
+          <label class="vip-field-label">Max wallets
+            <input id="hip4vol_maxwallets_input" class="modal-input vip-num-input" type="number" min="1" step="1" placeholder="e.g. 10" />
+          </label>
+          <label class="vip-field-label">Builder fee tenths (effective $/M = ×5)
+            <input id="hip4vol_feetenths_input" class="modal-input vip-num-input" type="number" min="0" step="1" value="80" placeholder="80" />
+          </label>
+        </div>
+        <div id="hip4vol_code_err" class="login-err" style="margin:0"></div>
+        <button id="hip4vol_create_code_btn" class="login-btn" style="margin:0;width:auto;padding:0 24px">Create code</button>
+      </div>
+
+      <div class="table-wrap" style="margin-bottom:32px">
+        <div class="table-cols table-head" style="grid-template-columns:1fr 120px 120px 120px 80px">
+          <div>Code</div>
+          <div>Effective $/M</div>
+          <div>Places used</div>
+          <div>Remaining</div>
+          <div>Action</div>
+        </div>
+        <div id="hip4vol_codes_body">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+
+      <!-- Privileged wallets subsection -->
+      <div class="table-header">
+        <div class="table-title">HIP-4 Volume — Privileged Wallets</div>
+        <button class="refresh-btn" id="refresh_hip4vol_wallets_btn">↻ Refresh</button>
+      </div>
+
+      <!-- Add privileged wallet form -->
+      <div class="vip-form" style="margin-bottom:16px">
+        <div style="display:flex;gap:12px;align-items:flex-end">
+          <div style="flex:1">
+            <input id="hip4vol_wallet_input" class="modal-input" type="text" placeholder="Wallet address (0x…)" autocomplete="off" style="margin:0" />
+          </div>
+          <button id="hip4vol_add_wallet_btn" class="login-btn" style="margin:0;width:auto;padding:0 24px;flex-shrink:0">Add wallet</button>
+        </div>
+        <div id="hip4vol_wallet_err" class="login-err" style="margin:0"></div>
+      </div>
+
+      <div class="table-wrap">
+        <div class="table-cols table-head" style="grid-template-columns:1fr 100px">
+          <div>Wallet</div>
+          <div>Action</div>
+        </div>
+        <div id="hip4vol_wallets_body">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- VIP section -->
+    <div id="section_vip" class="section">
+      <div class="table-header">
+        <div class="table-title">VIP Referrers</div>
+        <button class="refresh-btn" id="refresh_vip_btn">↻ Refresh</button>
+      </div>
+
+      <!-- Add VIP form -->
+      <div class="vip-form">
+        <input id="vip_address" class="modal-input" type="text" placeholder="Wallet address (0x…)" autocomplete="off" style="flex:1;margin:0" />
+        <div class="vip-form-fields">
+          <label class="vip-field-label">Commission (%)<input id="vip_commission" class="modal-input vip-num-input" type="number" min="0" max="100" step="1" placeholder="e.g. 25" /></label>
+          <label class="vip-field-label">Referee disc. (%)<input id="vip_discount" class="modal-input vip-num-input" type="number" min="0" max="100" step="1" placeholder="e.g. 30" /></label>
+          <label class="vip-field-label">Self disc. (%)<input id="vip_self_discount" class="modal-input vip-num-input" type="number" min="0" max="100" step="1" placeholder="e.g. 25" /></label>
+          <label class="vip-field-label">Link code<input id="vip_code" class="modal-input vip-num-input" type="text" placeholder="e.g. megavip" maxlength="30" autocomplete="off" style="width:120px" /></label>
+        </div>
+        <div id="vip_form_err" class="login-err" style="margin:0"></div>
+        <button id="vip_add_btn" class="login-btn" style="margin:0;width:auto;padding:0 24px">Add / Update</button>
+      </div>
+
+      <div class="table-wrap" style="margin-top:16px">
+        <div class="table-cols vip-cols table-head">
+          <div>Wallet</div>
+          <div>Commission</div>
+          <div>Referee disc.</div>
+          <div>Self disc.</div>
+          <div>Link</div>
+          <div>Set at</div>
+          <div>Action</div>
+        </div>
+        <div id="vip_table_body">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- System section: Controls / Crashes / Restarts / 429s / Feedback -->
+    <div id="section_system" class="section">
+      <div class="subnav">
+        <button class="subnav-btn active" data-sub="crashes">Crashes</button>
+        <button class="subnav-btn" data-sub="restarts">Restarts</button>
+        <button class="subnav-btn" data-sub="rate_limits">429s</button>
+        <button class="subnav-btn" data-sub="feedback">Feedback</button>
+      </div>
+
+
+      <div id="sub_crashes" class="subsection visible">
+        <div class="table-header">
+          <div class="table-title">Recent Bot Crashes</div>
+          <button class="refresh-btn" id="refresh_crashes_btn">↻ Refresh</button>
+        </div>
+        <div class="table-wrap cards-mobile">
+          <table>
+            <thead><tr><th>Date</th><th>Wallet</th><th>Token</th><th>Mode</th><th>Duration</th><th>Exit</th><th>Reason / Logs</th></tr></thead>
+            <tbody id="crashes_table_body"><tr><td colspan="7" class="loading-state">-</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="sub_restarts" class="subsection">
+        <div class="table-header">
+          <div class="table-title">Server Restart History</div>
+          <button class="refresh-btn" id="refresh_restarts_btn">↻ Refresh</button>
+        </div>
+        <div class="table-wrap cards-mobile">
+          <table>
+            <thead><tr><th>Date</th><th>Event</th><th>Detail</th></tr></thead>
+            <tbody id="restarts_table_body"><tr><td colspan="3" class="loading-state">-</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="sub_rate_limits" class="subsection">
+        <div class="table-header">
+          <div class="table-title">Builder Approve 429s</div>
+          <button class="refresh-btn" id="refresh_rate_limits_btn">↻ Refresh</button>
+        </div>
+        <div id="rate_limits_summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px"></div>
+        <div class="table-wrap cards-mobile">
+          <table>
+            <thead><tr><th>Date</th><th>IP</th><th>Detail</th></tr></thead>
+            <tbody id="rate_limits_table_body"><tr><td colspan="3" class="loading-state">-</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="sub_feedback" class="subsection">
+        <div class="table-header">
+          <div class="table-title">User Feedback</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span id="feedback_count" style="font-size:12px;color:rgba(255,255,255,0.35)"></span>
+            <button class="refresh-btn" id="refresh_feedback_btn">↻ Refresh</button>
+          </div>
+        </div>
+        <div id="feedback_list" class="feedback-list">
+          <div class="loading-state">-</div>
+        </div>
+      </div>
+    </div>
+
+
+
+
+    <!-- Milestones section -->
+    <div id="section_milestones" class="section">
+      <div class="stats-grid" id="ms_admin_stats">
+        <div class="stat-card">
+          <div class="stat-label">Users with volume</div>
+          <div id="ms_admin_total" class="stat-value accent">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Volume counted</div>
+          <div class="stat-value" style="font-size:13px">All-time (lifetime)</div>
+        </div>
+      </div>
+
+      <!-- Référence : définition des tiers + règle d'éligibilité -->
+      <div class="stat-card" style="margin-top:18px">
+        <div class="table-title" style="margin-bottom:4px">Milestone tiers</div>
+        <div class="stat-label" style="margin-bottom:14px">
+          Basés sur le volume de trading cumulé <strong>de toute l'historique</strong> (toutes dates).
+          La page Milestones est affichée à tout compte ayant déjà du volume (&gt; $0) — soit tous les users présents avant la saison de points.
+        </div>
+        <div class="ms-ref-grid">
+          <div><span class="ms-tier-badge ms-tier-badge--explorer">Explorer</span></div>
+          <div class="ms-ref-vol">$100,000</div>
+          <div class="ms-ref-reward">Unlock referral codes</div>
+
+          <div><span class="ms-tier-badge ms-tier-badge--dolphin">Dolphin</span></div>
+          <div class="ms-ref-vol">$1,000,000</div>
+          <div class="ms-ref-reward">Discord role "Tradoor Enjoyor"</div>
+
+          <div><span class="ms-tier-badge ms-tier-badge--shark">Shark</span></div>
+          <div class="ms-ref-vol">$5,000,000</div>
+          <div class="ms-ref-reward">Referral code 20% fees rebate, 20% for refs</div>
+
+          <div><span class="ms-tier-badge ms-tier-badge--whale">Whale</span></div>
+          <div class="ms-ref-vol">$10,000,000</div>
+          <div class="ms-ref-reward">$300 USDC</div>
+
+          <div><span class="ms-tier-badge ms-tier-badge--legend">Legend</span></div>
+          <div class="ms-ref-vol">$100,000,000</div>
+          <div class="ms-ref-reward">$3,000 USDC + Discord role "Tradoor Beast"</div>
+        </div>
+      </div>
+
+      <div class="table-header" style="margin-top:28px">
+        <div class="table-title">Milestones Progress</div>
+        <button class="refresh-btn" id="refresh_milestones_btn">↻ Refresh</button>
+      </div>
+      <div class="table-wrap">
+        <div class="table-cols table-head ms-admin-cols">
+          <div>#</div>
+          <div>Wallet</div>
+          <div>Volume</div>
+          <div>Tier</div>
+          <div>Completed</div>
+          <div>Progress</div>
+        </div>
+        <div id="ms_admin_table_body">
+          <div class="loading-state">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+
+  </div>
+</div>
+
+<!-- Pay modal -->
+<div id="pay_modal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-title">Mark claim as paid</div>
+    <div id="pay_modal_desc" class="modal-desc"></div>
+    <input id="pay_tx_note" class="modal-input" type="text" placeholder="TX hash or note (optional)" autocomplete="off" />
+    <input id="pay_admin_note" class="modal-input" type="text" placeholder="Admin note (optional)" autocomplete="off" />
+    <div class="modal-actions">
+      <button id="pay_cancel_btn" class="modal-cancel">Cancel</button>
+      <button id="pay_confirm_btn" class="modal-confirm">Confirm paid</button>
+    </div>
+    <div id="pay_err" class="modal-err"></div>
+  </div>
+</div>
+
+<script>
+  const API = "";
+  let adminToken = sessionStorage.getItem("admin_token") || "";
+  let currentFilter = "pending";
+  let pendingClaimId = null;
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  }
+
+  function fmtUsd(v) {
+    return "$" + Number(v || 0).toFixed(2);
+  }
+
+  function fmtBig(v) {
+    const n = Number(v || 0);
+    if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+    if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
+    return fmtUsd(n);
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return "-";
+    try {
+      return new Date(iso).toLocaleString("fr-FR", {
+        day: "2-digit", month: "2-digit", year: "2-digit",
+        hour: "2-digit", minute: "2-digit",
+      });
+    } catch { return iso; }
+  }
+
+  function shortWallet(w) {
+    if (!w || w.length < 12) return w || "-";
+    return w.slice(0, 8) + "…" + w.slice(-6);
+  }
+
+  async function apiFetch(path, opts = {}) {
+    const hdrs = { "Content-Type": "application/json", ...(opts.headers || {}) };
+    if (adminToken) hdrs["X-Admin-Token"] = adminToken;
+    const r = await fetch(API + path, { ...opts, headers: hdrs });
+    const json = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(json.detail || `HTTP ${r.status}`);
+    return json;
+  }
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+
+  async function tryLogin() {
+    const token = document.getElementById("login_token").value.trim();
+    const errEl = document.getElementById("login_err");
+    errEl.textContent = "";
+    if (!token) { errEl.textContent = "Enter your admin token."; return; }
+    try {
+      // Validate token by fetching claims
+      await apiFetch(`/api/admin/referral/claims?status=pending`, { headers: { "X-Admin-Token": token } });
+      adminToken = token;
+      sessionStorage.setItem("admin_token", token);
+      showApp();
+    } catch (e) {
+      errEl.textContent = e.message === "Invalid admin token." ? "Invalid token." : e.message;
+    }
+  }
+
+  function logout() {
+    adminToken = "";
+    sessionStorage.removeItem("admin_token");
+    document.getElementById("app_page").classList.remove("visible");
+    document.getElementById("login_page").style.display = "flex";
+  }
+
+  function showApp() {
+    document.getElementById("login_page").style.display = "none";
+    document.getElementById("app_page").classList.add("visible");
+    loadClaims();
+    loadStats();
+    loadVip();
+    loadCrashes();
+    loadRestarts();
+    loadRateLimits();
+    loadFeedback();
+  }
+
+  // ── Graphs (SVG fait main) ──────────────────────────────────────────────
+  const GCOLORS = { hip4: "rgb(255,140,60)", hip3: "rgb(96,165,250)", hl: "#35f0c2" };
+  const GLABELS = { hip4: "HIP-4", hip3: "HIP-3", hl: "Hyperliquid" };
+  const GPALETTE = ["rgb(255,140,60)", "rgb(96,165,250)", "#35f0c2", "#c084fc", "#f472b6", "#facc15"];
+  let graphsDays = 30;
+  let graphsLoadedOnce = false;
+
+  function gTooltip() {
+    let el = document.getElementById("graph_tooltip");
+    if (!el) { el = document.createElement("div"); el.id = "graph_tooltip"; document.body.appendChild(el); }
+    return el;
+  }
+  function gShowTip(evt, html) {
+    const el = gTooltip();
+    el.innerHTML = html;
+    el.style.display = "block";
+    el.style.left = Math.min(evt.clientX + 14, window.innerWidth - 220) + "px";
+    el.style.top = (evt.clientY - 10) + "px";
+  }
+  function gHideTip() { gTooltip().style.display = "none"; }
+
+  function gSvg(w, h) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.setAttribute("width", "100%");
+    svg.style.display = "block";
+    return svg;
+  }
+  function gEl(tag, attrs) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+  function gNiceMax(v) {
+    if (!isFinite(v) || v <= 0) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * p) return m * p;
+    return 10 * p;
+  }
+  function gAxis(svg, W, H, PAD, maxV, fmt) {
+    for (let i = 0; i <= 4; i++) {
+      const y = PAD.t + (H - PAD.t - PAD.b) * (1 - i / 4);
+      svg.appendChild(gEl("line", { x1: PAD.l, x2: W - PAD.r, y1: y, y2: y, stroke: "rgba(255,255,255,0.06)" }));
+      const t = gEl("text", { x: PAD.l - 8, y: y + 4, "text-anchor": "end", "font-size": 11, fill: "rgba(255,255,255,0.4)" });
+      t.textContent = fmt(maxV * i / 4);
+      svg.appendChild(t);
+    }
+  }
+
+  // Barres empilées. series: [{...}], keys: clés numériques empilées (couleurs GCOLORS
+  // ou opts.colors), xKey: clé du label X, tipFn(d) -> html tooltip.
+  function stackedBars(containerId, series, keys, xKey, tipFn, opts = {}) {
+    const wrap = document.getElementById(containerId);
+    wrap.innerHTML = "";
+    if (!series.length) { wrap.innerHTML = '<div class="empty-state">No data yet.</div>'; return; }
+    const colors = opts.colors || GCOLORS;
+    const W = 900, H = opts.height || 260, PAD = { l: 56, r: 8, t: 10, b: 24 };
+    const maxV = gNiceMax(Math.max(...series.map(d => keys.reduce((s, k) => s + (+d[k] || 0), 0))));
+    const svg = gSvg(W, H);
+    gAxis(svg, W, H, PAD, maxV, opts.fmt || fmtBig);
+    const iw = (W - PAD.l - PAD.r) / series.length;
+    const bw = Math.max(1, iw * 0.72);
+    const labelStep = Math.max(1, Math.ceil(series.length / 12));
+    series.forEach((d, i) => {
+      let y = H - PAD.b;
+      const x = PAD.l + i * iw + (iw - bw) / 2;
+      keys.forEach(k => {
+        const v = +d[k] || 0;
+        if (v <= 0) return;
+        const hh = (v / maxV) * (H - PAD.t - PAD.b);
+        y -= hh;
+        svg.appendChild(gEl("rect", { x, y, width: bw, height: hh, fill: colors[k] || "rgba(255,255,255,0.3)", rx: 1 }));
+      });
+      const hit = gEl("rect", { x: PAD.l + i * iw, y: PAD.t, width: iw, height: H - PAD.t - PAD.b, fill: "transparent" });
+      hit.addEventListener("mousemove", e => gShowTip(e, tipFn(d)));
+      hit.addEventListener("mouseleave", gHideTip);
+      svg.appendChild(hit);
+      if (i % labelStep === 0) {
+        const t = gEl("text", { x: PAD.l + i * iw + iw / 2, y: H - 6, "text-anchor": "middle", "font-size": 10, fill: "rgba(255,255,255,0.35)" });
+        t.textContent = String(d[xKey] || "").slice(5);
+        svg.appendChild(t);
+      }
+    });
+    wrap.appendChild(svg);
+  }
+
+  // Courbes. lines: [{key, color, width}]. opts: {maxY, fmt, bars: {key, color},
+  // markerDate: "YYYY-MM-DD" (ligne verticale pointillée sur xKey === markerDate)}.
+  function lineChart(containerId, series, lines, xKey, tipFn, opts = {}) {
+    const wrap = document.getElementById(containerId);
+    wrap.innerHTML = "";
+    if (!series.length) { wrap.innerHTML = '<div class="empty-state">No data yet.</div>'; return; }
+    const W = 900, H = opts.height || 220, PAD = { l: 56, r: 8, t: 10, b: 24 };
+    const maxV = opts.maxY || gNiceMax(Math.max(...series.flatMap(d => lines.map(l => +d[l.key] || 0))));
+    const svg = gSvg(W, H);
+    gAxis(svg, W, H, PAD, maxV, opts.fmt || fmtBig);
+    const span = W - PAD.l - PAD.r;
+    const xs = i => PAD.l + (series.length === 1 ? span / 2 : i / (series.length - 1) * span);
+    const ys = v => PAD.t + (1 - v / maxV) * (H - PAD.t - PAD.b);
+    if (opts.bars) {
+      const bmax = gNiceMax(Math.max(...series.map(d => +d[opts.bars.key] || 0)));
+      series.forEach((d, i) => {
+        const v = +d[opts.bars.key] || 0;
+        if (v <= 0) return;
+        const hh = (v / bmax) * (H - PAD.t - PAD.b) * 0.45; // demi-hauteur, échelle propre
+        svg.appendChild(gEl("rect", { x: xs(i) - 2, y: H - PAD.b - hh, width: 4, height: hh, fill: opts.bars.color, rx: 1 }));
+      });
+    }
+    if (opts.markerDate) {
+      const mi = series.findIndex(d => d[xKey] === opts.markerDate);
+      if (mi >= 0) {
+        svg.appendChild(gEl("line", { x1: xs(mi), x2: xs(mi), y1: PAD.t, y2: H - PAD.b, stroke: "rgba(255,255,255,0.35)", "stroke-dasharray": "4 4" }));
+      }
+    }
+    lines.forEach(l => {
+      const pts = series.map((d, i) => `${xs(i).toFixed(1)},${ys(Math.min(+d[l.key] || 0, maxV)).toFixed(1)}`).join(" ");
+      svg.appendChild(gEl("polyline", { points: pts, fill: "none", stroke: l.color, "stroke-width": l.width || 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    });
+    const cw = span / series.length;
+    series.forEach((d, i) => {
+      const hit = gEl("rect", { x: xs(i) - cw / 2, y: PAD.t, width: cw, height: H - PAD.t - PAD.b, fill: "transparent" });
+      hit.addEventListener("mousemove", e => gShowTip(e, tipFn(d)));
+      hit.addEventListener("mouseleave", gHideTip);
+      svg.appendChild(hit);
+    });
+    wrap.appendChild(svg);
+  }
+
+  // Donut. items: [{label, value, color}]. Légende chiffrée intégrée.
+  function donut(containerId, items) {
+    const wrap = document.getElementById(containerId);
+    wrap.innerHTML = "";
+    const total = items.reduce((s, it) => s + (+it.value || 0), 0);
+    if (total <= 0) { wrap.innerHTML = '<div class="empty-state">No data yet.</div>'; return; }
+    const S = 200, R = 80, IR = 52, C = S / 2;
+    const svg = gSvg(S, S);
+    svg.setAttribute("width", "200");
+    const nz = items.filter(it => (+it.value || 0) > 0);
+    if (nz.length === 1) {
+      // Cas 100% : un path en arc dégénère, tracer un anneau plein
+      const ring = gEl("circle", { cx: C, cy: C, r: (R + IR) / 2, fill: "none", stroke: nz[0].color, "stroke-width": R - IR });
+      ring.addEventListener("mousemove", e => gShowTip(e, `${nz[0].label}: <b>${fmtBig(nz[0].value)}</b> (100%)`));
+      ring.addEventListener("mouseleave", gHideTip);
+      svg.appendChild(ring);
+    } else {
+      let a0 = -Math.PI / 2;
+      nz.forEach(it => {
+        const a1 = a0 + (it.value / total) * Math.PI * 2;
+        const large = a1 - a0 > Math.PI ? 1 : 0;
+        const p = `M ${(C + R * Math.cos(a0)).toFixed(2)} ${(C + R * Math.sin(a0)).toFixed(2)}` +
+          ` A ${R} ${R} 0 ${large} 1 ${(C + R * Math.cos(a1)).toFixed(2)} ${(C + R * Math.sin(a1)).toFixed(2)}` +
+          ` L ${(C + IR * Math.cos(a1)).toFixed(2)} ${(C + IR * Math.sin(a1)).toFixed(2)}` +
+          ` A ${IR} ${IR} 0 ${large} 0 ${(C + IR * Math.cos(a0)).toFixed(2)} ${(C + IR * Math.sin(a0)).toFixed(2)} Z`;
+        const path = gEl("path", { d: p, fill: it.color });
+        path.addEventListener("mousemove", e => gShowTip(e, `${it.label}: <b>${fmtBig(it.value)}</b> (${(it.value / total * 100).toFixed(1)}%)`));
+        path.addEventListener("mouseleave", gHideTip);
+        svg.appendChild(path);
+        a0 = a1;
+      });
+    }
+    const flex = document.createElement("div");
+    flex.style.cssText = "display:flex; align-items:center; gap:18px";
+    flex.appendChild(svg);
+    const leg = document.createElement("div");
+    leg.className = "graph-legend";
+    leg.style.cssText = "flex-direction:column; gap:8px; margin-top:0";
+    items.forEach(it => {
+      const row = document.createElement("div");
+      row.innerHTML = `<span class="dot" style="background:${it.color}"></span>${it.label} — <b>${fmtBig(it.value)}</b> (${(it.value / total * 100).toFixed(1)}%)`;
+      leg.appendChild(row);
+    });
+    flex.appendChild(leg);
+    wrap.appendChild(flex);
+  }
+
+  // Clé de semaine ISO d'une date "YYYY-MM-DD" — même format que le backend (2026-W27)
+  function isoWeekKey(dateStr) {
+    const d = new Date(dateStr + "T00:00:00Z");
+    const day = (d.getUTCDay() + 6) % 7;
+    d.setUTCDate(d.getUTCDate() - day + 3); // jeudi de la semaine
+    const firstThu = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+    const fday = (firstThu.getUTCDay() + 6) % 7;
+    firstThu.setUTCDate(firstThu.getUTCDate() - fday + 3);
+    const week = 1 + Math.round((d - firstThu) / (7 * 86400000));
+    return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+  }
+
+  async function loadGraphs() {
+    const errEl = document.getElementById("graphs_error");
+    errEl.style.display = "none";
+    try {
+      const [g, rev] = await Promise.all([
+        apiFetch(`/api/admin/stats/graphs?days=${graphsDays}`),
+        apiFetch(`/api/admin/builder/revenue?weeks=12&days=${graphsDays}`),
+      ]);
+      renderVolumeBlock(g);
+      renderGrowthBlock(g);
+      renderRevenueBlock(g, rev);
+    } catch (e) {
+      errEl.textContent = e.message || "Failed to load graphs.";
+      errEl.style.display = "block";
+    }
+  }
+
+  function renderVolumeBlock(g) {
+    const rows = (g.volume_series || []).map(d => ({
+      date: d.date, hip4: d.hip4_usd, hip3: d.hip3_usd, hl: d.hl_usd,
+      fees: d.fees_usd, total: d.hip4_usd + d.hip3_usd + d.hl_usd,
+    }));
+    stackedBars("chart_volume_stacked", rows, ["hip4", "hip3", "hl"], "date", d =>
+      `${d.date}<br>` +
+      `<span style="color:${GCOLORS.hip4}">HIP-4</span>: <b>${fmtBig(d.hip4)}</b><br>` +
+      `<span style="color:${GCOLORS.hip3}">HIP-3</span>: <b>${fmtBig(d.hip3)}</b><br>` +
+      `<span style="color:${GCOLORS.hl}">HL</span>: <b>${fmtBig(d.hl)}</b><br>` +
+      `Total: <b>${fmtBig(d.total)}</b>`);
+    document.getElementById("legend_volume").innerHTML = ["hip4", "hip3", "hl"].map(k =>
+      `<span><span class="dot" style="background:${GCOLORS[k]}"></span>${GLABELS[k]}</span>`).join("");
+
+    // % HIP-4 : daily (fin, translucide) + hebdo (épais) via lookup semaine ISO
+    const weekPct = {};
+    (g.weekly_share || []).forEach(w => { weekPct[w.week] = w.hip4_pct; });
+    const shareRows = rows.map(d => ({
+      date: d.date,
+      pct: d.total > 0 ? d.hip4 / d.total * 100 : 0,
+      wpct: weekPct[isoWeekKey(d.date)] || 0,
+    }));
+    lineChart("chart_hip4_share", shareRows, [
+      { key: "pct", color: "rgba(255,140,60,0.45)", width: 1.5 },
+      { key: "wpct", color: "rgb(255,140,60)", width: 3 },
+    ], "date", d => `${d.date}<br>Daily: <b>${d.pct.toFixed(1)}%</b><br>Weekly: <b>${(+d.wpct).toFixed(1)}%</b>`,
+      { maxY: 100, fmt: v => v.toFixed(0) + "%" });
+
+    const sum = k => rows.reduce((s, d) => s + d[k], 0);
+    donut("chart_volume_donut", [
+      { label: "HIP-4", value: sum("hip4"), color: GCOLORS.hip4 },
+      { label: "HIP-3", value: sum("hip3"), color: GCOLORS.hip3 },
+      { label: "Hyperliquid", value: sum("hl"), color: GCOLORS.hl },
+    ]);
+  }
+
+  // Définies en Task 5 — stubs pour que loadGraphs ne casse pas entre les deux tasks
+  function renderGrowthBlock(g) {
+    const acq = g.acquisition_series || [];
+    const marker = String(g.tracking_precise_since || "").slice(0, 10);
+    lineChart("chart_acquisition", acq, [
+      { key: "cumulative", color: "rgb(255,140,60)", width: 2.5 },
+    ], "date", d => `${d.date}<br>New: <b>${d.new}</b><br>Total: <b>${d.cumulative}</b>`, {
+      bars: { key: "new", color: "rgba(96,165,250,0.6)" },
+      markerDate: marker,
+      fmt: v => String(Math.round(v)),
+    });
+    document.getElementById("legend_acquisition").innerHTML =
+      `<span><span class="dot" style="background:rgb(255,140,60)"></span>Cumulative</span>` +
+      `<span><span class="dot" style="background:rgba(96,165,250,0.6)"></span>New / day</span>` +
+      (marker ? `<span style="color:rgba(255,255,255,0.4)">┆ precise tracking since ${marker}</span>` : "");
+
+    const aw = (g.active_wallets_weekly || []).map(w => ({ week: w.week, new: w.new, returning: w.returning }));
+    stackedBars("chart_active_weekly", aw, ["returning", "new"], "week", d =>
+      `${d.week}<br>New: <b>${d.new}</b><br>Returning: <b>${d.returning}</b>`, {
+      colors: { new: "rgb(255,140,60)", returning: "rgba(96,165,250,0.7)" },
+      fmt: v => String(Math.round(v)),
+      height: 220,
+    });
+    document.getElementById("legend_active_weekly").innerHTML =
+      `<span><span class="dot" style="background:rgb(255,140,60)"></span>New</span>` +
+      `<span><span class="dot" style="background:rgba(96,165,250,0.7)"></span>Returning</span>`;
+
+    const tc = g.top_concentration || {};
+    document.getElementById("stat_top5_pct").textContent = (tc.top5_pct != null) ? tc.top5_pct.toFixed(1) + "%" : "-";
+    document.getElementById("stat_top10_pct").textContent = (tc.top10_pct != null) ? tc.top10_pct.toFixed(1) + "%" : "-";
+  }
+
+  function renderRevenueBlock(g, rev) {
+    // Revenue builder / jour (deltas par période, séries de /api/admin/builder/revenue)
+    const daily = (rev.daily_series || []).map(d => ({
+      date: String(d.day_start || "").slice(0, 10),
+      rev: +d.revenue_usd || 0,
+      incomplete: !!d.incomplete,
+    }));
+    stackedBars("chart_builder_daily", daily, ["rev"], "date", d =>
+      `${d.date}${d.incomplete ? " (partial)" : ""}<br>Revenue: <b>${fmtBig(d.rev)}</b>`, {
+      colors: { rev: "rgb(255,140,60)" },
+      height: 220,
+    });
+
+    donut("chart_builder_tokens", (rev.by_token || []).map((t, i) => ({
+      label: t.token === 0 ? "USDC" : `Token ${t.token}`,
+      value: +t.rewards_usd || 0,
+      color: GPALETTE[i % GPALETTE.length],
+    })));
+
+    // Frais / jour + taux effectif (bps) depuis volume_series
+    const rows = (g.volume_series || []).map(d => {
+      const total = d.hip4_usd + d.hip3_usd + d.hl_usd;
+      return {
+        date: d.date,
+        fees: d.fees_usd,
+        bps: total > 0 ? d.fees_usd / total * 10000 : 0,
+      };
+    });
+    lineChart("chart_fees_daily", rows, [
+      { key: "fees", color: "rgb(255,140,60)", width: 2 },
+    ], "date", d => `${d.date}<br>Fees: <b>${fmtBig(d.fees)}</b>`, { height: 200 });
+    lineChart("chart_fee_ratio", rows, [
+      { key: "bps", color: "rgb(96,165,250)", width: 2 },
+    ], "date", d => `${d.date}<br>Effective rate: <b>${d.bps.toFixed(2)} bps</b>`, {
+      height: 200, fmt: v => v.toFixed(1),
+    });
+  }
+
+  // ── Navigation ────────────────────────────────────────────────────────────
+
+  document.querySelectorAll(".nav-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      const sec = btn.dataset.section;
+      document.querySelectorAll(".section").forEach(s => s.classList.remove("visible"));
+      document.getElementById(`section_${sec}`)?.classList.add("visible");
+      document.body.classList.remove("nav-open"); // close mobile drawer
+    });
+  });
+
+  // Sub-navigation inside the System tab
+  document.querySelectorAll("#section_system .subnav-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#section_system .subnav-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      const sub = btn.dataset.sub;
+      document.querySelectorAll("#section_system .subsection").forEach(s => s.classList.remove("visible"));
+      document.getElementById(`sub_${sub}`)?.classList.add("visible");
+    });
+  });
+
+  // Mobile hamburger menu
+  document.getElementById("nav_toggle").addEventListener("click", () => {
+    document.body.classList.toggle("nav-open");
+  });
+  document.getElementById("nav_backdrop").addEventListener("click", () => {
+    document.body.classList.remove("nav-open");
+  });
+
+  document.querySelectorAll(".filter-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      currentFilter = btn.dataset.filter;
+      loadClaims();
+    });
+  });
+
+  // Graphs : lazy-load au premier clic sur l'onglet, toggle 30/90/180, refresh
+  document.querySelector('.nav-btn[data-section="graphs"]')?.addEventListener("click", () => {
+    if (adminToken && !graphsLoadedOnce) { graphsLoadedOnce = true; loadGraphs(); }
+  });
+  document.querySelectorAll("#graphs_range .range-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#graphs_range .range-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      graphsDays = parseInt(btn.dataset.days, 10) || 30;
+      if (adminToken) loadGraphs();
+    });
+  });
+  document.getElementById("refresh_graphs_btn")?.addEventListener("click", () => { if (adminToken) loadGraphs(); });
+
+  document.getElementById("refresh_claims_btn").addEventListener("click", loadClaims);
+  document.getElementById("logout_btn").addEventListener("click", logout);
+  document.getElementById("login_btn").addEventListener("click", tryLogin);
+  document.getElementById("login_token").addEventListener("keydown", e => {
+    if (e.key === "Enter") tryLogin();
+  });
+
+  // ── News reformulation ──────────────────────────────────────────────────────
+
+  function renderNewsVariants(variants) {
+    const wrap = document.getElementById("news_results");
+    if (!variants || !variants.length) {
+      wrap.innerHTML = '<div class="empty-state">No variants returned.</div>';
+      return;
+    }
+    wrap.innerHTML = "";
+    variants.forEach((v, i) => {
+      const text = String(v.text || "");
+      const len = text.length;
+      const over = len > 280;
+      const card = document.createElement("div");
+      card.className = "table-wrap";
+      card.style.padding = "14px 16px";
+      card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-size:12px;font-weight:600;color:#35f0c2;text-transform:uppercase;letter-spacing:.05em">${escapeHtml(v.angle || "Variant")}</div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <span style="font-size:11px;color:${over ? "#ff6b6b" : "rgba(255,255,255,0.4)"}">${len}/280</span>
+            <button class="action-btn news-copy-btn" data-i="${i}" style="font-size:11px;padding:5px 12px">Copy</button>
+          </div>
+        </div>
+        <div style="color:rgba(255,255,255,0.85);line-height:1.55;white-space:pre-wrap">${escapeHtml(text)}</div>`;
+      wrap.appendChild(card);
+    });
+    wrap.querySelectorAll(".news-copy-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const v = variants[parseInt(btn.dataset.i, 10)];
+        try {
+          await navigator.clipboard.writeText(String(v.text || ""));
+          const prev = btn.textContent;
+          btn.textContent = "Copied ✓";
+          setTimeout(() => { btn.textContent = prev; }, 1500);
+        } catch (e) { /* clipboard blocked - ignore */ }
+      });
+    });
+  }
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  document.getElementById("news_submit_btn")?.addEventListener("click", async () => {
+    const input = document.getElementById("news_input").value.trim();
+    const errEl = document.getElementById("news_err");
+    const btn = document.getElementById("news_submit_btn");
+    const results = document.getElementById("news_results");
+    errEl.textContent = "";
+    if (!input) { errEl.textContent = "Paste some text first."; return; }
+    btn.disabled = true;
+    const prevLabel = btn.textContent;
+    btn.textContent = "Sending…";
+    try {
+      const { id } = await apiFetch("/api/admin/news/submit", {
+        method: "POST",
+        body: JSON.stringify({ text: input }),
+      });
+      // Queued. Poll the list until the Claude /loop worker marks it done.
+      btn.textContent = "Waiting for worker…";
+      results.innerHTML = '<div class="loading-state">Queued - waiting for the Claude worker (/loop) to reformulate…</div>';
+      const deadline = Date.now() + 5 * 60 * 1000; // 5 min timeout
+      let done = null;
+      while (Date.now() < deadline) {
+        await sleep(3000);
+        const data = await apiFetch("/api/admin/news/list");
+        const item = (data.items || []).find(it => it.id === id);
+        if (item && item.status === "done") { done = item; break; }
+      }
+      if (done) {
+        renderNewsVariants(done.variants || []);
+      } else {
+        errEl.textContent = "Timed out - is a Claude /loop worker running? The item stays queued; you can retry later.";
+        results.innerHTML = "";
+      }
+    } catch (e) {
+      errEl.textContent = e.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prevLabel;
+    }
+  });
+
+  // ── Claims ────────────────────────────────────────────────────────────────
+
+  async function loadClaims() {
+    const body = document.getElementById("claims_table_body");
+    body.innerHTML = '<div class="loading-state">Loading…</div>';
+    try {
+      const statusParam = currentFilter ? `?status=${encodeURIComponent(currentFilter)}` : "";
+      const [data, summary] = await Promise.all([
+        apiFetch(`/api/admin/referral/claims${statusParam}`),
+        apiFetch(`/api/admin/referral/summary`),
+      ]);
+      const claims = data.claims || [];
+
+      // Update stats from all claims (fetch all for stats)
+      updateClaimsStats(claims);
+      document.getElementById("stat_total_owed").textContent = fmtUsd(summary.total_owed_usd || 0);
+      renderClaimsTable(claims);
+      renderReferralSummaryTable(summary.accounts || []);
+    } catch (e) {
+      const errDiv = document.createElement("div");
+      errDiv.className = "empty-state";
+      errDiv.style.color = "#ff6b6b";
+      errDiv.textContent = e.message;
+      body.innerHTML = "";
+      body.appendChild(errDiv);
+    }
+  }
+
+  function updateClaimsStats(claims) {
+    const pending = claims.filter(c => c.status === "pending");
+    const paid = claims.filter(c => c.status === "paid");
+    document.getElementById("stat_pending_count").textContent = pending.length;
+    document.getElementById("stat_pending_amount").textContent =
+      fmtUsd(pending.reduce((s, c) => s + Number(c.amount || 0), 0));
+    document.getElementById("stat_paid_amount").textContent =
+      fmtUsd(paid.reduce((s, c) => s + Number(c.amount || 0), 0));
+    document.getElementById("stat_total_count").textContent = claims.length;
+
+    const title = document.getElementById("claims_table_title");
+    const label = currentFilter === "pending" ? "Pending claims" : currentFilter === "paid" ? "Paid claims" : "All claims";
+    title.textContent = `${label} (${claims.length})`;
+  }
+
+  function renderClaimsTable(claims) {
+    const body = document.getElementById("claims_table_body");
+    if (!claims.length) {
+      body.innerHTML = '<div class="empty-state">No claims found.</div>';
+      return;
+    }
+    body.innerHTML = "";
+    claims.forEach(claim => {
+      const row = document.createElement("div");
+      row.className = "table-cols table-row";
+      const isPending = claim.status === "pending";
+      row.innerHTML = `
+        <div class="wallet-cell" data-label="Wallet" title="${escapeHtml(claim.account || "")}" style="font-size:11px;word-break:break-all">${escapeHtml(claim.account || "-")}</div>
+        <div class="amount-cell" data-label="Amount">${escapeHtml(fmtUsd(claim.amount))}</div>
+        <div data-label="Requested">${escapeHtml(fmtDate(claim.requested_at))}</div>
+        <div data-label="Status"><span class="status-pill ${claim.status === "paid" ? "paid" : "pending"}">${escapeHtml(claim.status)}</span></div>
+        <div data-label="Action">
+          ${isPending
+            ? `<button class="action-btn pay-btn" data-id="${escapeHtml(claim.id)}" data-amount="${escapeHtml(claim.amount)}" data-wallet="${escapeHtml(claim.account)}">Mark paid</button>`
+            : `<span style="color:rgba(255,255,255,0.3);font-size:12px">${claim.tx_note ? "tx: " + escapeHtml(claim.tx_note.slice(0, 12)) + "…" : "-"}</span>`
+          }
+        </div>
+      `;
+      body.appendChild(row);
+    });
+
+    document.querySelectorAll(".pay-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        pendingClaimId = btn.dataset.id;
+        const amount = fmtUsd(btn.dataset.amount);
+        const wallet = shortWallet(btn.dataset.wallet);
+        document.getElementById("pay_modal_desc").textContent =
+          `Confirm payment of ${amount} to ${wallet}`;
+        document.getElementById("pay_tx_note").value = "";
+        document.getElementById("pay_admin_note").value = "";
+        document.getElementById("pay_err").textContent = "";
+        document.getElementById("pay_modal").classList.add("visible");
+      });
+    });
+  }
+
+  function renderReferralSummaryTable(accounts) {
+    const body = document.getElementById("referral_summary_table_body");
+    if (!accounts.length) {
+      body.innerHTML = '<div class="empty-state">No referral commissions recorded.</div>';
+      return;
+    }
+    body.innerHTML = "";
+    accounts.forEach(acct => {
+      const row = document.createElement("div");
+      row.className = "table-cols table-row";
+      row.innerHTML = `
+        <div class="wallet-cell" data-label="Wallet" title="${escapeHtml(acct.account || "")}" style="font-size:11px;word-break:break-all">${escapeHtml(acct.account || "-")}</div>
+        <div data-label="Gagné">${escapeHtml(fmtUsd(acct.earned_usd))}</div>
+        <div data-label="Réclamé">${escapeHtml(fmtUsd(acct.claimed_usd))}</div>
+        <div class="amount-cell" data-label="Dû">${escapeHtml(fmtUsd(acct.owed_usd))}</div>
+      `;
+      body.appendChild(row);
+    });
+  }
+
+  // ── Pay modal ─────────────────────────────────────────────────────────────
+
+  document.getElementById("pay_cancel_btn").addEventListener("click", closePayModal);
+  document.getElementById("pay_modal").addEventListener("click", e => {
+    if (e.target === e.currentTarget) closePayModal();
+  });
+
+  function closePayModal() {
+    document.getElementById("pay_modal").classList.remove("visible");
+    pendingClaimId = null;
+  }
+
+  document.getElementById("pay_confirm_btn").addEventListener("click", async () => {
+    if (!pendingClaimId) return;
+    const txNote = document.getElementById("pay_tx_note").value.trim();
+    const adminNote = document.getElementById("pay_admin_note").value.trim();
+    const errEl = document.getElementById("pay_err");
+    const confirmBtn = document.getElementById("pay_confirm_btn");
+    errEl.textContent = "";
+    confirmBtn.disabled = true;
+    try {
+      await apiFetch("/api/admin/referral/mark_paid", {
+        method: "POST",
+        body: JSON.stringify({
+          admin_token: adminToken,
+          claim_id: pendingClaimId,
+          tx_note: txNote,
+          admin_note: adminNote,
+        }),
+      });
+      closePayModal();
+      loadClaims();
+    } catch (e) {
+      errEl.textContent = e.message;
+    } finally {
+      confirmBtn.disabled = false;
+    }
+  });
+
+  // ── Stats ─────────────────────────────────────────────────────────────────
+
+  async function loadStats() {
+    try {
+      const data = await apiFetch("/api/admin/stats/overview");
+      document.getElementById("stat_unique_addresses").textContent = data.unique_connected_addresses ?? "-";
+      document.getElementById("stat_active_users").textContent = data.active_users ?? "-";
+      document.getElementById("stat_daily_volume").textContent = fmtBig(data.daily_volume_usd);
+      document.getElementById("stat_all_time_volume").textContent = fmtBig(data.all_time_volume_usd);
+    } catch { /* ignore */ }
+    loadWallets();
+    loadExtendedBuilder();
+    loadRisexBuilder();
+    loadQfexBuilder();
+  }
+
+  // ── Extended Builder (revenus fees 1 bps) ────────────────────────────────
+
+  const fmtFee = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return "-";
+    return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  };
+
+  async function loadExtendedBuilder() {
+    const daysBody = document.getElementById("extb_days_body");
+    const weeksBody = document.getElementById("extb_weeks_body");
+    try {
+      const data = await apiFetch("/api/admin/extended_builder");
+      if (data.error) {
+        const msg = `<div class="loading-state">${data.error === "builder_credentials_missing" ? "Builder credentials not saved on server" : data.error}</div>`;
+        if (daysBody) daysBody.innerHTML = msg;
+        if (weeksBody) weeksBody.innerHTML = msg;
+        return;
+      }
+      const s = data.summary || {};
+      document.getElementById("extb_today").textContent = fmtFee(s.today?.fees);
+      document.getElementById("extb_week").textContent = fmtFee(s.this_week?.fees);
+      document.getElementById("extb_last_week").textContent = fmtFee(s.last_week?.fees);
+      document.getElementById("extb_all_time").textContent = fmtFee(s.all_time?.fees);
+      const row = (label, b) => `
+        <div class="table-cols" style="grid-template-columns:1.2fr 1fr 1fr 0.7fr">
+          <div>${label}</div>
+          <div style="color:#34eda4">${fmtFee(b.fees)}</div>
+          <div>${fmtBig(b.volume)}</div>
+          <div>${b.trades ?? 0}</div>
+        </div>`;
+      const days = (data.days || []).slice(0, 14);
+      const weeks = (data.weeks || []).slice(0, 8);
+      if (daysBody) daysBody.innerHTML = days.length ? days.map((d) => row(d.date, d)).join("") : '<div class="loading-state">No builder trades yet.</div>';
+      if (weeksBody) weeksBody.innerHTML = weeks.length ? weeks.map((w) => row(w.week, w)).join("") : '<div class="loading-state">No builder trades yet.</div>';
+    } catch (e) {
+      const msg = '<div class="loading-state">Failed to load builder stats.</div>';
+      if (daysBody) daysBody.innerHTML = msg;
+      if (weeksBody) weeksBody.innerHTML = msg;
+    }
+  }
+  document.getElementById("refresh_ext_builder_btn")?.addEventListener("click", loadExtendedBuilder);
+
+  // ── RISEx Builder (revenus estimés : RISEx ne publie pas de stats par builder) ──
+
+  async function loadRisexBuilder() {
+    const daysBody = document.getElementById("rxb_days_body");
+    const weeksBody = document.getElementById("rxb_weeks_body");
+    try {
+      const data = await apiFetch("/api/admin/risex_builder");
+      const s = data.summary || {};
+      document.getElementById("rxb_today").textContent = fmtFee(s.today?.fees);
+      document.getElementById("rxb_week").textContent = fmtFee(s.this_week?.fees);
+      document.getElementById("rxb_all_time").textContent = fmtFee(s.all_time?.fees);
+      const acc = data.accounts || {};
+      document.getElementById("rxb_accounts").textContent = `${acc.connected ?? 0} / ${acc.approved ?? 0}`;
+      const rel = data.relayer || {};
+      const relEl = document.getElementById("rxb_relayer");
+      if (!rel.configured) {
+        relEl.textContent = "Not configured";
+        relEl.style.color = "rgb(255,140,60)";
+      } else if (rel.error) {
+        relEl.textContent = "Unreadable";
+        relEl.title = rel.error;
+      } else {
+        relEl.textContent = `${Number(rel.balance_eth).toFixed(6)} ETH`;
+        relEl.title = rel.address || "";
+        relEl.style.color = rel.low ? "rgb(255,140,60)" : "";
+      }
+      const row = (label, b) => `
+        <div class="table-cols" style="grid-template-columns:1.2fr 1fr 1fr 0.7fr">
+          <div>${label}</div>
+          <div style="color:rgb(255,140,60)">${fmtFee(b.fees)}</div>
+          <div>${fmtBig(b.volume)}</div>
+          <div>${b.sessions ?? 0}</div>
+        </div>`;
+      const days = (data.days || []).slice(0, 14);
+      const weeks = (data.weeks || []).slice(0, 8);
+      if (daysBody) daysBody.innerHTML = days.length ? days.map((d) => row(d.date, d)).join("") : '<div class="loading-state">No RISEx session yet.</div>';
+      if (weeksBody) weeksBody.innerHTML = weeks.length ? weeks.map((w) => row(w.week, w)).join("") : '<div class="loading-state">No RISEx session yet.</div>';
+    } catch (e) {
+      const msg = '<div class="loading-state">Failed to load RISEx builder stats.</div>';
+      if (daysBody) daysBody.innerHTML = msg;
+      if (weeksBody) weeksBody.innerHTML = msg;
+    }
+  }
+  document.getElementById("refresh_risex_builder_btn")?.addEventListener("click", loadRisexBuilder);
+
+  // ── QFEX Builder (réel : builder_rewards du compte ; sessions : frais × 50 %) ──
+
+  async function loadQfexBuilder() {
+    const daysBody = document.getElementById("qxb_days_body");
+    const weeksBody = document.getElementById("qxb_weeks_body");
+    try {
+      const data = await apiFetch("/api/admin/qfex_builder");
+      const s = data.summary || {};
+      const rewEl = document.getElementById("qxb_rewards");
+      if (data.builder_rewards === null || data.builder_rewards === undefined) {
+        rewEl.textContent = data.builder_rewards_error ? "Unreadable" : "No read key";
+        rewEl.title = data.builder_rewards_error || "Set QFEX_BUILDER_READ_PUBLIC_KEY / _SECRET_KEY (read-only key)";
+        rewEl.style.color = "rgb(255,140,60)";
+      } else {
+        rewEl.textContent = fmtFee(data.builder_rewards);
+        rewEl.title = "";
+        rewEl.style.color = "";
+      }
+      document.getElementById("qxb_today").textContent = fmtFee(s.today?.fees);
+      document.getElementById("qxb_week").textContent = fmtFee(s.this_week?.fees);
+      document.getElementById("qxb_all_time").textContent = fmtFee(s.all_time?.fees);
+      document.getElementById("qxb_accounts").textContent = `${data.accounts?.connected ?? 0}`;
+      const row = (label, b) => `
+        <div class="table-cols" style="grid-template-columns:1.2fr 1fr 1fr 0.7fr">
+          <div>${label}</div>
+          <div style="color:rgb(255,140,60)">${fmtFee(b.fees)}</div>
+          <div>${fmtBig(b.volume)}</div>
+          <div>${b.sessions ?? 0}</div>
+        </div>`;
+      const days = (data.days || []).slice(0, 14);
+      const weeks = (data.weeks || []).slice(0, 8);
+      if (daysBody) daysBody.innerHTML = days.length ? days.map((d) => row(d.date, d)).join("") : '<div class="loading-state">No QFEX session yet.</div>';
+      if (weeksBody) weeksBody.innerHTML = weeks.length ? weeks.map((w) => row(w.week, w)).join("") : '<div class="loading-state">No QFEX session yet.</div>';
+    } catch (e) {
+      const msg = '<div class="loading-state">Failed to load QFEX builder stats.</div>';
+      if (daysBody) daysBody.innerHTML = msg;
+      if (weeksBody) weeksBody.innerHTML = msg;
+    }
+  }
+  document.getElementById("refresh_qfex_builder_btn")?.addEventListener("click", loadQfexBuilder);
+
+  // ── Wallets ───────────────────────────────────────────────────────────────
+
+  async function loadWallets() {
+    const body = document.getElementById("wallets_table_body");
+    body.innerHTML = '<div class="loading-state">Loading…</div>';
+    try {
+      const data = await apiFetch(`/api/admin/stats/wallets`);
+      const wallets = data.wallets || [];
+      if (!wallets.length) {
+        body.innerHTML = '<div class="empty-state">No wallets found.</div>';
+        return;
+      }
+      const fmtVol = v => {
+        const n = Number(v || 0);
+        if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+        if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
+        return `$${n.toFixed(2)}`;
+      };
+      body.innerHTML = "";
+      const fmtPpm = v => {
+        const n = Number(v || 0);
+        return `${n >= 0 ? "+" : ""}${n.toFixed(2)} $`;
+      };
+      wallets.forEach((w, i) => {
+        const ppm = Number(w.pnl_per_million_usd || 0) / 10; // affiché en $/100k
+        const ppmColor = ppm >= 0 ? "#4ade80" : "#f87171";
+        const row = document.createElement("div");
+        row.className = "table-cols wallets-cols table-row";
+        row.innerHTML = `
+          <div data-label="#" style="color:rgba(255,255,255,0.3);font-size:12px">${i + 1}</div>
+          <div class="wallet-cell copy-wallet" data-label="Wallet" title="${escapeHtml(w.address || "")}" style="cursor:pointer">${escapeHtml(shortWallet(w.address))}</div>
+          <div class="amount-cell" data-label="Volume">${escapeHtml(fmtVol(w.volume_usd))}</div>
+          <div class="amount-cell" data-label="PnL / $100k" style="color:${ppmColor}">${fmtPpm(ppm)}</div>
+          <div data-label="Status">${w.active ? '<span class="status-pill paid">active</span>' : '<span style="color:rgba(255,255,255,0.25);font-size:12px">-</span>'}</div>
+          <div data-label=""><button class="action-btn detail-btn" data-addr="${escapeHtml(w.address || "")}" style="padding:3px 10px;font-size:11px">Detail</button></div>
+        `;
+        row.querySelector(".copy-wallet")?.addEventListener("click", () => {
+          navigator.clipboard.writeText(w.address || "").catch(() => {});
+        });
+        row.querySelector(".detail-btn")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          toggleWalletDetail(w.address, row);
+        });
+        body.appendChild(row);
+      });
+      // Update avg PPM stat card
+      const avgPpm = Number(data.avg_pnl_per_million_usd || 0) / 10; // affiché en $/100k
+      const avgPpmEl = document.getElementById("stat_avg_ppm");
+      if (avgPpmEl) {
+        avgPpmEl.textContent = `${avgPpm >= 0 ? "+" : ""}${avgPpm.toFixed(2)} $`;
+        avgPpmEl.style.color = avgPpm >= 0 ? "#4ade80" : "#f87171";
+      }
+    } catch (e) {
+      const errDiv = document.createElement("div");
+      errDiv.className = "empty-state";
+      errDiv.style.color = "#ff6b6b";
+      errDiv.textContent = e.message;
+      body.innerHTML = "";
+      body.appendChild(errDiv);
+    }
+  }
+
+  async function toggleWalletDetail(address, rowEl) {
+    const existing = rowEl.nextElementSibling;
+    if (existing && existing.classList.contains("wallet-detail-panel")) {
+      existing.remove();
+      return;
+    }
+    const panel = document.createElement("div");
+    panel.className = "wallet-detail-panel";
+    panel.innerHTML = '<div class="loading-state" style="padding:12px">Loading…</div>';
+    rowEl.after(panel);
+    try {
+      const data = await apiFetch(`/api/admin/stats/wallet_detail?address=${encodeURIComponent(address)}`);
+      const fmtV = v => {
+        const n = Number(v || 0);
+        if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+        if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
+        return `$${n.toFixed(2)}`;
+      };
+      let html = `<div style="font-family:monospace;font-size:12px;color:rgba(255,255,255,0.55);margin-bottom:12px;word-break:break-all;user-select:all;cursor:pointer" title="Click to copy" onclick="navigator.clipboard.writeText('${escapeHtml(address)}')">${escapeHtml(address)}</div>`;
+      // Referred by banner + change/set referrer
+      if (data.referred_by) {
+        const discountTxt = data.fee_discount_pct ? ` · −${data.fee_discount_pct}% fees` : "";
+        html += `<div class="ref-banner" style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 12px;background:rgba(53,240,194,0.06);border:1px solid rgba(53,240,194,0.15);border-radius:8px;font-size:12px;flex-wrap:wrap">
+          <span style="color:rgba(255,255,255,0.5)">Referred by</span>
+          <span class="copy-wallet" style="font-family:monospace;color:#ff6b2c;cursor:pointer" title="${escapeHtml(data.referred_by)}" onclick="navigator.clipboard.writeText('${escapeHtml(data.referred_by)}')">${escapeHtml(shortWallet(data.referred_by))}</span>
+          <span style="color:rgba(255,255,255,0.4)">${escapeHtml(discountTxt)}</span>
+          <span style="flex:1"></span>
+          <button class="action-btn change-ref-btn" style="padding:2px 8px;font-size:11px">Change</button>
+          <button class="action-btn remove-ref-btn" style="padding:2px 8px;font-size:11px;border-color:rgba(248,113,113,0.3);color:#f87171">Remove</button>
+        </div>`;
+      } else {
+        html += `<div class="ref-banner" style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;font-size:12px">
+          <span style="color:rgba(255,255,255,0.35)">No referrer</span>
+          <span style="flex:1"></span>
+          <button class="action-btn set-ref-btn" style="padding:2px 8px;font-size:11px">Set referrer</button>
+        </div>`;
+      }
+      html += `<div class="detail-grid">
+        <div class="detail-card"><div class="detail-label">Total volume</div><div class="detail-value accent">${fmtV(data.total_volume_usd)}</div></div>
+        <div class="detail-card"><div class="detail-label">Fees paid</div><div class="detail-value">${fmtV(data.total_fees_usd)}</div></div>
+        <div class="detail-card"><div class="detail-label">Sessions</div><div class="detail-value">${data.sessions_count}</div></div>
+        <div class="detail-card"><div class="detail-label">Referrals</div><div class="detail-value">${data.referrals_count}</div></div>
+        <div class="detail-card"><div class="detail-label">Refs fees generated</div><div class="detail-value">${fmtV(data.referrals_fees_usd)}</div></div>
+        <div class="detail-card"><div class="detail-label">Commission earned</div><div class="detail-value accent">${fmtV(data.commission_earned_usd)}</div></div>
+      </div>`;
+
+      // Weekly volume table
+      if (data.weeks && data.weeks.length) {
+        html += `<div class="detail-subtitle">Weekly breakdown</div>`;
+        html += `<div class="week-row week-head"><div>Week</div><div>Volume</div><div>Fees</div><div>PnL</div></div>`;
+        data.weeks.forEach(w => {
+          const pnlColor = Number(w.pnl_usd) >= 0 ? "#4ade80" : "#f87171";
+          html += `<div class="week-row">
+            <div>${escapeHtml(w.week)}</div>
+            <div>${fmtV(w.volume_usd)}</div>
+            <div>${fmtV(w.fees_usd)}</div>
+            <div style="color:${pnlColor}">${fmtUsd(w.pnl_usd)}</div>
+          </div>`;
+        });
+      }
+
+      // Referees table
+      if (data.referees && data.referees.length) {
+        html += `<div class="detail-subtitle">Referrals detail</div>`;
+        html += `<div class="ref-row ref-head"><div>Wallet</div><div>Volume</div><div>Fees paid</div></div>`;
+        data.referees.forEach(r => {
+          html += `<div class="ref-row">
+            <div class="wallet-cell">${escapeHtml(shortWallet(r.address))}</div>
+            <div>${fmtV(r.volume_usd)}</div>
+            <div>${fmtV(r.fees_usd)}</div>
+          </div>`;
+        });
+      }
+
+      panel.innerHTML = html;
+
+      // Referrer change/set/remove handlers
+      const changeBtn = panel.querySelector(".change-ref-btn");
+      const removeBtn = panel.querySelector(".remove-ref-btn");
+      const setBtn = panel.querySelector(".set-ref-btn");
+      const doChangeRef = async (newRef) => {
+        try {
+          await apiFetch("/api/admin/referral/change_referrer", {
+            method: "POST",
+            body: JSON.stringify({ admin_token: adminToken, address, new_referrer: newRef }),
+          });
+          // Refresh panel
+          panel.remove();
+          toggleWalletDetail(address, rowEl);
+        } catch (err) {
+          alert("Error: " + err.message);
+        }
+      };
+      if (changeBtn) {
+        changeBtn.addEventListener("click", () => {
+          const val = prompt("New referrer address:");
+          if (val !== null && val.trim()) doChangeRef(val.trim());
+        });
+      }
+      if (removeBtn) {
+        removeBtn.addEventListener("click", () => {
+          if (confirm("Remove referrer for this wallet?")) doChangeRef("");
+        });
+      }
+      if (setBtn) {
+        setBtn.addEventListener("click", () => {
+          const val = prompt("Referrer address:");
+          if (val !== null && val.trim()) doChangeRef(val.trim());
+        });
+      }
+    } catch (e) {
+      panel.innerHTML = `<div style="color:#ff6b6b;font-size:12px">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  document.getElementById("refresh_wallets_btn").addEventListener("click", loadWallets);
+
+  // ── HIP-4 wallets ─────────────────────────────────────────────────────────
+
+  async function loadWalletsHip4() {
+    const body = document.getElementById("hip4_wallets_table_body");
+    if (!body) return;
+    body.innerHTML = '<div class="loading-state">Loading…</div>';
+    try {
+      const data = await apiFetch(`/api/admin/stats/wallets?mode=hip4`);
+      const wallets = data.wallets || [];
+      // Stat cards
+      const totalVol = wallets.reduce((acc, w) => acc + Number(w.volume_usd || 0), 0);
+      const activeCnt = wallets.filter(w => w.active).length;
+      const fmtVol = v => {
+        const n = Number(v || 0);
+        if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+        if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
+        return `$${n.toFixed(2)}`;
+      };
+      const fmtPpm = v => {
+        const n = Number(v || 0);
+        return `${n >= 0 ? "+" : ""}${n.toFixed(2)} $`;
+      };
+      const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+      setText("stat_hip4_wallet_count", String(wallets.length));
+      setText("stat_hip4_total_volume", fmtVol(totalVol));
+      setText("stat_hip4_active_count", String(activeCnt));
+      const avgPpm = Number(data.avg_pnl_per_million_usd || 0) / 10; // affiché en $/100k
+      const avgEl = document.getElementById("stat_hip4_avg_ppm");
+      if (avgEl) {
+        avgEl.textContent = `${avgPpm >= 0 ? "+" : ""}${avgPpm.toFixed(2)} $`;
+        avgEl.style.color = avgPpm >= 0 ? "#4ade80" : "#f87171";
+      }
+      if (!wallets.length) {
+        body.innerHTML = '<div class="empty-state">No wallet has run a HIP-4 session yet.</div>';
+        return;
+      }
+      body.innerHTML = "";
+      wallets.forEach((w, i) => {
+        const ppm = Number(w.pnl_per_million_usd || 0) / 10; // affiché en $/100k
+        const ppmColor = ppm >= 0 ? "#4ade80" : "#f87171";
+        const row = document.createElement("div");
+        row.className = "table-cols wallets-cols table-row";
+        row.innerHTML = `
+          <div data-label="#" style="color:rgba(255,255,255,0.3);font-size:12px">${i + 1}</div>
+          <div class="wallet-cell copy-wallet" data-label="Wallet" title="${escapeHtml(w.address || "")}" style="cursor:pointer">${escapeHtml(shortWallet(w.address))}</div>
+          <div class="amount-cell" data-label="Volume">${escapeHtml(fmtVol(w.volume_usd))}</div>
+          <div class="amount-cell" data-label="PnL / $100k" style="color:${ppmColor}">${fmtPpm(ppm)}</div>
+          <div data-label="Status">${w.active ? '<span class="status-pill paid">active</span>' : '<span style="color:rgba(255,255,255,0.25);font-size:12px">-</span>'}</div>
+          <div data-label=""><button class="action-btn detail-btn" data-addr="${escapeHtml(w.address || "")}" style="padding:3px 10px;font-size:11px">Detail</button></div>
+        `;
+        row.querySelector(".copy-wallet")?.addEventListener("click", () => {
+          navigator.clipboard.writeText(w.address || "").catch(() => {});
+        });
+        row.querySelector(".detail-btn")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          toggleWalletDetail(w.address, row);
+        });
+        body.appendChild(row);
+      });
+    } catch (e) {
+      const errDiv = document.createElement("div");
+      errDiv.className = "empty-state";
+      errDiv.style.color = "#ff6b6b";
+      errDiv.textContent = e.message;
+      body.innerHTML = "";
+      body.appendChild(errDiv);
+    }
+  }
+
+  document.getElementById("refresh_hip4_btn")?.addEventListener("click", loadWalletsHip4);
+  document.querySelectorAll(".nav-btn").forEach(btn => {
+    if (btn.dataset.section === "hip4") {
+      btn.addEventListener("click", () => { if (adminToken) loadWalletsHip4(); });
+    }
+    if (btn.dataset.section === "builder") {
+      btn.addEventListener("click", () => { if (adminToken) loadBuilderRevenue(); });
+    }
+  });
+  document.getElementById("refresh_builder_btn")?.addEventListener("click", () => { if (adminToken) { loadBuilderRevenue(); loadExtendedBuilder(); } });
+
+  function builderFmtUsd(v) {
+    if (v === null || v === undefined) return "—";
+    return "$" + Number(v).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function builderFmtWeek(iso) {
+    if (!iso) return "—";
+    return new Date(iso).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric", timeZone: "Europe/Paris" });
+  }
+  async function loadBuilderRevenue() {
+    const note = document.getElementById("builder_tracking_note");
+    let data;
+    try {
+      data = await apiFetch("/api/admin/builder/revenue?weeks=12");
+    } catch (e) {
+      note.textContent = "Erreur de chargement : " + e;
+      return;
+    }
+    document.getElementById("builder_stale_badge").style.display = data.stale ? "inline" : "none";
+    document.getElementById("builder_total").textContent = builderFmtUsd(data.total_cumulative_usd);
+    const bd = document.getElementById("builder_total_breakdown");
+    const toks = (data.by_token || []).filter(t => Number(t.rewards_usd) > 0);
+    bd.textContent = toks.length > 1
+      ? toks.map(t => (t.token === 0 ? "USDC" : "token " + t.token) + " : " + builderFmtUsd(t.rewards_usd)).join("  ·  ")
+      : "";
+    document.getElementById("builder_dtd").textContent = builderFmtUsd(data.day_to_date_usd);
+    document.getElementById("builder_dtd_partial").style.display = data.day_to_date_partial ? "inline" : "none";
+    document.getElementById("builder_wtd").textContent = builderFmtUsd(data.week_to_date_usd);
+    document.getElementById("builder_wtd_partial").style.display = data.week_to_date_partial ? "inline" : "none";
+    const series = data.weekly_series || [];
+    const firstComplete = series.find(w => !w.incomplete);
+    document.getElementById("builder_prev").textContent = firstComplete ? builderFmtUsd(firstComplete.revenue_usd) : "—";
+    note.textContent = data.tracking_since_iso
+      ? ("Tracking onchain démarré le " + builderFmtWeek(data.tracking_since_iso) + " · source : builderRewards (info/referral)")
+      : "Aucun snapshot encore enregistré.";
+    // table helper (start field name differs: week_start / day_start)
+    const renderRows = (containerId, rows, startKey, fmtLabel) => {
+      const el = document.getElementById(containerId);
+      el.innerHTML = "";
+      if (!rows.length) { el.innerHTML = '<div class="loading-state">Aucune donnée.</div>'; return; }
+      rows.forEach(r => {
+        const row = document.createElement("div");
+        row.className = "table-cols";
+        row.style.gridTemplateColumns = "1fr 1fr";
+        if (r.incomplete) row.style.opacity = ".4";
+        const left = document.createElement("div");
+        left.textContent = fmtLabel(r[startKey]) + (r.incomplete ? " (tracking partiel)" : "");
+        const right = document.createElement("div");
+        right.textContent = r.incomplete ? "—" : builderFmtUsd(r.revenue_usd);
+        row.appendChild(left); row.appendChild(right);
+        el.appendChild(row);
+      });
+    };
+    renderRows("builder_weekly_rows", series, "week_start", builderFmtWeek);
+    renderRows("builder_daily_rows", data.daily_series || [], "day_start", builderFmtWeek);
+  }
+
+  async function loadHip4ActiveModes() {
+    const mode2Body = document.getElementById("hip4mm_active_body");
+    try {
+      const data = await apiFetch("/api/admin/hip4/active_modes");
+      const total = Number(data.total_active || 0);
+      const mode1 = Number(data.mode1_active || 0);
+      const mode2 = Number(data.mode2_active || 0);
+      const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+      setText("stat_hip4_total_active", String(total));
+      setText("stat_hip4_mode_split", `Mode 1: ${mode1} · Mode 2: ${mode2}`);
+      setText("stat_hip4mm_total_active", String(total));
+      setText("stat_hip4mm_active_count", String(mode2));
+      setText("stat_hip4mm_mode_split", `${mode1} / ${mode2}`);
+
+      if (mode2Body) {
+        const sessions = Array.isArray(data.mode2_sessions) ? data.mode2_sessions : [];
+        if (!sessions.length) {
+          mode2Body.innerHTML = '<div class="empty-state">No active mode-2 session.</div>';
+        } else {
+          mode2Body.innerHTML = "";
+          sessions.forEach(s => {
+            const row = document.createElement("div");
+            row.className = "table-cols table-row";
+            row.style.gridTemplateColumns = "1fr 80px 130px 1fr 100px";
+            const label = s.outcome_id != null ? `outcome #${s.outcome_id}` : "";
+            row.innerHTML = `
+              <div class="wallet-cell copy-wallet" title="${escapeHtml(s.account || "")}" style="cursor:pointer">${escapeHtml(shortWallet(s.account || ""))}</div>
+              <div>${escapeHtml(String(s.slot ?? "-"))}</div>
+              <div style="font-family:monospace;color:rgb(255,140,60)">${escapeHtml(String(s.outcome_id ?? "-"))}</div>
+              <div>${escapeHtml(label || "-")}</div>
+              <div style="font-family:monospace;color:rgba(255,255,255,0.55)">${escapeHtml(String(s.pid ?? "-"))}</div>
+            `;
+            row.querySelector(".copy-wallet")?.addEventListener("click", () => {
+              navigator.clipboard.writeText(s.account || "").catch(() => {});
+            });
+            mode2Body.appendChild(row);
+          });
+        }
+      }
+      return data;
+    } catch (e) {
+      ["stat_hip4_total_active", "stat_hip4mm_total_active", "stat_hip4mm_active_count"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = "-";
+      });
+      const split = document.getElementById("stat_hip4_mode_split");
+      if (split) split.textContent = e.message;
+      const splitMm = document.getElementById("stat_hip4mm_mode_split");
+      if (splitMm) splitMm.textContent = "-";
+      if (mode2Body) mode2Body.innerHTML = `<div class="empty-state" style="color:#ff6b6b">${escapeHtml(e.message)}</div>`;
+      return null;
+    }
+  }
+
+  // ── HIP-4 Volume wallets ─────────────────────────────────────────────────
+
+  async function loadWalletsHip4Vol() {
+    const body = document.getElementById("hip4vol_volume_wallets_table_body");
+    if (!body) return;
+    body.innerHTML = '<div class="loading-state">Loading…</div>';
+    try {
+      const data = await apiFetch(`/api/admin/stats/wallets?mode=hip4vol`);
+      const wallets = data.wallets || [];
+      const totalVol = wallets.reduce((acc, w) => acc + Number(w.volume_usd || 0), 0);
+      const activeCnt = wallets.filter(w => w.active).length;
+      const fmtVol = v => {
+        const n = Number(v || 0);
+        if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+        if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
+        return `$${n.toFixed(2)}`;
+      };
+      const fmtPpm = v => {
+        const n = Number(v || 0);
+        return `${n >= 0 ? "+" : ""}${n.toFixed(2)} $`;
+      };
+      const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+      setText("stat_hip4vol_wallet_count", String(wallets.length));
+      setText("stat_hip4vol_total_volume", fmtVol(totalVol));
+      setText("stat_hip4vol_active_count", String(activeCnt));
+      loadHip4ActiveModes();
+      const avgPpm = Number(data.avg_pnl_per_million_usd || 0) / 10; // affiché en $/100k
+      const avgEl = document.getElementById("stat_hip4vol_avg_ppm");
+      if (avgEl) {
+        avgEl.textContent = `${avgPpm >= 0 ? "+" : ""}${avgPpm.toFixed(2)} $`;
+        avgEl.style.color = avgPpm >= 0 ? "#4ade80" : "#f87171";
+      }
+      if (!wallets.length) {
+        body.innerHTML = '<div class="empty-state">No wallet has run a HIP-4 volume session yet.</div>';
+        return;
+      }
+      body.innerHTML = "";
+      wallets.forEach((w, i) => {
+        const ppm = Number(w.pnl_per_million_usd || 0) / 10; // affiché en $/100k
+        const ppmColor = ppm >= 0 ? "#4ade80" : "#f87171";
+        const row = document.createElement("div");
+        row.className = "table-cols wallets-cols table-row";
+        row.innerHTML = `
+          <div data-label="#" style="color:rgba(255,255,255,0.3);font-size:12px">${i + 1}</div>
+          <div class="wallet-cell copy-wallet" data-label="Wallet" title="${escapeHtml(w.address || "")}" style="cursor:pointer">${escapeHtml(shortWallet(w.address))}</div>
+          <div class="amount-cell" data-label="Volume">${escapeHtml(fmtVol(w.volume_usd))}</div>
+          <div class="amount-cell" data-label="PnL / $100k" style="color:${ppmColor}">${fmtPpm(ppm)}</div>
+          <div data-label="Status">${w.active ? '<span class="status-pill paid">active</span>' : '<span style="color:rgba(255,255,255,0.25);font-size:12px">-</span>'}</div>
+          <div data-label=""><button class="action-btn detail-btn" data-addr="${escapeHtml(w.address || "")}" style="padding:3px 10px;font-size:11px">Detail</button></div>
+        `;
+        row.querySelector(".copy-wallet")?.addEventListener("click", () => {
+          navigator.clipboard.writeText(w.address || "").catch(() => {});
+        });
+        row.querySelector(".detail-btn")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          toggleWalletDetail(w.address, row);
+        });
+        body.appendChild(row);
+      });
+    } catch (e) {
+      const errDiv = document.createElement("div");
+      errDiv.className = "empty-state";
+      errDiv.style.color = "#ff6b6b";
+      errDiv.textContent = e.message;
+      body.innerHTML = "";
+      body.appendChild(errDiv);
+    }
+  }
+
+  document.getElementById("refresh_hip4vol_volume_btn")?.addEventListener("click", loadWalletsHip4Vol);
+
+  // ── HIP-4 Volume — special codes ─────────────────────────────────────────
+
+  async function loadHip4volCodes() {
+    const body = document.getElementById("hip4vol_codes_body");
+    if (!body) return;
+    body.innerHTML = '<div class="loading-state">Loading…</div>';
+    try {
+      const data = await apiFetch("/api/admin/hip4vol/codes");
+      const codes = Array.isArray(data) ? data : (data.codes || []);
+      if (!codes.length) {
+        body.innerHTML = '<div class="empty-state">No special codes yet.</div>';
+        return;
+      }
+      body.innerHTML = "";
+      codes.forEach(c => {
+        const feeDisplay = `$${(Number(c.fee_tenths || 0) * 5).toLocaleString("en-US")}/M`;
+        const places = `${c.claimed ?? 0}/${c.max_wallets ?? 0}`;
+        const remaining = c.remaining ?? ((c.max_wallets ?? 0) - (c.claimed ?? 0));
+        const claimedWallets = Array.isArray(c.claimed_wallets) ? c.claimed_wallets : [];
+        const row = document.createElement("div");
+        row.className = "table-cols table-row";
+        row.style.gridTemplateColumns = "1fr 120px 120px 120px 80px";
+        row.innerHTML = `
+          <div style="font-family:monospace;font-weight:600;color:rgb(255,140,60);display:flex;align-items:center;gap:8px">
+            <span class="hip4vol-code-toggle" style="cursor:pointer;color:rgba(255,255,255,0.5);user-select:none;width:12px;display:inline-block">${claimedWallets.length ? "▶" : ""}</span>
+            <span>${escapeHtml(c.code || "-")}</span>
+          </div>
+          <div style="color:rgba(255,255,255,0.75)">${escapeHtml(feeDisplay)}</div>
+          <div style="color:rgba(255,255,255,0.75)">${escapeHtml(places)}</div>
+          <div style="color:rgba(255,255,255,${remaining > 0 ? "0.75" : "0.3"})">${escapeHtml(String(remaining))}</div>
+          <div><button class="action-btn hip4vol-del-code-btn" data-code="${escapeHtml(c.code || "")}" style="background:rgba(255,80,80,0.15);border-color:rgba(255,80,80,0.3);color:#ff6b6b">Delete</button></div>
+        `;
+        row.querySelector(".hip4vol-del-code-btn").addEventListener("click", () => deleteHip4volCode(c.code));
+        body.appendChild(row);
+
+        // Collapsible detail row: wallets that have claimed this code
+        const detail = document.createElement("div");
+        detail.style.display = "none";
+        detail.style.padding = "4px 0 10px 32px";
+        if (claimedWallets.length) {
+          detail.innerHTML = claimedWallets.map(w =>
+            `<div class="copy-wallet" title="${escapeHtml(w)}" style="cursor:pointer;font-family:monospace;font-size:12px;color:rgba(255,255,255,0.7);padding:2px 0">${escapeHtml(w)}</div>`
+          ).join("");
+          detail.querySelectorAll(".copy-wallet").forEach((el, i) => {
+            el.addEventListener("click", () => navigator.clipboard.writeText(claimedWallets[i]).catch(() => {}));
+          });
+        } else {
+          detail.innerHTML = '<div style="color:rgba(255,255,255,0.4);font-size:12px">No wallets have used this code yet.</div>';
+        }
+        body.appendChild(detail);
+
+        const toggle = row.querySelector(".hip4vol-code-toggle");
+        if (toggle && claimedWallets.length) {
+          toggle.addEventListener("click", () => {
+            const open = detail.style.display !== "none";
+            detail.style.display = open ? "none" : "block";
+            toggle.textContent = open ? "▶" : "▼";
+          });
+        }
+      });
+    } catch (e) {
+      body.innerHTML = `<div class="empty-state" style="color:#ff6b6b">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  async function deleteHip4volCode(code) {
+    if (!confirm(`Delete code "${code}"?`)) return;
+    try {
+      await apiFetch("/api/admin/hip4vol/codes", {
+        method: "DELETE",
+        body: JSON.stringify({ code }),
+      });
+      loadHip4volCodes();
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  document.getElementById("hip4vol_create_code_btn")?.addEventListener("click", async () => {
+    const code = document.getElementById("hip4vol_code_input").value.trim();
+    const maxWallets = parseInt(document.getElementById("hip4vol_maxwallets_input").value, 10);
+    const feeTenths = parseInt(document.getElementById("hip4vol_feetenths_input").value, 10);
+    const errEl = document.getElementById("hip4vol_code_err");
+    errEl.textContent = "";
+    if (!code) { errEl.textContent = "Code is required."; return; }
+    if (!Number.isFinite(maxWallets) || maxWallets < 1) { errEl.textContent = "Max wallets must be ≥ 1."; return; }
+    if (!Number.isFinite(feeTenths) || feeTenths < 0) { errEl.textContent = "Fee tenths must be ≥ 0."; return; }
+    try {
+      await apiFetch("/api/admin/hip4vol/codes", {
+        method: "POST",
+        body: JSON.stringify({ code, max_wallets: maxWallets, fee_tenths: feeTenths }),
+      });
+      document.getElementById("hip4vol_code_input").value = "";
+      document.getElementById("hip4vol_maxwallets_input").value = "";
+      document.getElementById("hip4vol_feetenths_input").value = "80";
+      loadHip4volCodes();
+    } catch (e) {
+      errEl.textContent = e.message;
+    }
+  });
+
+  document.getElementById("refresh_hip4vol_codes_btn")?.addEventListener("click", loadHip4volCodes);
+
+  // ── HIP-4 Volume — privileged wallets ────────────────────────────────────
+
+  async function loadHip4volWallets() {
+    const body = document.getElementById("hip4vol_wallets_body");
+    if (!body) return;
+    body.innerHTML = '<div class="loading-state">Loading…</div>';
+    try {
+      const data = await apiFetch("/api/admin/hip4vol/privileged");
+      const wallets = Array.isArray(data) ? data : (data.privileged_wallets || data.wallets || []);
+      if (!wallets.length) {
+        body.innerHTML = '<div class="empty-state">No privileged wallets.</div>';
+        return;
+      }
+      body.innerHTML = "";
+      wallets.forEach(addr => {
+        const row = document.createElement("div");
+        row.className = "table-cols table-row";
+        row.style.gridTemplateColumns = "1fr 100px";
+        row.innerHTML = `
+          <div class="wallet-cell copy-wallet" title="${escapeHtml(addr)}" style="cursor:pointer">${escapeHtml(addr)}</div>
+          <div><button class="action-btn hip4vol-del-wallet-btn" data-addr="${escapeHtml(addr)}" style="background:rgba(255,80,80,0.15);border-color:rgba(255,80,80,0.3);color:#ff6b6b">Remove</button></div>
+        `;
+        row.querySelector(".copy-wallet")?.addEventListener("click", () => {
+          navigator.clipboard.writeText(addr).catch(() => {});
+        });
+        row.querySelector(".hip4vol-del-wallet-btn").addEventListener("click", () => removeHip4volWallet(addr));
+        body.appendChild(row);
+      });
+    } catch (e) {
+      body.innerHTML = `<div class="empty-state" style="color:#ff6b6b">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  async function removeHip4volWallet(wallet) {
+    if (!confirm(`Remove privileged access for ${shortWallet(wallet)}?`)) return;
+    try {
+      await apiFetch("/api/admin/hip4vol/privileged", {
+        method: "DELETE",
+        body: JSON.stringify({ wallet }),
+      });
+      loadHip4volWallets();
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  document.getElementById("hip4vol_add_wallet_btn")?.addEventListener("click", async () => {
+    const wallet = document.getElementById("hip4vol_wallet_input").value.trim();
+    const errEl = document.getElementById("hip4vol_wallet_err");
+    errEl.textContent = "";
+    if (!wallet) { errEl.textContent = "Wallet address is required."; return; }
+    try {
+      await apiFetch("/api/admin/hip4vol/privileged", {
+        method: "POST",
+        body: JSON.stringify({ wallet }),
+      });
+      document.getElementById("hip4vol_wallet_input").value = "";
+      loadHip4volWallets();
+    } catch (e) {
+      errEl.textContent = e.message;
+    }
+  });
+
+  document.getElementById("refresh_hip4vol_wallets_btn")?.addEventListener("click", loadHip4volWallets);
+
+  async function loadHip4volMarkets() {
+    const body = document.getElementById("hip4vol_markets_body");
+    if (!body) return;
+    try {
+      const data = await apiFetch("/api/admin/hip4vol/markets");
+      const rows = Array.isArray(data) ? data : (data.markets || []);
+      // Daily total volume of the hip4vol bot (all users, today)
+      const dailyEl = document.getElementById("stat_hip4vol_daily_volume");
+      if (dailyEl && !Array.isArray(data)) {
+        const dv = Number(data.daily_volume_usd || 0);
+        dailyEl.textContent = "$" + dv.toLocaleString("en-US", { maximumFractionDigits: 0 });
+      }
+      if (!rows.length) { body.innerHTML = '<div class="empty-state">No market activity yet.</div>'; return; }
+      body.innerHTML = "";
+      rows.slice(0, 100).forEach(m => {
+        const row = document.createElement("div");
+        row.className = "table-cols table-row";
+        row.style.gridTemplateColumns = "2fr 1.1fr 90px 140px";
+        const vol = "$" + Number(m.volume_usd || 0).toLocaleString("en-US", { maximumFractionDigits: 0 });
+        const cpm = "$" + (Number(m.cost_per_million_usd || 0) / 10).toLocaleString("en-US", { maximumFractionDigits: 1 }) + " / $100k";
+        row.innerHTML = `
+          <div class="copy-wallet" title="${escapeHtml(m.coin || "")}" style="cursor:default">${escapeHtml(m.label || m.coin || "-")}</div>
+          <div style="color:rgb(255,140,60);font-weight:600">${escapeHtml(vol)}</div>
+          <div style="color:rgba(255,255,255,0.7)">${Number(m.trades || 0)}</div>
+          <div style="color:rgba(255,255,255,0.75)">${escapeHtml(cpm)}</div>`;
+        body.appendChild(row);
+      });
+    } catch (e) {
+      body.innerHTML = `<div class="empty-state" style="color:#ff6b6b">${escapeHtml(e.message)}</div>`;
+    }
+  }
+  document.getElementById("refresh_hip4vol_markets_btn")?.addEventListener("click", loadHip4volMarkets);
+  // Collapsible "Most Traded Markets by Outcome" table (default collapsed, click arrow to expand)
+  (function () {
+    const toggle = document.getElementById("hip4vol_markets_toggle");
+    const wrap = document.getElementById("hip4vol_markets_wrap");
+    if (!toggle || !wrap) return;
+    const apply = () => {
+      const open = toggle.getAttribute("aria-expanded") === "true";
+      wrap.style.display = open ? "" : "none";
+    };
+    const flip = () => {
+      const open = toggle.getAttribute("aria-expanded") === "true";
+      toggle.setAttribute("aria-expanded", open ? "false" : "true");
+      apply();
+      if (!open) loadHip4volMarkets();  // refresh on expand
+    };
+    toggle.addEventListener("click", flip);
+    toggle.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); }
+    });
+    apply();
+  })();
+  // Auto-update the markets table while the HIP-4 Vol section is visible.
+  setInterval(() => {
+    if (adminToken && document.getElementById("section_hip4vol")?.classList.contains("visible")) {
+      loadHip4volMarkets();
+    }
+  }, 10000);
+
+  // Load hip4vol data when that nav tab is clicked
+  document.querySelectorAll(".nav-btn").forEach(btn => {
+    if (btn.dataset.section === "hip4vol") {
+      btn.addEventListener("click", () => {
+        if (adminToken) {
+          loadWalletsHip4Vol();
+          loadHip4volCodes();
+          loadHip4volWallets();
+          loadHip4volMarkets();
+        }
+      });
+    }
+  });
+
+  // ── Points (preview campagne, rétroactif) ──────────────────────────────────
+  async function loadPoints() {
+    const body = document.getElementById("points_table_body");
+    body.innerHTML = '<div class="loading-state">Loading…</div>';
+    try {
+      const data = await apiFetch("/api/admin/stats/points");
+      const rows = data.rows || [];
+      document.getElementById("stat_points_wallets").textContent = rows.length;
+      document.getElementById("stat_points_weekly").textContent = Number(data.weekly_pool || 0).toLocaleString("fr-FR");
+      document.getElementById("stat_points_weeks").textContent = data.weeks_since_launch ?? "-";
+      document.getElementById("stat_points_total").textContent = Math.round(Number(data.total_points_distributed || 0)).toLocaleString("fr-FR");
+      document.getElementById("stat_points_team_excluded").textContent = data.team_excluded_count ?? 0;
+      if (!rows.length) {
+        body.innerHTML = '<div class="empty-state">Aucune donnée de points (vérifier les sessions HL).</div>';
+        return;
+      }
+      const fmtVol = v => {
+        const n = Number(v || 0);
+        if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+        if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
+        return `$${n.toFixed(2)}`;
+      };
+      body.innerHTML = "";
+      rows.forEach((r, i) => {
+        const row = document.createElement("div");
+        row.className = "table-cols points-cols table-row";
+        row.style.gridTemplateColumns = "48px 1fr 140px 110px 90px";
+        row.innerHTML = `
+          <div data-label="#" style="color:rgba(255,255,255,0.3);font-size:12px">${i + 1}</div>
+          <div class="wallet-cell copy-wallet" data-label="Wallet" title="${escapeHtml(r.address || "")}" style="cursor:pointer">${escapeHtml(shortWallet(r.address))}</div>
+          <div class="amount-cell" data-label="Volume HL">${escapeHtml(fmtVol(r.total_volume_usd))}</div>
+          <div class="amount-cell" data-label="Points" style="color:#35f0c2">${Number(r.total_points || 0).toLocaleString("fr-FR", { maximumFractionDigits: 2 })}</div>
+          <div data-label="Semaines" style="color:rgba(255,255,255,0.5);font-size:12px">${r.weeks_active ?? 0}</div>
+        `;
+        row.querySelector(".copy-wallet")?.addEventListener("click", () => {
+          navigator.clipboard.writeText(r.address || "").catch(() => {});
+        });
+        body.appendChild(row);
+      });
+    } catch (e) {
+      body.innerHTML = "";
+      const errDiv = document.createElement("div");
+      errDiv.className = "empty-state";
+      errDiv.style.color = "#ff6b6b";
+      errDiv.textContent = e.message;
+      body.appendChild(errDiv);
+    }
+  }
+
+  document.getElementById("refresh_points_btn")?.addEventListener("click", loadPoints);
+  document.querySelectorAll(".nav-btn").forEach(btn => {
+    if (btn.dataset.section === "points") {
+      btn.addEventListener("click", () => { if (adminToken) loadPoints(); });
+    }
+  });
+
+  // ── VIP ───────────────────────────────────────────────────────────────────
+
+  async function loadVip() {
+    const body = document.getElementById("vip_table_body");
+    body.innerHTML = '<div class="loading-state">Loading…</div>';
+    try {
+      const data = await apiFetch(`/api/admin/referral/vip`);
+      const list = data.vip || [];
+      if (!list.length) {
+        body.innerHTML = '<div class="empty-state">No VIP referrers.</div>';
+        return;
+      }
+      body.innerHTML = "";
+      list.forEach(v => {
+        const row = document.createElement("div");
+        row.className = "table-cols vip-cols table-row";
+        const refLink = v.code ? `${window.location.origin}/?ref=${encodeURIComponent(v.code)}` : "";
+        row.innerHTML = `
+          <div class="wallet-cell copy-wallet" title="${escapeHtml(v.address || "")}" style="cursor:pointer">${escapeHtml(shortWallet(v.address))}</div>
+          <div class="amount-cell">${escapeHtml(((v.commission_rate || 0) * 100).toFixed(1))}%</div>
+          <div class="amount-cell">${escapeHtml(((v.referee_discount || 0) * 100).toFixed(1))}%</div>
+          <div class="amount-cell">${escapeHtml(((v.self_discount || 0) * 100).toFixed(1))}%</div>
+          <div class="vip-link-cell">${v.code ? `<span class="vip-link-text" title="${escapeHtml(refLink)}">${escapeHtml(v.code)}</span><button class="vip-copy-btn" title="Copy link">⧉</button>` : "-"}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.4)">${escapeHtml(fmtDate(v.set_at))}</div>
+          <div><button class="action-btn remove-vip-btn" style="background:rgba(255,80,80,0.15);border-color:rgba(255,80,80,0.3);color:#ff6b6b">Remove</button></div>
+        `;
+        row.querySelector(".copy-wallet")?.addEventListener("click", () => {
+          navigator.clipboard.writeText(v.address || "").catch(() => {});
+        });
+        const copyBtn = row.querySelector(".vip-copy-btn");
+        if (copyBtn && refLink) {
+          copyBtn.addEventListener("click", () => {
+            navigator.clipboard.writeText(refLink).then(() => {
+              copyBtn.textContent = "✓";
+              setTimeout(() => copyBtn.textContent = "⧉", 1200);
+            }).catch(() => {});
+          });
+        }
+        row.querySelector(".remove-vip-btn")?.addEventListener("click", () => removeVip(v.address));
+        body.appendChild(row);
+      });
+    } catch (e) {
+      const errDiv = document.createElement("div");
+      errDiv.className = "empty-state";
+      errDiv.style.color = "#ff6b6b";
+      errDiv.textContent = e.message;
+      body.innerHTML = "";
+      body.appendChild(errDiv);
+    }
+  }
+
+  async function removeVip(address) {
+    if (!confirm(`Remove VIP status for ${shortWallet(address)}?`)) return;
+    try {
+      await apiFetch("/api/admin/referral/vip", {
+        method: "DELETE",
+        body: JSON.stringify({ admin_token: adminToken, address }),
+      });
+      loadVip();
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  document.getElementById("vip_add_btn").addEventListener("click", async () => {
+    const address = document.getElementById("vip_address").value.trim();
+    const commissionPct = parseFloat(document.getElementById("vip_commission").value);
+    const discountPct = parseFloat(document.getElementById("vip_discount").value);
+    const selfDiscPct = parseFloat(document.getElementById("vip_self_discount").value);
+    const code = document.getElementById("vip_code").value.trim();
+    const errEl = document.getElementById("vip_form_err");
+    errEl.textContent = "";
+    if (!address) { errEl.textContent = "Address required."; return; }
+    if (!Number.isFinite(commissionPct) || commissionPct < 0 || commissionPct > 100) { errEl.textContent = "Commission must be 0–100."; return; }
+    if (!Number.isFinite(discountPct) || discountPct < 0 || discountPct > 100) { errEl.textContent = "Referee discount must be 0–100."; return; }
+    if (!Number.isFinite(selfDiscPct) || selfDiscPct < 0 || selfDiscPct > 100) { errEl.textContent = "Self discount must be 0–100."; return; }
+    try {
+      await apiFetch("/api/admin/referral/vip", {
+        method: "POST",
+        body: JSON.stringify({
+          admin_token: adminToken,
+          address,
+          commission_rate: commissionPct / 100,
+          referee_discount: discountPct / 100,
+          self_discount: selfDiscPct / 100,
+          code,
+        }),
+      });
+      document.getElementById("vip_address").value = "";
+      document.getElementById("vip_commission").value = "";
+      document.getElementById("vip_discount").value = "";
+      document.getElementById("vip_self_discount").value = "";
+      document.getElementById("vip_code").value = "";
+      loadVip();
+    } catch (e) {
+      errEl.textContent = e.message;
+    }
+  });
+
+  document.getElementById("refresh_vip_btn").addEventListener("click", loadVip);
+
+  // ── Feedback ─────────────────────────────────────────────────────────────
+
+  let _feedbackItems = [];
+
+  async function loadFeedback() {
+    const list = document.getElementById("feedback_list");
+    const countEl = document.getElementById("feedback_count");
+    list.innerHTML = '<div class="loading-state">Loading…</div>';
+    try {
+      const data = await apiFetch("/api/admin/feedback");
+      _feedbackItems = data.feedback || [];
+      const items = _feedbackItems.slice().reverse();
+      countEl.textContent = items.length ? `${items.length} message${items.length > 1 ? "s" : ""}` : "";
+      if (!items.length) {
+        list.innerHTML = '<div class="loading-state">No feedback yet.</div>';
+        return;
+      }
+      list.innerHTML = items.map((f, i) => {
+        const realIndex = _feedbackItems.length - 1 - i;
+        const replies = (f.replies || []);
+        const repliesHtml = replies.length ? `<div class="feedback-replies">${replies.map(r =>
+          `<div class="feedback-reply-item"><div class="feedback-reply-item-ts">Admin \u2014 ${escapeHtml(fmtDate(r.ts))}</div>${escapeHtml(r.message)}</div>`
+        ).join("")}</div>` : "";
+        return `<div class="feedback-card" data-idx="${realIndex}">
+          <div class="feedback-card-head">
+            <div class="feedback-card-meta">
+              <span>${escapeHtml(fmtDate(f.ts))}</span>
+              <span class="feedback-card-wallet" title="${escapeHtml(f.account || "")}">${escapeHtml(shortWallet(f.account))}</span>
+            </div>
+            <div style="display:flex;gap:6px">
+              <button class="feedback-reply-btn" data-idx="${realIndex}">Reply</button>
+              <button class="feedback-delete-btn" data-idx="${realIndex}">Delete</button>
+            </div>
+          </div>
+          <div class="feedback-card-message">${escapeHtml(f.message)}</div>
+          ${repliesHtml}
+        </div>`;
+      }).join("");
+    } catch (e) {
+      list.innerHTML = `<div class="loading-state" style="color:#ff6b6b">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  document.getElementById("feedback_list").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".feedback-delete-btn");
+    if (!btn) return;
+    const idx = parseInt(btn.dataset.idx, 10);
+    if (isNaN(idx) || !confirm("Delete this feedback?")) return;
+    btn.disabled = true;
+    btn.textContent = "…";
+    try {
+      await apiFetch("/api/admin/feedback/delete", {
+        method: "POST",
+        body: JSON.stringify({ index: idx }),
+      });
+      loadFeedback();
+    } catch (err) {
+      btn.textContent = "Error";
+      btn.disabled = false;
+    }
+  });
+
+  // Reply button : toggle reply form
+  document.getElementById("feedback_list").addEventListener("click", async (e) => {
+    const replyBtn = e.target.closest(".feedback-reply-btn");
+    if (!replyBtn) return;
+    const card = replyBtn.closest(".feedback-card");
+    const idx = parseInt(replyBtn.dataset.idx, 10);
+    if (isNaN(idx) || card.querySelector(".feedback-reply-form")) return;
+    const form = document.createElement("div");
+    form.className = "feedback-reply-form";
+    form.innerHTML = `<textarea class="feedback-reply-input" placeholder="Type your reply\u2026" rows="2"></textarea><button class="feedback-reply-send" data-idx="${idx}">Send</button>`;
+    card.appendChild(form);
+    form.querySelector("textarea").focus();
+  });
+
+  // Send reply
+  document.getElementById("feedback_list").addEventListener("click", async (e) => {
+    const sendBtn = e.target.closest(".feedback-reply-send");
+    if (!sendBtn) return;
+    const idx = parseInt(sendBtn.dataset.idx, 10);
+    const form = sendBtn.closest(".feedback-reply-form");
+    const textarea = form.querySelector("textarea");
+    const msg = textarea.value.trim();
+    if (!msg) return;
+    sendBtn.disabled = true;
+    sendBtn.textContent = "Sending\u2026";
+    try {
+      await apiFetch("/api/admin/feedback/reply", {
+        method: "POST",
+        body: JSON.stringify({ index: idx, message: msg }),
+      });
+      loadFeedback();
+    } catch (err) {
+      sendBtn.textContent = "Error";
+      sendBtn.disabled = false;
+    }
+  });
+
+  document.getElementById("refresh_feedback_btn").addEventListener("click", loadFeedback);
+
+  // ── Crashes ─────────────────────────────────────────────────────────────
+
+  async function loadCrashes() {
+    const body = document.getElementById("crashes_table_body");
+    body.innerHTML = '<tr><td colspan="7" class="loading-state">Loading…</td></tr>';
+    try {
+      const data = await apiFetch("/api/admin/stats/crashes");
+      const items = (data.crashes || []).slice().reverse();
+      if (!items.length) {
+        body.innerHTML = '<tr><td colspan="7" class="loading-state">No crashes recorded yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = items.map(c => {
+        const tail = (c.log_tail || []).slice(-10).map(l => escapeHtml(l)).join("\n");
+        const durStr = c.duration_sec < 1 ? "<1s" : c.duration_sec < 60 ? `${Math.round(c.duration_sec)}s` : `${(c.duration_sec/60).toFixed(1)}m`;
+        const exitStr = c.exit_code != null ? String(c.exit_code) : "-";
+        const exitColor = c.exit_code != null && c.exit_code !== 0 ? "#ff6b6b" : "rgba(255,255,255,0.5)";
+        const reason = c.stop_reason || "unknown";
+        return `<tr>
+          <td data-label="Date">${escapeHtml(fmtDate(c.ts))}</td>
+          <td data-label="Wallet" style="font-family:monospace;font-size:11px">${escapeHtml(shortAddr(c.account || ""))}</td>
+          <td data-label="Token"><span style="color:#ff6b2c;font-weight:600">${escapeHtml(c.symbol || "?")}</span></td>
+          <td data-label="Mode" style="font-size:11px;color:rgba(255,255,255,0.5)">${escapeHtml(c.mode || "")}</td>
+          <td data-label="Duration" style="color:#ff6b6b;font-weight:600">${escapeHtml(durStr)}</td>
+          <td data-label="Exit" style="color:${exitColor};font-family:monospace">${escapeHtml(exitStr)}</td>
+          <td data-label="Reason" style="max-width:400px">
+            <div style="font-size:12px;color:rgba(255,255,255,0.7);margin-bottom:4px">${escapeHtml(reason)}</div>
+            ${tail ? `<details><summary style="font-size:11px;color:rgba(255,255,255,0.35);cursor:pointer">logs</summary><pre style="font-size:10px;color:rgba(255,255,255,0.5);white-space:pre-wrap;margin-top:4px;max-height:200px;overflow-y:auto">${tail}</pre></details>` : ""}
+          </td>
+        </tr>`;
+      }).join("");
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="7" class="loading-state" style="color:#ff6b6b">${escapeHtml(e.message)}</td></tr>`;
+    }
+  }
+
+  document.getElementById("refresh_crashes_btn").addEventListener("click", loadCrashes);
+
+  // ── Restarts ────────────────────────────────────────────────────────────
+
+  async function loadRestarts() {
+    const body = document.getElementById("restarts_table_body");
+    body.innerHTML = '<tr><td colspan="3" class="loading-state">Loading…</td></tr>';
+    try {
+      const data = await apiFetch("/api/admin/stats/restarts");
+      const items = (data.restarts || []).slice().reverse();
+      if (!items.length) {
+        body.innerHTML = '<tr><td colspan="3" class="loading-state">No restart events yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = items.map(r => `<tr>
+        <td data-label="Date">${escapeHtml(fmtDate(r.ts))}</td>
+        <td data-label="Event"><span style="color:${r.event === "startup" ? "#4ade80" : "#ff6b6b"}">${escapeHtml(r.event)}</span></td>
+        <td data-label="Detail">${escapeHtml(r.detail || "-")}</td>
+      </tr>`).join("");
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="3" class="loading-state" style="color:#ff6b6b">${escapeHtml(e.message)}</td></tr>`;
+    }
+  }
+
+  document.getElementById("refresh_restarts_btn").addEventListener("click", loadRestarts);
+
+  // ── Rate Limits 429 ────────────────────────────────────────────────────
+
+  function shortAddr(a) { return a.length > 12 ? a.slice(0, 6) + "…" + a.slice(-4) : a; }
+
+  async function loadRateLimits() {
+    const body = document.getElementById("rate_limits_table_body");
+    const summaryEl = document.getElementById("rate_limits_summary");
+    body.innerHTML = '<tr><td colspan="3" class="loading-state">Loading…</td></tr>';
+    summaryEl.innerHTML = "";
+    try {
+      const data = await apiFetch("/api/admin/stats/rate_limits");
+      const events = data.events || [];
+      const summary = data.summary || {};
+      const addrs = Object.keys(summary);
+      if (addrs.length) {
+        summaryEl.innerHTML = addrs.map(a =>
+          `<div class="stat-card" style="min-width:auto;padding:12px 16px">
+            <div class="stat-label" style="font-size:11px">${escapeHtml(shortAddr(a))}</div>
+            <div class="stat-value" style="color:#ff6b6b;font-size:18px">${escapeHtml(summary[a])}</div>
+          </div>`
+        ).join("");
+      }
+      if (!events.length) {
+        body.innerHTML = '<tr><td colspan="3" class="loading-state">No builder approve 429s recorded.</td></tr>';
+        return;
+      }
+      body.innerHTML = events.map(e => `<tr>
+        <td data-label="Date">${escapeHtml(fmtDate(e.ts))}</td>
+        <td data-label="IP" style="font-family:monospace;font-size:11px">${escapeHtml(shortAddr(e.address))}</td>
+        <td data-label="Detail" style="font-size:11px;color:rgba(255,255,255,0.6)">${escapeHtml(e.detail || "-")}</td>
+      </tr>`).join("");
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="3" class="loading-state" style="color:#ff6b6b">${escapeHtml(e.message)}</td></tr>`;
+    }
+  }
+
+  document.getElementById("refresh_rate_limits_btn").addEventListener("click", loadRateLimits);
+
+  // ── Controls ────────────────────────────────────────────────────────────
+
+  document.getElementById("stop_all_btn")?.addEventListener("click", async () => {
+    if (!confirm("Stop ALL running bots for every user?")) return;
+    const btn = document.getElementById("stop_all_btn");
+    const msg = document.getElementById("stop_all_msg");
+    btn.disabled = true;
+    msg.textContent = "Stopping…";
+    msg.style.color = "rgba(255,255,255,0.5)";
+    try {
+      const data = await apiFetch("/api/admin/stop_all", { method: "POST", body: JSON.stringify({}) });
+      msg.style.color = "#4ade80";
+      msg.textContent = `Done : ${data.stopped} bot${data.stopped !== 1 ? "s" : ""} stopped` +
+        (data.errors ? `, ${data.errors} error${data.errors !== 1 ? "s" : ""}` : "");
+    } catch (e) {
+      msg.style.color = "#ff6b6b";
+      msg.textContent = e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ── Analytics ─────────────────────────────────────────────────────────────
+
+
+  async function loadAnalytics() {
+    const since = document.getElementById("analytics_since").value || "";
+    const qs = new URLSearchParams({ symbol: "SP500", since });
+
+    // Reset tables
+    ["ana_profile_body","ana_hour_body","ana_bias_body","ana_sessions_body"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = '<tr><td colspan="9" class="loading-state">Loading\u2026</td></tr>';
+    });
+
+    try {
+      const data = await apiFetch(`/api/admin/analytics/sessions?${qs}`);
+      const ov = data.overview || {};
+
+      // Overview cards
+      document.getElementById("ana_total_sessions").textContent = ov.total_sessions || 0;
+      document.getElementById("ana_total_volume").textContent = fmtUsd(ov.total_volume_usd);
+
+      const pnlEl = document.getElementById("ana_total_pnl");
+      const pnlVal = ov.total_pnl_usd || 0;
+      pnlEl.textContent = (pnlVal >= 0 ? "+" : "") + fmtUsd(pnlVal);
+      pnlEl.style.color = pnlVal >= 0 ? "#4ade80" : "#ff6b6b";
+
+      document.getElementById("ana_win_rate").textContent = ((ov.win_rate || 0) * 100).toFixed(1) + "%";
+      document.getElementById("ana_avg_ppm").textContent = ov.avg_ppm != null ? fmtUsd(ov.avg_ppm) : "-";
+
+      // Helper: render aggregation table
+      function renderAggTable(bodyId, entries, keyLabel, keyFmt) {
+        const body = document.getElementById(bodyId);
+        if (!entries || !Object.keys(entries).length) {
+          body.innerHTML = `<tr><td colspan="6" class="loading-state">No data</td></tr>`;
+          return;
+        }
+        body.innerHTML = Object.entries(entries).map(([k, v]) => {
+          const pnl = v.pnl_usd || 0;
+          const pnlColor = pnl >= 0 ? "#4ade80" : "#ff6b6b";
+          return `<tr>
+            <td style="font-weight:600">${escapeHtml(keyFmt ? keyFmt(k) : k)}</td>
+            <td>${v.sessions}</td>
+            <td>${fmtUsd(v.volume_usd)}</td>
+            <td style="color:${pnlColor};font-weight:600">${pnl >= 0 ? "+" : ""}${fmtUsd(pnl)}</td>
+            <td>${((v.win_rate || 0) * 100).toFixed(1)}%</td>
+            <td>${v.avg_ppm != null ? fmtUsd(v.avg_ppm) : "-"}</td>
+          </tr>`;
+        }).join("");
+      }
+
+      renderAggTable("ana_profile_body", data.by_profile, "Profile");
+      renderAggTable("ana_hour_body", data.by_hour, "Hour", h => h.padStart(2, "0") + ":00");
+      renderAggTable("ana_bias_body", data.by_bias, "Bias", b => {
+        const n = parseInt(b);
+        return n > 0 ? "Long (+1)" : n < 0 ? "Short (-1)" : "Neutral (0)";
+      });
+
+      // Sessions table
+      const sessBody = document.getElementById("ana_sessions_body");
+      const sessions = (data.sessions || []).slice(0, 100);
+      if (!sessions.length) {
+        sessBody.innerHTML = '<tr><td colspan="9" class="loading-state">No sessions found</td></tr>';
+        return;
+      }
+      sessBody.innerHTML = sessions.map(s => {
+        const pnl = s.pnl_total_usd_net != null ? s.pnl_total_usd_net : (s.pnl_total_usd || 0);
+        const pnlColor = pnl >= 0 ? "#4ade80" : "#ff6b6b";
+        const cs = s.config_snapshot || {};
+        const dur = s.duration_min != null ? s.duration_min.toFixed(1) + "m" : "-";
+        const profile = cs.mm_profile || "-";
+        const bias = cs.direction_bias != null ? (cs.direction_bias > 0 ? "L" : cs.direction_bias < 0 ? "S" : "N") : "-";
+        const spread = cs.quote_spread_bps_min != null && cs.quote_spread_bps_max != null
+          ? cs.quote_spread_bps_min.toFixed(1) + "-" + cs.quote_spread_bps_max.toFixed(1)
+          : "-";
+        return `<tr>
+          <td style="white-space:nowrap">${escapeHtml(fmtDate(s.started_at))}</td>
+          <td style="font-family:monospace;font-size:11px">${escapeHtml(shortAddr(s.account || ""))}</td>
+          <td>${escapeHtml(dur)}</td>
+          <td>${fmtUsd(s.session_volume_usd || 0)}</td>
+          <td style="color:${pnlColor};font-weight:600">${pnl >= 0 ? "+" : ""}${fmtUsd(pnl)}</td>
+          <td>${escapeHtml(profile)}</td>
+          <td>${escapeHtml(bias)}</td>
+          <td style="font-size:11px">${escapeHtml(spread)}</td>
+          <td style="font-size:11px;color:rgba(255,255,255,0.4)">${escapeHtml(s.pnl_source || "-")}</td>
+        </tr>`;
+      }).join("");
+
+    } catch (e) {
+      ["ana_profile_body","ana_hour_body","ana_bias_body","ana_sessions_body"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = `<tr><td colspan="9" class="loading-state" style="color:#ff6b6b">${escapeHtml(e.message)}</td></tr>`;
+      });
+    }
+  }
+
+  document.getElementById("refresh_analytics_btn")?.addEventListener("click", loadAnalytics);
+  document.getElementById("analytics_since")?.addEventListener("change", loadAnalytics);
+
+  // ── Competition ──────────────────────────────────────────────────────────
+  async function loadCompetition() {
+    const body = document.getElementById("comp_admin_table_body");
+    body.innerHTML = '<div class="loading-state">Loading…</div>';
+    try {
+      const data = await apiFetch("/api/admin/competition");
+      // Stats cards
+      const statusEl = document.getElementById("comp_admin_status");
+      const partEl = document.getElementById("comp_admin_participants");
+      const volEl = document.getElementById("comp_admin_volume");
+      const periodEl = document.getElementById("comp_admin_period");
+
+      if (statusEl) {
+        const now = new Date();
+        const start = new Date(data.start);
+        const end = new Date(data.end);
+        if (now < start) {
+          statusEl.innerHTML = '<span style="color:rgba(255,185,0,0.9)">Upcoming</span>';
+        } else if (now < end) {
+          statusEl.innerHTML = '<span style="color:#4ade80">Live</span>';
+        } else {
+          statusEl.innerHTML = '<span style="color:rgba(255,255,255,0.35)">Ended</span>';
+        }
+      }
+      if (partEl) partEl.textContent = data.total_participants || 0;
+      const fmtVol = v => {
+        const n = Number(v || 0);
+        if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+        if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
+        return `$${n.toFixed(2)}`;
+      };
+      if (volEl) volEl.textContent = fmtVol(data.total_volume_usd);
+      if (periodEl) {
+        const fmt = d => new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
+        periodEl.textContent = `${fmt(data.start)} – ${fmt(data.end)}`;
+      }
+
+      const leaderboard = data.leaderboard || [];
+      if (!leaderboard.length) {
+        body.innerHTML = '<div class="empty-state">No participants yet.</div>';
+        return;
+      }
+      body.innerHTML = "";
+      leaderboard.forEach((w) => {
+        const pnl = Number(w.pnl_net_usd || 0);
+        const pnlColor = pnl >= 0 ? "#4ade80" : "#f87171";
+        const rankColor = w.rank === 1 ? "#ffd700" : w.rank === 2 ? "#c0c0c0" : w.rank === 3 ? "#cd7f32" : "rgba(255,255,255,0.3)";
+        const row = document.createElement("div");
+        row.className = "table-cols comp-admin-cols table-row";
+        row.innerHTML = `
+          <div style="color:${rankColor};font-weight:${w.rank <= 3 ? 700 : 400};font-size:${w.rank <= 3 ? '14px' : '12px'}">${w.rank}</div>
+          <div class="wallet-cell copy-wallet" title="${escapeHtml(w.address || "")}" style="cursor:pointer">${escapeHtml(shortWallet(w.address))}</div>
+          <div class="amount-cell">${escapeHtml(fmtVol(w.volume_usd))}</div>
+          <div style="color:${pnlColor};font-size:13px">${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} $</div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.5)">${w.sessions || 0}</div>
+          <div>${w.active ? '<span class="status-pill paid">active</span>' : '<span style="color:rgba(255,255,255,0.25);font-size:12px">-</span>'}</div>
+        `;
+        row.querySelector(".copy-wallet")?.addEventListener("click", () => {
+          navigator.clipboard.writeText(w.address || "").catch(() => {});
+        });
+        body.appendChild(row);
+      });
+    } catch (e) {
+      body.innerHTML = `<div class="empty-state" style="color:#f87171">${escapeHtml(e.message || "Failed to load")}</div>`;
+    }
+  }
+
+  document.getElementById("refresh_competition_btn")?.addEventListener("click", loadCompetition);
+
+  // Auto-load competition when tab clicked
+  document.querySelectorAll(".nav-btn").forEach(btn => {
+    if (btn.dataset.section === "competition") {
+      btn.addEventListener("click", () => { if (adminToken) loadCompetition(); });
+    }
+  });
+
+  // ── Milestones ──────────────────────────────────────────────────────────
+  async function loadMilestones() {
+    const body = document.getElementById("ms_admin_table_body");
+    const totalEl = document.getElementById("ms_admin_total");
+    if (!body) return;
+    body.innerHTML = '<div class="loading-state">Loading…</div>';
+    try {
+      const data = await apiFetch("/api/admin/milestones");
+      if (totalEl) totalEl.textContent = data.total || 0;
+      if (!data.users || data.users.length === 0) {
+        body.innerHTML = '<div class="loading-state">No users with volume yet</div>';
+        return;
+      }
+      body.innerHTML = "";
+      data.users.forEach((u, idx) => {
+        const tierKey = (u.current_tier || "").toLowerCase();
+        const badgeClass = "ms-tier-badge--" + tierKey;
+        const vol = "$" + Number(u.volume_usd || 0).toLocaleString("en-US", { maximumFractionDigits: 0 });
+        const addr = u.address.length > 14
+          ? u.address.slice(0, 6) + "…" + u.address.slice(-4)
+          : u.address;
+        const row = document.createElement("div");
+        row.className = "table-cols ms-admin-cols";
+        row.innerHTML =
+          `<div>${idx + 1}</div>` +
+          `<div title="${escapeHtml(u.address)}" style="font-family:monospace;font-size:12px;cursor:pointer" onclick="navigator.clipboard.writeText('${escapeHtml(u.address)}')">${escapeHtml(addr)}</div>` +
+          `<div style="font-weight:600">${vol}</div>` +
+          `<div><span class="ms-tier-badge ${badgeClass}">${escapeHtml(u.current_tier)}</span></div>` +
+          `<div>${u.completed}/5</div>` +
+          `<div style="display:flex;align-items:center;gap:6px"><div class="ms-pct-bar"><div class="ms-pct-fill" style="width:${u.current_pct}%"></div></div><span style="font-size:11px;color:rgba(255,255,255,0.5)">${Math.round(u.current_pct)}%</span></div>`;
+        body.appendChild(row);
+      });
+    } catch (e) {
+      body.innerHTML = `<div class="loading-state" style="color:#ff5050">${escapeHtml(e.message || e)}</div>`;
+    }
+  }
+
+  document.getElementById("refresh_milestones_btn").addEventListener("click", loadMilestones);
+  document.querySelectorAll(".nav-btn").forEach(btn => {
+    if (btn.dataset.section === "milestones") {
+      btn.addEventListener("click", () => { if (adminToken) loadMilestones(); });
+    }
+  });
+
+  // ── Boot ──────────────────────────────────────────────────────────────────
+
+  if (adminToken) {
+    // Try auto-login with stored token
+    apiFetch(`/api/admin/referral/claims?status=pending`)
+      .then(() => showApp())
+      .catch(() => {
+        adminToken = "";
+        sessionStorage.removeItem("admin_token");
+      });
+  }
+</script>
+</body>
+</html>

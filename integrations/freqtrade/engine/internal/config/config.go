@@ -259,6 +259,16 @@ type MarketMakingConfig struct {
 	BuilderFeeBps   float64 `yaml:"builder_fee_bps"`   // builder fee per fill in bps
 	FeeFloorEnabled bool    `yaml:"fee_floor_enabled"` // enforce minimum spread >= round-trip fee cost
 
+	// Edge gate: widen the exposure-increasing side until the quoted half-spread
+	// covers measured fees + measured adverse selection + a target net edge.
+	// The exit side is left to inventory skew / position-age / idle-breaker so a
+	// position can always be reduced. Defaults only apply when enabled.
+	EdgeGateEnabled     bool    `yaml:"edge_gate_enabled"`
+	EdgeTargetBps       float64 `yaml:"edge_target_bps"`        // target net edge per round trip; default 1.0
+	EdgeAdverseFloorBps float64 `yaml:"edge_adverse_floor_bps"` // adverse-selection buffer used before markout warmup; default 0.75
+	EdgeMaxWidthBps     float64 `yaml:"edge_max_width_bps"`     // max half-spread the gate may impose before skipping the side; default 10
+	EdgeFeeFloorBps     float64 `yaml:"edge_fee_floor_bps"`     // minimum measured fee used by the gate; default 0.5
+
 	// Trade-flow adverse selection
 	TradeImbalanceWindowSec    int     `yaml:"trade_imbalance_window_sec"`    // rolling window for trade imbalance; default 3
 	TradeImbalanceMaxShiftBps  float64 `yaml:"trade_imbalance_max_shift_bps"` // max FV shift from imbalance; 0 = disabled
@@ -546,6 +556,12 @@ type MarketMakingOverride struct {
 	BuilderFeeBps   *float64 `yaml:"builder_fee_bps"`
 	FeeFloorEnabled *bool    `yaml:"fee_floor_enabled"`
 
+	EdgeGateEnabled     *bool    `yaml:"edge_gate_enabled"`
+	EdgeTargetBps       *float64 `yaml:"edge_target_bps"`
+	EdgeAdverseFloorBps *float64 `yaml:"edge_adverse_floor_bps"`
+	EdgeMaxWidthBps     *float64 `yaml:"edge_max_width_bps"`
+	EdgeFeeFloorBps     *float64 `yaml:"edge_fee_floor_bps"`
+
 	TradeImbalanceWindowSec    *int     `yaml:"trade_imbalance_window_sec"`
 	TradeImbalanceMaxShiftBps  *float64 `yaml:"trade_imbalance_max_shift_bps"`
 	TradeImbalanceSizeExponent *float64 `yaml:"trade_imbalance_size_exponent"`
@@ -708,22 +724,27 @@ type MarketMakingOverride struct {
 
 // RiskConfig holds risk limit parameters.
 type RiskConfig struct {
-	MaxPositionNotional      float64 `yaml:"max_position_notional"`
-	MaxSpreadExposure        float64 `yaml:"max_spread_exposure"`
-	MaxAggregateExposure     float64 `yaml:"max_aggregate_exposure"` // total portfolio exposure cap across all assets; 0 = use max_spread_exposure as fallback
-	MaxDrawdownPct           float64 `yaml:"max_drawdown_pct"`
-	MaxOpenOrders            int     `yaml:"max_open_orders"`
-	DrawdownCooldownSec      int     `yaml:"drawdown_cooldown_sec"`      // seconds before auto-resume after drawdown halt; 0 = stay halted until restart
-	MaxConsecutiveHalts      int     `yaml:"max_consecutive_halts"`      // 0 = disabled (infinite retries)
-	MinResumeEquityPct       float64 `yaml:"min_resume_equity_pct"`      // 0 = disabled; % of high-water
-	MaxCloseSlippageBps      int     `yaml:"max_close_slippage_bps"`     // slippage limit for position close IOC; 0 = use market close
-	FailClosedCooldownSec    int     `yaml:"fail_closed_cooldown_sec"`   // seconds before auto-recovery from fail-closed halt; 0 = disabled (permanent halt)
-	MaxFailClosedRetries     int     `yaml:"max_fail_closed_retries"`    // max recovery attempts before permanent halt; 0 = unlimited
-	AbsoluteEquityFloor      float64 `yaml:"absolute_equity_floor"`      // permanent halt if equity drops below this; 0 = disabled
-	DrawdownSmoothingSamples int     `yaml:"drawdown_smoothing_samples"` // EMA samples for drawdown equity; 0/1 = no smoothing
-	RecoveryDurationSec      int     `yaml:"recovery_duration_sec"`      // seconds of reduced quoting after drawdown resume; 0 = disabled
-	RecoveryNotionalPct      float64 `yaml:"recovery_notional_pct"`      // notional multiplier during recovery (e.g. 0.50 = 50%)
-	RecoverySpreadMultiplier float64 `yaml:"recovery_spread_multiplier"` // spread multiplier during recovery (e.g. 1.50 = 150%)
+	MaxPositionNotional float64 `yaml:"max_position_notional"`
+	// MaxPositionHaltTolerancePct lets the position reach the configured cap
+	// without forcing a flatten. The quote manager already stops the entry
+	// side at the cap; this tolerance prevents a full inventory from being
+	// liquidated at market. 0 = halt exactly at the cap (upstream behavior).
+	MaxPositionHaltTolerancePct float64 `yaml:"max_position_halt_tolerance_pct"`
+	MaxSpreadExposure           float64 `yaml:"max_spread_exposure"`
+	MaxAggregateExposure        float64 `yaml:"max_aggregate_exposure"` // total portfolio exposure cap across all assets; 0 = use max_spread_exposure as fallback
+	MaxDrawdownPct              float64 `yaml:"max_drawdown_pct"`
+	MaxOpenOrders               int     `yaml:"max_open_orders"`
+	DrawdownCooldownSec         int     `yaml:"drawdown_cooldown_sec"`      // seconds before auto-resume after drawdown halt; 0 = stay halted until restart
+	MaxConsecutiveHalts         int     `yaml:"max_consecutive_halts"`      // 0 = disabled (infinite retries)
+	MinResumeEquityPct          float64 `yaml:"min_resume_equity_pct"`      // 0 = disabled; % of high-water
+	MaxCloseSlippageBps         int     `yaml:"max_close_slippage_bps"`     // slippage limit for position close IOC; 0 = use market close
+	FailClosedCooldownSec       int     `yaml:"fail_closed_cooldown_sec"`   // seconds before auto-recovery from fail-closed halt; 0 = disabled (permanent halt)
+	MaxFailClosedRetries        int     `yaml:"max_fail_closed_retries"`    // max recovery attempts before permanent halt; 0 = unlimited
+	AbsoluteEquityFloor         float64 `yaml:"absolute_equity_floor"`      // permanent halt if equity drops below this; 0 = disabled
+	DrawdownSmoothingSamples    int     `yaml:"drawdown_smoothing_samples"` // EMA samples for drawdown equity; 0/1 = no smoothing
+	RecoveryDurationSec         int     `yaml:"recovery_duration_sec"`      // seconds of reduced quoting after drawdown resume; 0 = disabled
+	RecoveryNotionalPct         float64 `yaml:"recovery_notional_pct"`      // notional multiplier during recovery (e.g. 0.50 = 50%)
+	RecoverySpreadMultiplier    float64 `yaml:"recovery_spread_multiplier"` // spread multiplier during recovery (e.g. 1.50 = 150%)
 
 	SessionPnLWindowMinutes int `yaml:"session_pnl_window_minutes"` // rolling window for WindowPnLBps; 0 = default 60
 
@@ -756,9 +777,10 @@ type RiskConfig struct {
 
 // RiskOverride holds per-asset overrides for Risk fields.
 type RiskOverride struct {
-	MaxPositionNotional *float64 `yaml:"max_position_notional"`
-	MaxSpreadExposure   *float64 `yaml:"max_spread_exposure"`
-	MaxOpenOrders       *int     `yaml:"max_open_orders"`
+	MaxPositionNotional         *float64 `yaml:"max_position_notional"`
+	MaxPositionHaltTolerancePct *float64 `yaml:"max_position_halt_tolerance_pct"`
+	MaxSpreadExposure           *float64 `yaml:"max_spread_exposure"`
+	MaxOpenOrders               *int     `yaml:"max_open_orders"`
 }
 
 // LoggingConfig holds logging settings.
@@ -1250,6 +1272,19 @@ func Load(path string, opts ...LoadOption) (*Config, error) {
 	}
 	if cfg.MarketMaking.MarkoutFVMaxShiftBps == 0 {
 		cfg.MarketMaking.MarkoutFVMaxShiftBps = 3.0
+	}
+	// Edge gate defaults (only used when edge_gate_enabled).
+	if cfg.MarketMaking.EdgeTargetBps <= 0 {
+		cfg.MarketMaking.EdgeTargetBps = 1.0
+	}
+	if cfg.MarketMaking.EdgeAdverseFloorBps <= 0 {
+		cfg.MarketMaking.EdgeAdverseFloorBps = 0.75
+	}
+	if cfg.MarketMaking.EdgeMaxWidthBps <= 0 {
+		cfg.MarketMaking.EdgeMaxWidthBps = 10.0
+	}
+	if cfg.MarketMaking.EdgeFeeFloorBps <= 0 {
+		cfg.MarketMaking.EdgeFeeFloorBps = 0.5
 	}
 	// Smart Layer 2: Spread stack cap default.
 	if cfg.MarketMaking.MaxTotalSpreadMultiplier == 0 {
@@ -1969,6 +2004,18 @@ func validateMarketMaking(mm *MarketMakingConfig, asset string) error {
 	if mm.BuilderFeeBps < 0 {
 		return fmt.Errorf("%s: market_making.builder_fee_bps must be >= 0", prefix)
 	}
+	if mm.EdgeTargetBps < 0 || mm.EdgeTargetBps > 50 {
+		return fmt.Errorf("%s: market_making.edge_target_bps must be in [0, 50], got %g", prefix, mm.EdgeTargetBps)
+	}
+	if mm.EdgeAdverseFloorBps < 0 || mm.EdgeAdverseFloorBps > 50 {
+		return fmt.Errorf("%s: market_making.edge_adverse_floor_bps must be in [0, 50], got %g", prefix, mm.EdgeAdverseFloorBps)
+	}
+	if mm.EdgeMaxWidthBps < 0 || mm.EdgeMaxWidthBps > 200 {
+		return fmt.Errorf("%s: market_making.edge_max_width_bps must be in [0, 200], got %g", prefix, mm.EdgeMaxWidthBps)
+	}
+	if mm.EdgeFeeFloorBps < 0 || mm.EdgeFeeFloorBps > 50 {
+		return fmt.Errorf("%s: market_making.edge_fee_floor_bps must be in [0, 50], got %g", prefix, mm.EdgeFeeFloorBps)
+	}
 	if mm.MaxBookStalenessMs > 0 && mm.MaxBookStalenessMs <= mm.RefreshIntervalMs {
 		return fmt.Errorf("%s: max_book_staleness_ms(%d) must be > refresh_interval_ms(%d) to avoid perpetual staleness cancellations",
 			prefix, mm.MaxBookStalenessMs, mm.RefreshIntervalMs)
@@ -2460,6 +2507,9 @@ func validateRisk(r *RiskConfig, asset string) error {
 
 	if r.MaxPositionNotional <= 0 {
 		return fmt.Errorf("%s: risk.max_position_notional must be positive", prefix)
+	}
+	if r.MaxPositionHaltTolerancePct < 0 || r.MaxPositionHaltTolerancePct > 50 {
+		return fmt.Errorf("%s: risk.max_position_halt_tolerance_pct must be in [0, 50], got %g", prefix, r.MaxPositionHaltTolerancePct)
 	}
 	if r.MaxSpreadExposure <= 0 {
 		return fmt.Errorf("%s: risk.max_spread_exposure must be positive", prefix)

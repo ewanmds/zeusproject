@@ -16,7 +16,7 @@ import time
 import uuid
 
 from zeus import PROJECT_ROOT
-from zeus.markets import TOKENS
+from zeus.markets import resolve_symbol
 from zeus.network import post_info
 
 ROOT = PROJECT_ROOT / 'integrations' / 'freqtrade'
@@ -25,14 +25,26 @@ FIELDS = {'phase', 'running', 'position_known', 'position', 'position_usd', 'ent
           'accounting_complete',
           'mid', 'spread_bps', 'upnl', 'action', 'error', 'volume', 'fees', 'rpnl',
           'fills', 'order_placements', 'order_modifications', 'order_cancellations',
-          'order_requests', 'cost_per_1m'}
+          'order_requests', 'cost_per_1m',
+          'markout_bid_bps', 'markout_ask_bps', 'quote_half_spread_bps',
+          'edge_required_bps', 'edge_margin_bps', 'measured_fee_bps'}
+
+
+def derive_metrics(state):
+    """Add per-session unit economics the dashboard can display directly."""
+    volume = state.get('volume') or 0
+    fees = state.get('fees') or 0
+    rpnl = state.get('rpnl') or 0
+    state['fee_bps'] = fees / volume * 1e4 if volume > 0 else None
+    state['net_pnl'] = rpnl - fees
 
 
 def resolve_token(token):
-    key = token.strip().upper()
-    if key not in TOKENS:
-        raise ValueError(f'Marché inconnu : {key}')
-    return TOKENS[key]['symbol']
+    """Resolve a preset, a bare ticker or a dex-qualified HIP-3 market."""
+    try:
+        return resolve_symbol(token)
+    except ValueError as exc:
+        raise ValueError(f'Marché inconnu : {token} ({exc})') from exc
 
 
 def _safe(symbol):
@@ -68,12 +80,20 @@ def require_binary():
     if not path.is_file() or (os.name != 'nt' and not os.access(path, os.X_OK)):
         raise ValueError('Binaire Freqtrade absent : python -m zeus.bots.freqtrade --build')
     try:
-        manifest = json.loads((ROOT / 'bin' / 'build.json').read_text())
-        valid = (manifest['source'] == engine_digest() and manifest['binaries'][path.name] == hashlib.sha256(path.read_bytes()).hexdigest())
+        manifest = json.loads((ROOT / 'bin' / 'build.json').read_text(encoding='utf-8'))
+        source = manifest['source']
+        expected = manifest['binaries'][path.name]
+        if not isinstance(source, str) or not isinstance(expected, str):
+            raise TypeError
     except (OSError, ValueError, KeyError, TypeError):
-        valid = False
-    if not valid:
-        raise ValueError('Binaire Freqtrade périmé ou non vérifié : python -m zeus.bots.freqtrade --build')
+        raise ValueError('Binaire Freqtrade non vérifié (manifeste de compilation absent ou illisible) : '
+                         'python -m zeus.bots.freqtrade --build') from None
+    if expected.lower() != hashlib.sha256(path.read_bytes()).hexdigest():
+        raise ValueError('Binaire Freqtrade non vérifié (empreinte différente du manifeste) : '
+                         'python -m zeus.bots.freqtrade --build')
+    if source != engine_digest():
+        raise ValueError('Binaire Freqtrade périmé (sources Go modifiées depuis la compilation) : '
+                         'python -m zeus.bots.freqtrade --build')
     return path
 
 
@@ -102,6 +122,14 @@ def confirm_flat(symbol, account):
     return isinstance(orders, list) and all(isinstance(order, dict) and order.get('coin') and order['coin'] not in (symbol, bare) for order in orders)
 
 
+def _write_manifest(manifest):
+    """Replace the build manifest atomically so it always matches the binaries."""
+    target = ROOT / 'bin' / 'build.json'
+    temporary = target.with_name(target.name + '.tmp')
+    temporary.write_text(json.dumps(manifest), encoding='utf-8')
+    os.replace(temporary, target)
+
+
 def build():
     """Build explicit host and Linux artifacts, never run the trading engine."""
     import shutil
@@ -112,17 +140,35 @@ def build():
             go = str(candidate)
     if go is None:
         raise RuntimeError('Go 1.25+ requis pour compiler Freqtrade')
-    (ROOT / 'bin').mkdir(exist_ok=True)
+    binaries = ROOT / 'bin'
+    binaries.mkdir(parents=True, exist_ok=True)
+    build_dir = ROOT / '.build'
+    build_dir.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix='zeus_freqtrade_build_', dir=build_dir))
     platforms = [('windows', 'freqtrade-windows-amd64.exe'), ('linux', 'freqtrade-linux-amd64')]
-    for target, filename in platforms:
-        env = os.environ.copy()
-        env.update(GOOS=target, GOARCH='amd64', CGO_ENABLED='0')
-        subprocess.run([go, 'build', '-trimpath', '-o', str(ROOT / 'bin' / filename), './cmd/bot'],
-                       cwd=ROOT / 'engine', env=env, check=True)
-    if os.name != 'nt':
-        binary_path().chmod(0o755)
-    manifest = dict(source=engine_digest(), binaries={name: hashlib.sha256((ROOT / 'bin' / name).read_bytes()).hexdigest() for _, name in platforms})
-    (ROOT / 'bin' / 'build.json').write_text(json.dumps(manifest), encoding='utf-8')
+    try:
+        for target, filename in platforms:
+            env = os.environ.copy()
+            env.update(GOOS=target, GOARCH='amd64', CGO_ENABLED='0')
+            subprocess.run([go, 'build', '-trimpath', '-o', str(staging / filename), './cmd/bot'],
+                           cwd=ROOT / 'engine', env=env, check=True)
+        if os.name != 'nt':
+            (staging / platforms[-1][1]).chmod(0o755)
+        # Ne remplacer les binaires qu'une fois les deux compilations réussies :
+        # une compilation interrompue ne peut plus laisser un mélange incohérent.
+        try:
+            for _, filename in platforms:
+                os.replace(staging / filename, binaries / filename)
+        except PermissionError:
+            raise RuntimeError('Binaire Freqtrade verrouillé par un bot en cours ; '
+                               'arrêter le bot puis relancer --build') from None
+        manifest = dict(source=engine_digest(),
+                        binaries={name: hashlib.sha256((binaries / name).read_bytes()).hexdigest()
+                                  for _, name in platforms})
+        _write_manifest(manifest)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    require_binary()
 
 
 def acquire_lock(symbol):
@@ -174,8 +220,11 @@ def publish(path, state):
 
 
 def session_config(symbol, amount, metadata):
-    if not math.isfinite(amount) or amount < 10:
-        raise ValueError('Montant minimal : 10 USD')
+    # 25% per side with the exchange's 10 USD minimum order means 40 USD is
+    # the smallest budget that can quote even one level without betting the
+    # whole stake on a single fill.
+    if not math.isfinite(amount) or amount < 40:
+        raise ValueError('Montant minimal Freqtrade : 40 USD (25 % par côté, ordre minimum 10 USD)')
     dex, bare = symbol.split(':', 1)
     universe, contexts = metadata
     selected = next(((i, row) for i, row in enumerate(universe['universe'])
@@ -193,22 +242,66 @@ def session_config(symbol, amount, metadata):
     config.pop('env', None)
     config.pop('wallet_address', None)
     config['data_source'] = 'public'
-    config['signal_pauses_enabled'] = False
+    config['signal_pauses_enabled'] = True  # Parité Bureau : pauses/widen sur signaux actifs
     config['strategy']['assets'] = [symbol]
     config['strategy']['spread_engine_enabled'] = False
     for section in ('market_making', 'execution', 'risk'):
         config[section].pop('per_asset', None)
-    config['market_making'].update(quote_notional=amount, ladder_levels=1,
+    # Quote a quarter of the budget per side so a fill does not consume the
+    # whole position cap and leave the bot exit-only. Keep at least one ladder
+    # level per side above the exchange minimum order value.
+    quote_notional = max(10.0, round(amount * 0.25, 2))
+    levels = 1 if quote_notional < 20 else 2 if quote_notional < 40 else 3
+    config['market_making'].update(quote_notional=quote_notional, ladder_levels=levels,
                                   adaptive_notional_enabled=False, trading_schedule_enabled=False,
                                   volume_burst_enabled=False, wall_front_enabled=False)
-    config['risk'].update(max_position_notional=amount, max_spread_exposure=amount,
-                          max_aggregate_exposure=amount, max_open_orders=2,
-                          session_flatten_on_shutdown=True, session_flatten_timeout_sec=15)
-    config['execution'].update(live_mode=True, leverage=min(int(os.getenv('OBI_LEVERAGE', '20')),
+    config['risk'].update(max_position_notional=amount,
+                          max_spread_exposure=round(amount * 1.1, 2),
+                          max_aggregate_exposure=round(amount * 1.1, 2),
+                          max_open_orders=2 * levels + 2,
+                          session_flatten_on_shutdown=True, session_flatten_timeout_sec=15,
+                          # A transient API/order-state race must not end the Zeus
+                          # session permanently. Recovery is bounded and cancels
+                          # all orders before resuming.
+                          fail_closed_cooldown_sec=15, max_fail_closed_retries=5)
+    config['execution'].update(live_mode=True, leverage=min(int(os.getenv('OBI_LEVERAGE', '30')),
                                                            int(contract['maxLeverage'])))
     config['postmortem'] = {'enabled': False}
-    config['rate_limit']['disabled'] = False
+    config['rate_limit']['disabled'] = True  # Parité avec config.live.yaml du Bureau ; les limites d'échange restent actives
     return config
+
+
+# Edge gate reference values (bps). They mirror the engine preset: measured fee
+# floor + adverse-selection buffer + half the target net edge per round trip.
+EDGE_FEE_BPS = 0.5
+EDGE_ADVERSE_BPS = 0.75
+EDGE_TARGET_BPS = 1.0
+def required_half_spread_bps():
+    return EDGE_FEE_BPS + EDGE_ADVERSE_BPS + EDGE_TARGET_BPS / 2.0
+
+
+def market_eligibility(symbol):
+    """Read the live book for diagnostics before the engine starts.
+
+    The Go edge gate controls each live quote. A narrow snapshot is a warning,
+    not proof that every later quote is uneconomic.
+    """
+    book = post_info('https://api.hyperliquid.xyz', {'type': 'l2Book', 'coin': symbol})
+    levels = book.get('levels') if isinstance(book, dict) else None
+    if not isinstance(levels, list) or len(levels) != 2 or not levels[0] or not levels[1]:
+        raise ValueError('Carnet indisponible : impossible de vérifier le spread venu')
+    try:
+        best_bid = float(levels[0][0]['px'])
+        best_ask = float(levels[1][0]['px'])
+    except (KeyError, TypeError, ValueError, IndexError):
+        raise ValueError('Carnet invalide : prix venu illisible') from None
+    mid = (best_bid + best_ask) / 2.0
+    if not math.isfinite(mid) or mid <= 0 or best_ask <= best_bid:
+        raise ValueError('Carnet invalide : spread venu incohérent')
+    venue_half = (best_ask - best_bid) / mid * 10000.0 / 2.0
+    required = required_half_spread_bps()
+    return {'venue_half_bps': venue_half, 'required_half_bps': required,
+            'warning': venue_half < required}
 
 
 def accept_snapshot(raw, session, symbol):
@@ -252,6 +345,7 @@ def run(token, amount):
                  cost_per_1m=None, notional=amount)
     def write():
         state['ts'] = time.time()
+        derive_metrics(state)
         publish(stats_file_path(symbol), state)
     def halted(*_):
         stop.set()
@@ -263,6 +357,10 @@ def run(token, amount):
     try:
         metadata = post_info('https://api.hyperliquid.xyz', {'type': 'metaAndAssetCtxs', 'dex': symbol.split(':')[0]})
         config = session_config(symbol, amount, metadata)
+        edge = market_eligibility(symbol)
+        edge_note = ' | cotations élargies par le moteur' if edge['warning'] else ''
+        state.update(action=f"FREQTRADE | spread venu {edge['venue_half_bps']:.2f} bps, edge requis {edge['required_half_bps']:.2f} bps{edge_note}")
+        write()
         temporary = tempfile.TemporaryDirectory(prefix='zeus_freqtrade_')
         directory = temporary.name
         config_path = Path(directory) / 'config.json'
@@ -274,7 +372,8 @@ def run(token, amount):
                 if stop_path.exists():
                     stop.set()
         threading.Thread(target=watch, daemon=True).start()
-        preflight(binary, config_path, '-validate', stop)
+        # Même séquence que start-live.ps1 du Bureau : un seul -check-account,
+        # puis démarrage direct (pas de -validate supplémentaire).
         preflight(binary, config_path, '-check-account', stop)
         if stop.is_set():
             raise RuntimeError('Démarrage annulé avant ordres')
@@ -310,6 +409,7 @@ def run(token, amount):
             try:
                 state.update(updates.get(timeout=0.1))
                 write()
+
             except queue.Empty:
                 pass
         child.wait()
@@ -334,7 +434,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build', action='store_true')
     parser.add_argument('--token', default='SP500')
-    parser.add_argument('--notional', type=float, default=15)
+    parser.add_argument('--notional', type=float, default=40)
     parser.add_argument('--strategy', choices=['freqtrade'], default='freqtrade')
     parser.add_argument('--live', action='store_true')
     args = parser.parse_args()
@@ -343,8 +443,8 @@ def main():
         return 0
     if not args.live:
         parser.error('--live est obligatoire ; aucun ordre lancé')
-    if not math.isfinite(args.notional) or args.notional < 10:
-        parser.error('--notional doit être fini et supérieur ou égal à 10 USD')
+    if not math.isfinite(args.notional) or args.notional < 40:
+        parser.error('--notional doit être fini et supérieur ou égal à 40 USD')
     return run(args.token, args.notional)
 
 

@@ -501,6 +501,14 @@ func TestApplyFeeFloor(t *testing.T) {
 		t.Errorf("expected ask=%f, got %f", mid+expectedHalf, a)
 	}
 
+	// Case 2b: asymmetric base quotes below the floor are centered on the
+	// reference (fair value), not on their own midpoint.
+	bid, ask = 99.999, 100.003 // midpoint 100.001, half-spread 2 bps
+	b, a = applyFeeFloor(bid, ask, mid, 3.0)
+	if !almostEqual(b, mid-0.03, floatTol) || !almostEqual(a, mid+0.03, floatTol) {
+		t.Errorf("expected FV-centered quotes %f/%f, got %f/%f", mid-0.03, mid+0.03, b, a)
+	}
+
 	// Case 3: fee floor = 0 — no change.
 	bid, ask = 99.999, 100.001
 	b, a = applyFeeFloor(bid, ask, mid, 0)
@@ -1009,6 +1017,44 @@ func TestFailedRefreshEntersFailClosedHalt(t *testing.T) {
 	}
 	if len(exec.cancels) == 0 {
 		t.Fatal("expected outstanding orders to be cancelled during fail-closed halt")
+	}
+}
+
+func TestSupersededRefreshRetriesWithoutFailClosed(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.MarketMaking.RefreshIntervalMs = 50
+
+	bookCh := make(chan types.BookUpdate, 100)
+	signalCh := make(chan types.SpreadSignal, 100)
+	riskCh := make(chan types.RiskAction, 100)
+	exec := newMockExecutor()
+	// A fill/reconciliation race aborts the first refresh. The manager must
+	// treat it as retryable rather than entering a permanent operational halt.
+	exec.setRefreshErrors("xyz:CL", execution.ErrRefreshSuperseded)
+	szDecimals := map[string]int{"xyz:CL": 2, "xyz:BRENTOIL": 2}
+
+	mgr := New(cfg, bookCh, signalCh, riskCh, exec, szDecimals, nil, nil, nil, nil, newTestSessionPnL())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go mgr.Run(ctx)
+
+	update := types.BookUpdate{
+		Coin: "xyz:CL", BestBid: 69.95, BestAsk: 70.05, Mid: 70.0, Timestamp: time.Now(),
+	}
+	bookCh <- update
+	time.Sleep(150 * time.Millisecond)
+	bookCh <- update
+	time.Sleep(250 * time.Millisecond)
+
+	if mgr.supervisor.IsRefreshFailed() {
+		t.Fatal("superseded refresh must not enter fail-closed halt")
+	}
+	if got := len(exec.getRefreshes()); got < 2 {
+		t.Fatalf("expected a retry after superseded refresh, got %d refresh attempts", got)
+	}
+	if len(exec.OpenOrders("xyz:CL")) == 0 {
+		t.Fatal("expected quotes to be re-established after retry")
 	}
 }
 

@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -223,6 +224,9 @@ func TestRefreshEpochGuardBetweenPhases(t *testing.T) {
 	err := le.Refresh(ctx, coin, desired)
 	if err == nil {
 		t.Fatal("expected error due to epoch change during phase 1, got nil")
+	}
+	if !errors.Is(err, ErrRefreshSuperseded) {
+		t.Fatalf("epoch change must be classified as a retryable superseded refresh, got: %v", err)
 	}
 
 	if placeCalled.Load() {

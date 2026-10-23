@@ -2,6 +2,7 @@ package quoting
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -18,20 +19,97 @@ import (
 	"hyperliquid-market-maker/internal/vwap"
 )
 
-// applyFeeFloor widens bid/ask symmetrically if the current half-spread is
-// less than minHalfSpreadBps. This ensures quotes are always wide enough to
-// cover per-fill fee costs.
-func applyFeeFloor(bid, ask, mid, minHalfSpreadBps float64) (float64, float64) {
-	if mid == 0 || minHalfSpreadBps <= 0 {
+// applyFeeFloor widens bid/ask symmetrically around ref if the current
+// half-spread is less than minHalfSpreadBps. This ensures quotes are always
+// wide enough to cover per-fill fee costs. Centering on the reference (fair
+// value) rather than the bid/ask midpoint keeps every fill at least the fee
+// distance from FV even when the two sides use different width multipliers.
+func applyFeeFloor(bid, ask, ref, minHalfSpreadBps float64) (float64, float64) {
+	if ref <= 0 || minHalfSpreadBps <= 0 {
 		return bid, ask
 	}
 	currentHalfSpread := (ask - bid) / 2.0
-	minHalfSpread := mid * minHalfSpreadBps / 10000.0
+	minHalfSpread := ref * minHalfSpreadBps / 10000.0
 	if currentHalfSpread >= minHalfSpread {
 		return bid, ask
 	}
-	center := (bid + ask) / 2.0
-	return center - minHalfSpread, center + minHalfSpread
+	return ref - minHalfSpread, ref + minHalfSpread
+}
+
+// requiredHalfSpreadBps is the minimum half-spread needed on one side for a
+// round trip to clear measured fees, adverse selection and a target net edge.
+// A round trip pays one fee on each of its two fills and suffers one adverse
+// move per fill, so fee + adverse + target/2 is the per-side requirement.
+func requiredHalfSpreadBps(feeBps, adverseBps, targetBps float64) float64 {
+	if feeBps < 0 {
+		feeBps = 0
+	}
+	if adverseBps < 0 {
+		adverseBps = 0
+	}
+	if targetBps < 0 {
+		targetBps = 0
+	}
+	return feeBps + adverseBps + targetBps/2.0
+}
+
+// applyEdgeFloor widens one side to at least requiredBps away from ref.
+// It returns the (possibly widened) price and whether the requirement exceeds
+// maxBps, in which case the side should not be quoted at all.
+func applyEdgeFloor(price, ref float64, isBid bool, requiredBps, maxBps float64) (float64, bool) {
+	if ref <= 0 || requiredBps <= 0 {
+		return price, false
+	}
+	if maxBps > 0 && requiredBps > maxBps {
+		return price, true
+	}
+	half := ref * requiredBps / 10000.0
+	if isBid {
+		floor := ref - half
+		if price > floor {
+			return floor, false
+		}
+		return price, false
+	}
+	ceiling := ref + half
+	if price < ceiling {
+		return ceiling, false
+	}
+	return price, false
+}
+
+// measuredFeeBpsFor returns the fee used by the edge gate: the measured fee
+// once at least one fill has been seen, otherwise the configured fee. The
+// measured value is floored so a single cheap fill cannot collapse the gate.
+func (m *Manager) measuredFeeBpsFor(coin string, mm config.MarketMakingConfig) float64 {
+	configured := mm.MakerFeeBps + mm.BuilderFeeBps
+	m.feeBpsMu.RLock()
+	measured, seeded := m.feeBps[coin], m.feeBpsSeeded[coin]
+	m.feeBpsMu.RUnlock()
+	if !seeded {
+		return configured
+	}
+	if measured < mm.EdgeFeeFloorBps {
+		measured = mm.EdgeFeeFloorBps
+	}
+	return measured
+}
+
+// adverseBpsFor returns the adverse-selection buffer for one side. It uses the
+// per-side markout EWMA once warmup is complete and falls back to the config
+// floor otherwise, so the gate is never blind at session start.
+func (m *Manager) adverseBpsFor(coin, side string, floorBps float64) float64 {
+	if floorBps < 0 {
+		floorBps = 0
+	}
+	if st := m.toxicityTrackers[coin]; st != nil {
+		if ewma, ready := st.MarkoutEWMA(side); ready {
+			if adverse := -ewma; adverse > floorBps {
+				return adverse
+			}
+		}
+	}
+	return floorBps
 }
 
 // applyInventorySkew shifts bid/ask to encourage position reduction.
@@ -605,6 +683,13 @@ type Manager struct {
 	fillStats map[string]*FillWindowStats
 	diagMu    sync.RWMutex
 
+	// Measured fee per fill as bps of notional. Drives the edge gate so the
+	// quoted spread covers the fee actually charged by the venue, not a static
+	// guess. Seeded on the first fill, then EWMA-smoothed.
+	feeBpsMu     sync.RWMutex
+	feeBps       map[string]float64
+	feeBpsSeeded map[string]bool
+
 	// V32: per-coin counters for trend-bias mechanism firings. Incremented on each
 	// quote build where the mechanism applied a non-zero adjustment. Snapshotted and
 	// reset by the status-tick markout log to expose which V31 mechanisms are dormant.
@@ -766,6 +851,17 @@ type DiagnosticSnapshot struct {
 	AskAbsentPct        float64 // % of quote cycles since last STATUS where sell side produced 0 orders
 	BothAbsentPct       float64 // % of quote cycles since last STATUS where both sides were absent
 	PresenceCycles      int     // number of quote cycles observed in the window (0 = no data)
+
+	// Edge gate (measured cost vs quoted half-spread, bps)
+	EdgeRequiredBidBps float64
+	EdgeRequiredAskBps float64
+	QuoteHalfBidBps    float64
+	QuoteHalfAskBps    float64
+	EdgeSkipBid        bool
+	EdgeSkipAsk        bool
+	MeasuredFeeBps     float64
+	MarkoutBuyBps      float64
+	MarkoutSellBps     float64
 }
 
 // FillWindowStats accumulates fill statistics between STATUS dumps.
@@ -853,6 +949,8 @@ func New(
 	m.supervisor = NewSupervisor()
 	m.diagSnaps = make(map[string]DiagnosticSnapshot, numAssets)
 	m.fillStats = make(map[string]*FillWindowStats, numAssets)
+	m.feeBps = make(map[string]float64, numAssets)
+	m.feeBpsSeeded = make(map[string]bool, numAssets)
 	for _, asset := range cfg.Strategy.Assets {
 		m.fillStats[asset] = &FillWindowStats{}
 	}
@@ -1792,7 +1890,7 @@ func (m *Manager) UpdateRateLimit(remaining, cap int) {
 
 	// Percentage-based remaining warning (log once, reset if remaining recovers).
 	if cap > 0 {
-		pctRemaining := float64(remaining) / float64(cap) * 100.0
+		pctRemaining := m.rateLimitRemainingPctLocked(remaining)
 		rl := m.cfg.RateLimit
 		if pctRemaining < rl.RemainingPctWarn && !m.rlPctWarned {
 			m.rlPctWarned = true
@@ -1853,7 +1951,7 @@ func (m *Manager) UpdateRateLimit(remaining, cap int) {
 			remaining > rl.AbsoluteFloor*2
 		// Block recovery if remaining/cap is still below the percentage critical threshold.
 		if recoverable && cap > 0 {
-			pctRemaining := float64(remaining) / float64(cap) * 100.0
+			pctRemaining := m.rateLimitRemainingPctLocked(remaining)
 			if pctRemaining < rl.RemainingPctCritical {
 				recoverable = false
 			}
@@ -1881,7 +1979,7 @@ func (m *Manager) rateLimitShutdown(remaining int, tte, depletion float64) {
 	if remaining < m.cfg.RateLimit.AbsoluteFloor {
 		trigger = "floor"
 	} else if m.rateLimitCap > 0 {
-		pctRemaining := float64(remaining) / float64(m.rateLimitCap) * 100.0
+		pctRemaining := m.rateLimitRemainingPctLocked(remaining)
 		if pctRemaining < m.cfg.RateLimit.RemainingPctCritical {
 			trigger = "pct"
 		}
@@ -1944,7 +2042,7 @@ func (m *Manager) computeRateLimitTierLocked() (tier rateLimitTier, tte float64,
 	graceSec := rl.PctCriticalGraceSec
 	inGrace := graceSec > 0 && !m.startedAt.IsZero() && time.Since(m.startedAt) < time.Duration(graceSec)*time.Second
 	if m.rateLimitCap > 0 && !inGrace {
-		pctRemaining := float64(m.rateLimitRemaining) / float64(m.rateLimitCap) * 100.0
+		pctRemaining := m.rateLimitRemainingPctLocked(m.rateLimitRemaining)
 		if pctRemaining < rl.RemainingPctCritical {
 			// Use EWMA depletion if available for TTE estimate, else 0.
 			dep := m.rlEWMADepletion
@@ -2055,6 +2153,21 @@ func (m *Manager) RecordFill(fill types.FillEvent) {
 	}
 
 	notional := fill.Price * fill.Size
+	// Measured fee (bps of notional) for the edge gate. Extreme or malformed
+	// values are ignored so one bad print cannot pin the required spread.
+	if notional > 0 {
+		feeBps := (fill.Fee + fill.BuilderFee) / notional * 10000.0
+		if !math.IsNaN(feeBps) && !math.IsInf(feeBps, 0) && feeBps >= 0 && feeBps <= 100 {
+			m.feeBpsMu.Lock()
+			if m.feeBpsSeeded[fill.Coin] {
+				m.feeBps[fill.Coin] = 0.8*m.feeBps[fill.Coin] + 0.2*feeBps
+			} else {
+				m.feeBps[fill.Coin] = feeBps
+				m.feeBpsSeeded[fill.Coin] = true
+			}
+			m.feeBpsMu.Unlock()
+		}
+	}
 	var captureBps float64
 	var fv float64
 	var wickMult float64
@@ -2941,7 +3054,7 @@ func (m *Manager) evaluateOptimizers() []forceRefreshRequest {
 		}
 		rl := m.cfg.RateLimit
 		if rl.BudgetPressurePctStart > 0 && m.rateLimitCap > 0 {
-			pctRemaining := float64(m.rateLimitRemaining) / float64(m.rateLimitCap) * 100.0
+			pctRemaining := m.rateLimitRemainingPctLocked(m.rateLimitRemaining)
 			span := rl.BudgetPressurePctStart - rl.RemainingPctCritical
 			if span > 0 && pctRemaining < rl.BudgetPressurePctStart {
 				depletionBp = (rl.BudgetPressurePctStart - pctRemaining) / span
@@ -3638,8 +3751,18 @@ func (m *Manager) maybeRefreshQuotes(ctx context.Context) {
 		m.mu.Unlock()
 
 		if refreshErr != nil {
+			// A fill or reconciliation can change the order state while a
+			// refresh is in flight. The executor aborts safely and clears its
+			// tracking; that is a normal race, not an API failure. Retry on the
+			// next tick instead of entering a permanent fail-closed halt.
+			if errors.Is(refreshErr, execution.ErrRefreshSuperseded) {
+				slog.Warn("quote refresh superseded by order-state change; retrying",
+					"error", refreshErr,
+				)
+				return
+			}
 			slog.Error("RefreshMulti failed", "error", refreshErr)
-			m.failClosed(ctx, "quote_refresh_failure")
+			m.failClosed(ctx, "quote_refresh_failure", refreshErr)
 			return
 		}
 
@@ -3683,7 +3806,7 @@ func (m *Manager) maybeRefreshQuotes(ctx context.Context) {
 	}(now, append([]string(nil), m.scratch.refreshCoins...))
 }
 
-func (m *Manager) failClosed(ctx context.Context, reason string) {
+func (m *Manager) failClosed(ctx context.Context, reason string, cause error) {
 	m.mu.Lock()
 	m.failClosedAt = time.Now()
 	m.failClosedRetries++
@@ -3692,8 +3815,11 @@ func (m *Manager) failClosed(ctx context.Context, reason string) {
 	m.mu.Unlock()
 	m.supervisor.Signal(SignalRefreshFailed)
 
+	// The underlying API error is logged here so the Zeus banner shows why the
+	// halt happened, not just that it happened (the bridge forwards this line).
 	slog.Error("quote manager entering fail-closed halt",
 		"reason", reason,
+		"error", cause,
 		"retry_count", retries,
 	)
 	cancelCtx, cancelCancel := context.WithTimeout(ctx, cancelTimeoutFailClosed)
@@ -4202,9 +4328,12 @@ func (m *Manager) computeOrdersForCoin(
 	}
 
 	// Step 2.5: Fee Floor
+	// Center on fair value (the reference the quotes were built from), not the
+	// raw book mid: centering on mid while quoting around FV pushed both prices
+	// to one side of the book and could break the minimum spread guarantee.
 	if mm.FeeFloorEnabled {
 		minHalfSpreadBps := mm.MakerFeeBps + mm.BuilderFeeBps
-		bid, ask = applyFeeFloor(bid, ask, mid, minHalfSpreadBps)
+		bid, ask = applyFeeFloor(bid, ask, fairValue, minHalfSpreadBps)
 	}
 
 	// Step 3: Spread Bias (+ Feature 5: z-score calibration)
@@ -4948,6 +5077,40 @@ func (m *Manager) computeOrdersForCoin(
 			bid = fairValue - (fairValue-bid)*tighten
 		}
 	}
+	// Fixed-sizing mode (signal_pauses_enabled=false) intentionally ignores the
+	// sizing gates so both sides keep quoting at the configured notional. The
+	// price-based edge gate below still applies its cost floor.
+	if !m.cfg.SignalPauses() {
+		buyNotional = mm.QuoteNotional
+		sellNotional = mm.QuoteNotional
+	}
+
+	// Edge gate: floor the exposure-increasing side(s) at measured fee +
+	// adverse selection + target net edge. Exit-side quotes keep the normal
+	// pipeline (skew, position-age, idle breaker) so inventory can be reduced.
+	var edgeReqBid, edgeReqAsk, edgeHalfBid, edgeHalfAsk, edgeFeeBps float64
+	var edgeSkipBid, edgeSkipAsk bool
+	if mm.EdgeGateEnabled {
+		edgeFeeBps = m.measuredFeeBpsFor(coin, mm)
+		if pos.Side != "long" {
+			edgeReqBid = requiredHalfSpreadBps(edgeFeeBps, m.adverseBpsFor(coin, "buy", mm.EdgeAdverseFloorBps), mm.EdgeTargetBps)
+			bid, edgeSkipBid = applyEdgeFloor(bid, fairValue, true, edgeReqBid, mm.EdgeMaxWidthBps)
+			if edgeSkipBid {
+				buyNotional = 0
+			}
+		}
+		if pos.Side != "short" {
+			edgeReqAsk = requiredHalfSpreadBps(edgeFeeBps, m.adverseBpsFor(coin, "sell", mm.EdgeAdverseFloorBps), mm.EdgeTargetBps)
+			ask, edgeSkipAsk = applyEdgeFloor(ask, fairValue, false, edgeReqAsk, mm.EdgeMaxWidthBps)
+			if edgeSkipAsk {
+				sellNotional = 0
+			}
+		}
+		if fairValue > 0 {
+			edgeHalfBid = (fairValue - bid) / fairValue * 10000.0
+			edgeHalfAsk = (ask - fairValue) / fairValue * 10000.0
+		}
+	}
 	bid, ask = applyCrossingProtection(bid, ask, fairValue, pos.Side, pos.Notional, book.BestBid, book.BestAsk, float64(mm.MinCrossingSpreadBps))
 
 	// Exposure limits
@@ -4966,10 +5129,6 @@ func (m *Manager) computeOrdersForCoin(
 	}
 	if maxSpreadExposure <= 0 {
 		maxSpreadExposure = math.MaxFloat64
-	}
-	if !m.cfg.SignalPauses() {
-		buyNotional = mm.QuoteNotional
-		sellNotional = mm.QuoteNotional
 	}
 	allowedBuy := minFloat(buyNotional, maxPositionNotional-exposure.Long, maxSpreadExposure-otherPair-exposure.Long)
 	allowedSell := minFloat(sellNotional, maxPositionNotional-exposure.Short, maxSpreadExposure-otherPair-exposure.Short)
@@ -5091,9 +5250,14 @@ func (m *Manager) computeOrdersForCoin(
 		if perCoinCap < 1 {
 			perCoinCap = 1
 		}
-		if len(orders) > perCoinCap {
-			orders = orders[:perCoinCap]
+		// Cap each side independently. Truncating the concatenated slice
+		// (buys first, then sells) silently removed the whole sell side as
+		// soon as ladder_levels > 1.
+		perSideCap := perCoinCap / 2
+		if perSideCap < 1 {
+			perSideCap = 1
 		}
+		orders = capOrdersPerSide(orders, perSideCap)
 	}
 
 	// Cache pipeline intermediates for STATUS dump.
@@ -5188,6 +5352,13 @@ func (m *Manager) computeOrdersForCoin(
 		WickBidSuppressed:   wickBidSuppressed,
 		WickAskSuppressed:   wickAskSuppressed,
 		ScheduleMult:        scheduleMult,
+		EdgeRequiredBidBps:  edgeReqBid,
+		EdgeRequiredAskBps:  edgeReqAsk,
+		QuoteHalfBidBps:     edgeHalfBid,
+		QuoteHalfAskBps:     edgeHalfAsk,
+		EdgeSkipBid:         edgeSkipBid,
+		EdgeSkipAsk:         edgeSkipAsk,
+		MeasuredFeeBps:      edgeFeeBps,
 	}
 	m.diagMu.Unlock()
 
@@ -5524,6 +5695,32 @@ func quotesMateriallyDifferent(
 		}
 	}
 	return false
+}
+
+// capOrdersPerSide keeps at most perSide orders for each side while preserving
+// the original order (inner levels first). Both sides always survive when present.
+func capOrdersPerSide(orders []types.OrderRequest, perSide int) []types.OrderRequest {
+	if perSide <= 0 {
+		return orders
+	}
+	out := make([]types.OrderRequest, 0, len(orders))
+	buys, sells := 0, 0
+	for _, order := range orders {
+		switch normalizeOrderSide(order.Side) {
+		case "buy":
+			if buys >= perSide {
+				continue
+			}
+			buys++
+		case "sell":
+			if sells >= perSide {
+				continue
+			}
+			sells++
+		}
+		out = append(out, order)
+	}
+	return out
 }
 
 func normalizeOrders(orders []types.OrderRequest) []types.OrderRequest {

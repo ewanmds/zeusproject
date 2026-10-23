@@ -10,6 +10,9 @@ for (const file of ["index.html", "index.css", "app.js"]) {
     await cp(new URL(file, source), new URL(file, output));
 }
 
+// Static assets (HIP-3 market icons downloaded from Hyperliquid).
+await cp(new URL("assets", source), new URL("assets", output), { recursive: true });
+
 const config = {
     // This URL is public frontend configuration, not a wallet secret.
     apiBase: process.env.ZEUS_API_BASE || "https://3-112-81-235.sslip.io",
