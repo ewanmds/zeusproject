@@ -21,7 +21,6 @@ import time
 import math
 import threading
 import asyncio
-import logging
 import signal
 import secrets
 import subprocess
@@ -35,14 +34,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger("bot_server")
 GRID_NUM_LEVELS = 1
 
 # ---------------------------------------------------------------------------
@@ -51,7 +42,6 @@ GRID_NUM_LEVELS = 1
 def load_dotenv(path: Path) -> None:
     """Read a .env file and populate os.environ (does not overwrite)."""
     if not path.exists():
-        logger.warning(".env file not found at %s", path)
         return
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -107,7 +97,6 @@ class GridStartRequest(BaseModel):
     offset_ticks: Optional[float] = None
     spread_bps: Optional[float] = None
     offset_bps: Optional[float] = None  # utilisé par strategy=mid (distance au mid)
-    grid_maker_fee_bps: float = 0.288  # estimation explicite pour le plancher de spread
     grid_reset_bps: Optional[float] = None
     num_levels: int = 1
 
@@ -157,11 +146,9 @@ def _safe_import(module_name: str):
         import importlib
         if module_name in sys.modules:
             # Force reload the module from disk to apply new edits/constants
-            logger.info("Forcing reload of module: %s", module_name)
             return importlib.reload(sys.modules[module_name])
         return __import__(module_name)
     except Exception as exc:
-        logger.error("Failed to import %s: %s", module_name, exc)
         return None
 
 
@@ -231,7 +218,7 @@ class BotManager:
 
     def __init__(self) -> None:
         # OBI bots: un PROCESS ENFANT par token. token_key -> {proc, symbol,
-        # stats_file, stop_file, log, started, config}
+        # stats_file, stop_file, started, config}
         self.obi_procs: Dict[str, Dict[str, Any]] = {}
         self.grid_config: Dict[str, Any] = {}   # dernière config (restart)
 
@@ -263,13 +250,9 @@ class BotManager:
             raise ValueError('Market making requires mode=live')
         token_key = (config.token or "SP500").strip().upper()
         strategy = (config.strategy or "bbo").strip().lower()
-        if strategy not in ("bbo", "mid", "grid_adaptive"):
+        if strategy not in ("bbo", "mid"):
             raise ValueError(f"Unknown market making strategy: {config.strategy}")
         offset_bps = None
-        if strategy == "grid_adaptive" and (
-            not math.isfinite(config.grid_maker_fee_bps) or not 0 <= config.grid_maker_fee_bps < 10000
-        ):
-            raise ValueError("grid_maker_fee_bps must be finite, at least 0 and less than 10000")
         if strategy == "mid":
             offset_bps = float(config.offset_bps if config.offset_bps is not None else 1.0)
             if not math.isfinite(offset_bps) or not 0 <= offset_bps < 10000:
@@ -291,8 +274,6 @@ class BotManager:
             existing = self.obi_procs.get(token_key)
             if existing is not None and existing["proc"].poll() is None:
                 raise RuntimeError(f"Un bot tourne déjà sur {token_key}")
-            if existing is not None:
-                existing["log_f"].close()
 
             # Stopfile périmé d'un run précédent: le supprimer avant de lancer.
             stop_file = obi_mod.stop_file_path(symbol)
@@ -301,59 +282,45 @@ class BotManager:
             except OSError:
                 pass
 
-            log_path = BASE_DIR / f"obi_{token_key}.log"
-            log_f = open(log_path, "ab")
-            log_start = log_f.tell()
             env = os.environ.copy()
             env["OBI_HEADLESS"] = "1"   # pas de Rich Live dans un process enfant
             cmd = [
-                sys.executable, "-u", str(BASE_DIR / ("ADAPTIVE_GRID_BOT.py" if strategy == "grid_adaptive" else "OBI_VOLUME_BOT.py")),
+                sys.executable, "-u", str(BASE_DIR / "OBI_VOLUME_BOT.py"),
                 "--token", token_key, "--live", "--notional", str(order_usd),
                 "--strategy", strategy,
             ]
             if offset_bps is not None:
                 cmd.extend(["--offset-bps", str(offset_bps)])
-            if strategy == "grid_adaptive":
-                cmd.extend(["--grid-maker-fee-bps", str(config.grid_maker_fee_bps)])
             proc = subprocess.Popen(
                 cmd, cwd=str(BASE_DIR), env=env,
-                stdout=log_f, stderr=subprocess.STDOUT,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             self.obi_procs[token_key] = {
                 "proc": proc,
                 "symbol": symbol,
                 "stats_file": obi_mod.stats_file_path(symbol),
                 "stop_file": stop_file,
-                "log": str(log_path),
-                "log_start": log_start,
-                "log_f": log_f,
                 "started": time.time(),
                 "config": {"token": token_key, "strategy": strategy, "mode": "live",
                            "order_size_usd": order_usd},
             }
             if offset_bps is not None:
                 self.obi_procs[token_key]["config"]["offset_bps"] = offset_bps
-            if strategy == "grid_adaptive":
-                self.obi_procs[token_key]["config"]["grid_maker_fee_bps"] = config.grid_maker_fee_bps
             self.grid_config = config.model_dump()
 
         # Détection de crash immédiat (verrou d'instance déjà pris, etc.)
         time.sleep(1.5)
         if proc.poll() is not None:
-            try:
-                log_f.close()
-            except Exception:
-                pass
             tail = ""
             try:
-                with open(log_path, "rb") as stream:
-                    stream.seek(log_start)
-                    lines = stream.read().decode("utf-8", errors="replace").strip().splitlines()
-                tail = lines[-1] if lines else ""
-            except Exception:
+                status = json.loads(Path(self.obi_procs[token_key]["stats_file"]).read_bytes())
+                if status.get("start_time", 0) >= self.obi_procs[token_key]["started"] - 5:
+                    tail = str(status.get("error", ""))
+            except (OSError, ValueError):
                 pass
+            if not tail:
+                tail = f"Code de sortie {proc.returncode}"
             raise RuntimeError(f"Le bot {token_key} s'est arrêté immédiatement: {tail}")
-        logger.info("%s bot process started: %s (pid %s)", strategy.upper(), symbol, proc.pid)
 
     def stop_grid(self, token: Optional[str] = None) -> None:
         """Arrêt PROPRE via stopfile (le bot fait cancel all + flatten avant
@@ -365,14 +332,13 @@ class BotManager:
                 keys = list(self.obi_procs.keys())
             targets = [(k, self.obi_procs[k]) for k in keys if k in self.obi_procs]
         if not targets:
-            logger.info("No OBI bot to stop (%s)", token or "all")
             return
 
         for key, info in targets:
             try:
                 Path(info["stop_file"]).write_text("stop", encoding="utf-8")
             except Exception:
-                logger.exception("Cannot write stop file for %s", key)
+                pass
 
         # Laisser le temps du cancel all + flatten market avant d'escalader.
         deadline = time.time() + 30
@@ -381,12 +347,7 @@ class BotManager:
             while proc.poll() is None and time.time() < deadline:
                 time.sleep(0.4)
             if proc.poll() is None:
-                logger.warning("OBI %s: pas d'arrêt propre après 30s — terminate", key)
                 proc.terminate()
-            try:
-                info["log_f"].close()
-            except Exception:
-                pass
             try:
                 os.remove(info["stop_file"])
             except OSError:
@@ -394,7 +355,6 @@ class BotManager:
         with self.lock:
             for key, _ in targets:
                 self.obi_procs.pop(key, None)
-        logger.info("OBI bot(s) stopped: %s", ", ".join(k for k, _ in targets))
 
     def get_grid_stats(self) -> Dict[str, Any]:
         default = {
@@ -423,14 +383,11 @@ class BotManager:
                 return default
 
             bots = []
-            dead = []
             tot_vol = tot_fees = tot_rpnl = tot_pos = 0.0
             tot_fills = 0
             earliest = None
             for key, info in items:
                 alive = info["proc"].poll() is None
-                if not alive:
-                    dead.append(key)
                 st: Dict[str, Any] = {}
                 try:
                     # Close the Windows file handle before parsing the JSON,
@@ -457,13 +414,7 @@ class BotManager:
                 if not alive and phase != "stopped":
                     phase = "failed"
                     if not error:
-                        try:
-                            with open(info["log"], "rb") as stream:
-                                stream.seek(info.get("log_start", 0))
-                                lines = stream.read().decode("utf-8", errors="replace").strip().splitlines()
-                            error = lines[-1] if lines else "Le processus s'est arrêté pendant le démarrage."
-                        except OSError:
-                            error = "Le processus s'est arrêté pendant le démarrage."
+                        error = f"Le processus s'est arrêté (code {info['proc'].returncode})."
                 entry = {
                     "token": key,
                     "strategy": info["config"].get("strategy", "bbo"),
@@ -490,10 +441,6 @@ class BotManager:
                     "markout_bid_bps": _json_float(st.get("markout_bid_bps", 0), 3),
                     "markout_ask_bps": _json_float(st.get("markout_ask_bps", 0), 3),
                     "mid_offset_bps": _json_float(st.get("mid_offset_bps", 0), 2),
-                    "grid_regime": str(st.get("grid_regime", "")),
-                    "grid_trend_score": _json_float(st.get("grid_trend_score", 0), 3),
-                    "grid_atr": _json_float(st.get("grid_atr", 0), 6),
-                    "grid_half_spread_bps": _json_float(st.get("grid_half_spread_bps", 0), 3),
                     "position_usd": _json_float(st.get("position_usd", 0), 2),
                     "upnl": _json_float(st.get("upnl", 0), 4),
                     "action": str(st.get("action", "")),
@@ -507,16 +454,6 @@ class BotManager:
                     tot_pos += float(st.get("position_usd", 0) or 0)
                     tot_fills += entry["fills"]
                     earliest = start if earliest is None else min(earliest, start)
-
-            # Garder le dernier échec affiché jusqu'au prochain lancement ou
-            # arrêt explicite: un crash ne doit pas disparaître du dashboard.
-            if dead:
-                with self.lock:
-                    for key in dead:
-                        try:
-                            self.obi_procs[key]["log_f"].close()
-                        except Exception:
-                            pass
 
             alive_bots = [b for b in bots if b["running"]]
             single = alive_bots[0] if len(alive_bots) == 1 else None
@@ -541,7 +478,6 @@ class BotManager:
             self._grid_stats_cache = result
             return result
         except Exception:
-            logger.exception("Error reading OBI stats")
             return self._grid_stats_cache or default
 
     # -----------------------------------------------------------------------
@@ -563,9 +499,6 @@ class BotManager:
                 from hyperliquid.utils import constants
                 base_url = constants.MAINNET_API_URL
             except ImportError:
-                logger.warning(
-                    "hyperliquid SDK not found, using default mainnet URL"
-                )
                 base_url = "https://api.hyperliquid.xyz"
 
             cfg = wc_mod.BotConfig(
@@ -622,39 +555,33 @@ class BotManager:
 
             def run_wc():
                 try:
-                    logger.info("WorldCup bot thread starting")
                     self.wc_bot = wc_mod.HyperliquidSpreadBot(cfg)
                     self.wc_bot.run()
                 except Exception:
-                    logger.exception("WorldCup bot crashed")
+                    pass
                 finally:
                     self.wc_running = False
-                    logger.info("WorldCup bot thread exited")
 
             self.wc_thread = threading.Thread(
                 target=run_wc, name="worldcup-bot", daemon=True
             )
             self.wc_thread.start()
             self.wc_running = True
-            logger.info("WorldCup bot started")
 
     def stop_worldcup(self) -> None:
         with self.lock:
             if not self.wc_running or self.wc_bot is None:
-                logger.info("WorldCup bot is not running, nothing to stop")
                 return
-            logger.info("Stopping WorldCup bot …")
 
         # shutdown() sets running=False and cancels open orders
         try:
             self.wc_bot.shutdown()
         except Exception:
-            logger.exception("Error during WorldCup shutdown")
+            pass
 
         if self.wc_thread is not None:
             self.wc_thread.join(timeout=10)
         self.wc_running = False
-        logger.info("WorldCup bot stopped")
 
     def get_worldcup_stats(self) -> Dict[str, Any]:
         default = {
@@ -703,7 +630,6 @@ class BotManager:
             self._wc_stats_cache = result
             return result
         except Exception:
-            logger.exception("Error reading WorldCup stats")
             return self._wc_stats_cache or default
 
 
@@ -801,7 +727,6 @@ async def get_grid_tokens(_: None = Depends(_require_api_token)):
             "tokens": tokens,
         }
     except Exception:
-        logger.exception("Failed to load HIP-3 token catalog")
         # Fallback list when the module isn't available
         # Keep the catalog aligned with markets the current bot can resolve.
         fallback = {
@@ -834,7 +759,6 @@ async def start_grid(req: GridStartRequest, _: None = Depends(_require_api_token
         await loop.run_in_executor(None, manager.start_grid, req)
         return {"status": "starting", "message": f"Connexion Hyperliquid sur {req.token}", "mode": req.mode}
     except Exception as e:
-        logger.exception("Failed to start OBI bot")
         return JSONResponse(
             status_code=400,
             content={"status": "error", "message": str(e)},
@@ -849,7 +773,6 @@ async def stop_grid(req: Optional[GridStopRequest] = None, _: None = Depends(_re
         await loop.run_in_executor(None, manager.stop_grid, token)
         return {"status": "ok", "message": f"Bot stopped ({token or 'all'})"}
     except Exception as e:
-        logger.exception("Failed to stop OBI bot")
         return JSONResponse(
             status_code=400,
             content={"status": "error", "message": str(e)},
@@ -869,7 +792,6 @@ async def restart_grid(_: None = Depends(_require_api_token)):
         manager.start_grid(req)
         return {"status": "ok", "message": "Grid bot restarted"}
     except Exception as e:
-        logger.exception("Failed to restart Grid bot")
         return JSONResponse(
             status_code=400,
             content={"status": "error", "message": str(e)},
@@ -890,7 +812,6 @@ async def start_worldcup(req: WorldcupStartRequest, _: None = Depends(_require_a
         manager.start_worldcup(req)
         return {"status": "ok", "message": "WorldCup bot started"}
     except Exception as e:
-        logger.exception("Failed to start WorldCup bot")
         return JSONResponse(
             status_code=400,
             content={"status": "error", "message": str(e)},
@@ -903,7 +824,6 @@ async def stop_worldcup(_: None = Depends(_require_api_token)):
         manager.stop_worldcup()
         return {"status": "ok", "message": "WorldCup bot stopped"}
     except Exception as e:
-        logger.exception("Failed to stop WorldCup bot")
         return JSONResponse(
             status_code=400,
             content={"status": "error", "message": str(e)},
@@ -927,7 +847,6 @@ async def websocket_endpoint(websocket: WebSocket):
             return
     await websocket.accept()
     manager.ws_clients.add(websocket)
-    logger.info("WebSocket client connected (%d total)", len(manager.ws_clients))
     loop = asyncio.get_running_loop()
     try:
         while True:
@@ -940,28 +859,21 @@ async def websocket_endpoint(websocket: WebSocket):
             # 1 s: le chrono du dashboard doit avancer seconde par seconde
             await asyncio.sleep(1)
     except WebSocketDisconnect:
-        logger.info("WebSocket client disconnected")
+        pass
     except Exception:
-        logger.debug("WebSocket error", exc_info=True)
+        pass
     finally:
         manager.ws_clients.discard(websocket)
-        logger.info("WebSocket clients remaining: %d", len(manager.ws_clients))
 
 
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    print()
-    print("=" * 60)
-    print("  * Trading Bot Dashboard *")
-    print("  http://localhost:8080")
-    print("=" * 60)
-    print()
-
     uvicorn.run(
         app,
         host=os.getenv("BOT_HOST", "0.0.0.0"),
         port=int(os.getenv("BOT_PORT", "8080")),
-        log_level="info",
+        log_config=None,
+        access_log=False,
     )
