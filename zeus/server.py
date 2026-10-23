@@ -148,7 +148,7 @@ def _safe_import(module_name: str):
         if module_name in sys.modules:
             # Force reload the module from disk to apply new edits/constants
             return importlib.reload(sys.modules[module_name])
-        return __import__(module_name)
+        return importlib.import_module(module_name)
     except Exception as exc:
         return None
 
