@@ -262,6 +262,7 @@ class MarketState:
     quoted_bid: float = 0.0
     quoted_ask: float = 0.0
     position: float = 0.0
+    available_position: float = 0.0
     unrealized_pnl: float = 0.0
     margin_used: float = 0.0
     last_action: str = "waiting"
@@ -356,7 +357,8 @@ class HyperliquidSpreadBot:
         self.wallet = None
         if cfg.live:
             self._init_exchange(perp_dexs)
-            self.exchange = self.safety.wrap(self.exchange)
+            self.exchange = self.safety.wrap(
+                self.exchange, self._reconcile_missing_cancels if cfg.worldcup else None)
 
         self.specs = self.discover_markets()
         self.states: Dict[str, MarketState] = {spec.symbol: MarketState(spec) for spec in self.specs}
@@ -449,6 +451,29 @@ class HyperliquidSpreadBot:
         return account_snapshot(self.info, self.cfg.account_address, list(self.states),
                                 spot=self.cfg.worldcup,
                                 balances={s.spec.symbol: s.spec.balance_coin for s in self.states.values()})
+
+    def _reconcile_missing_cancels(self, requests):
+        """Resolve a cancel/fill race without resending or resuming a halted session."""
+        requested_ids = {int(req["oid"]) for req in requests}
+        with self.lock:
+            opening_symbols = {symbol for symbol, state in self.states.items()
+                               if state.bid_oid in requested_ids}
+            for state in self.states.values():
+                state.reconcile_required = True
+        rows = self._cleanup_snapshot()
+        open_ids = {int(order["oid"]) for _, _, orders in rows for order in orders}
+        if any(int(req["oid"]) in open_ids for req in requests):
+            raise RuntimeError("Cancellation rejected: order still open")
+        if not self.sync_account():
+            raise RuntimeError("Cancellation reconciliation: account synchronization unconfirmed")
+        with self.lock:
+            if any(state.bid_oid in requested_ids or state.ask_oid in requested_ids
+                   for state in self.states.values()):
+                raise RuntimeError("Cancellation reconciliation: order still open")
+            for symbol in opening_symbols:
+                state = self.states[symbol]
+                state.opening_rearm_until = max(state.opening_rearm_until,
+                                               time.time() + self.cfg.maker_opening_rest_sec)
 
     def _cleanup_close(self, symbol, position):
         bid, ask = self.fetch_rest_bbo(symbol)
@@ -971,9 +996,9 @@ class HyperliquidSpreadBot:
             self.wake.set()
 
     # -------------------------------------------------------------- sync/risk
-    def sync_account(self) -> None:
+    def sync_account(self) -> bool:
         if not self.cfg.account_address:
-            return
+            return False
         with self.lock:
             revision = getattr(self, "account_revision", 0)
         balances = None
@@ -986,9 +1011,15 @@ class HyperliquidSpreadBot:
                     str(balance.get("coin")): balance
                     for balance in spot_state.get("balances", [])
                 }
+                available = {}
+                for coin, balance in balances.items():
+                    total, hold = finite(balance["total"]), finite(balance["hold"])
+                    if total < 0 or hold < 0 or hold > total + 1e-9:
+                        raise ValueError("Invalid spot balance or reservation")
+                    available[coin] = max(0.0, total - hold)
             except Exception as exc:
                 self.safety.fail(f"Account synchronization failed: {exc}")
-                return
+                return False
         else:
             try:
                 st = self.info.user_state(self.cfg.account_address, dex=self.cfg.perp_dex)
@@ -998,19 +1029,25 @@ class HyperliquidSpreadBot:
         try:
             dex = "" if self.cfg.worldcup else self.cfg.perp_dex
             orders = self.info.open_orders(self.cfg.account_address, dex=dex)
-            if not isinstance(orders, list):
+            if not isinstance(orders, list) or any(
+                    not isinstance(order, dict) or not order.get("coin")
+                    or int(order.get("oid", 0)) <= 0 or order.get("side") not in {"A", "B"}
+                    or finite(order.get("limitPx")) <= 0 for order in orders):
                 raise ValueError("Invalid open orders response")
         except Exception as exc:
             self.safety.fail(f"Order synchronization failed: {exc}")
-            return
+            return False
         with self.lock:
             if revision != getattr(self, "account_revision", 0):
-                return  # A websocket update overtook this REST snapshot.
+                return False  # A websocket update overtook this REST snapshot.
+            if balances is not None:
+                self.available_usdc = available.get("USDC", 0.0)
             for state in self.states.values():
                 if balances is not None and state.spec.balance_coin:
                     bal = balances.get(state.spec.balance_coin, {})
                     # Held tokens are still inventory, including our resting ask.
                     state.position = finite(bal["total"]) if bal else 0.0
+                    state.available_position = available.get(state.spec.balance_coin, 0.0)
                     state.margin_used = 0.0
                 state.bid_oid = None
                 state.ask_oid = None
@@ -1030,6 +1067,7 @@ class HyperliquidSpreadBot:
                         else:
                             state.ask_oid = oid
                             state.quoted_ask = safe_float(order.get("limitPx"))
+        return True
 
     def risk_block_reason(self, st: MarketState, closing_inventory: bool = False) -> Optional[str]:
         if self.stats.net_pnl <= -abs(self.cfg.stop_loss_usd):
@@ -1138,6 +1176,33 @@ class HyperliquidSpreadBot:
         )
 
     # ------------------------------------------------------------ order logic
+    def _prepare_spot_request(self, st, previous):
+        """Fresh funds and inventory, under the execution gate, before a new order."""
+        if not self.sync_account() or not self.running or self.safety.stopped.is_set():
+            st.last_action = "await account reconciliation"
+            return None
+        if st.reconcile_required or st.bid_oid or st.ask_oid:
+            st.last_action = "await existing order reconciliation"
+            return None
+        request, reason = self.desired_spot_no_order(st)
+        if not request or request["is_buy"] != previous["is_buy"]:
+            st.last_action = reason if not request else "inventory changed; re-evaluate next cycle"
+            return None
+        px = float(request["limit_px"])
+        if request["is_buy"]:
+            request["sz"] = min(request["sz"], float(math.floor(self.available_usdc / px)))
+            if request["sz"] * px < self.cfg.min_order_usd:
+                st.last_action = "waiting for available spot USDC"
+                st.pending_until = time.time() + max(2.0, self.cfg.account_sync_sec)
+                return None
+        else:
+            request["sz"] = min(request["sz"], float(math.floor(st.available_position)))
+        if request["sz"] < 1:
+            st.last_action = "waiting for available Outcome tokens"
+            st.pending_until = time.time() + max(2.0, self.cfg.account_sync_sec)
+            return None
+        return request
+
     def can_send_action(self) -> bool:
         now = time.time()
         if now - self.last_global_action_ts < self.cfg.min_action_interval_sec:
@@ -1283,14 +1348,23 @@ class HyperliquidSpreadBot:
             return
 
         try:
-            res = self.exchange.order(
-                name=req["coin"],
-                is_buy=bool(req["is_buy"]),
-                sz=float(req["sz"]),
-                limit_px=float(req["limit_px"]),
-                order_type=req["order_type"],
-                reduce_only=False,
-            )
+            # Serialize fresh balance reads and submission with Stop and cancels.
+            with self.safety.lock:
+                if self.cfg.worldcup:
+                    req = self._prepare_spot_request(st, req)
+                    if req is None:
+                        return
+                with self.lock:
+                    if st.reconcile_required or not self.running or self.safety.stopped.is_set():
+                        return
+                    res = self.exchange.order(
+                        name=req["coin"],
+                        is_buy=bool(req["is_buy"]),
+                        sz=float(req["sz"]),
+                        limit_px=float(req["limit_px"]),
+                        order_type=req["order_type"],
+                        reduce_only=False,
+                    )
             self.stats.orders_sent += 1
             st.last_order_ts = now
             st.pending_side = "BUY NO" if req["is_buy"] else "SELL NO"

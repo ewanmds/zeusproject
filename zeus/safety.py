@@ -147,8 +147,8 @@ class SafetyLatch:
     def owns(self, order):
         return int(order.get("oid", 0)) in self.owned or str(order.get("cloid", "")) in self.cloids
 
-    def wrap(self, exchange):
-        return GuardedExchange(exchange, self)
+    def wrap(self, exchange, reconcile_cancel=None):
+        return GuardedExchange(exchange, self, reconcile_cancel)
 
     def cleanup(self, snapshot, cancel, close, timeout=30, sleep=time.sleep):
         """snapshot returns fresh [(symbol, position, orders)] or raises.
@@ -208,9 +208,10 @@ class SafetyLatch:
 class GuardedExchange:
     ACTIONS = {"order", "bulk_orders", "bulk_modify_orders_new", "modify_order", "bulk_cancel", "cancel", "update_leverage"}
 
-    def __init__(self, exchange, safety):
+    def __init__(self, exchange, safety, reconcile_cancel=None):
         self._exchange = exchange
         self._safety = safety
+        self._reconcile_cancel = reconcile_cancel
 
     def __getattr__(self, name):
         method = getattr(self._exchange, name)
@@ -248,6 +249,21 @@ class GuardedExchange:
                     if name != "update_leverage":
                         statuses = result.get("response", {}).get("data", {}).get("statuses", [])
                         expected = len(args[0]) if name.startswith("bulk_") else 1
+                        # This specific cancel race is not an execution failure if
+                        # independent reads prove absence and refresh inventory.
+                        # Keep the execution lock throughout reconciliation.
+                        if name == "bulk_cancel" and self._reconcile_cancel and len(statuses) == expected:
+                            missing = [i for i, status in enumerate(statuses)
+                                       if isinstance(status, dict) and isinstance(status.get("error"), str)
+                                       and re.fullmatch(r"Order was never placed, already canceled, or filled\.(?: asset=\d+)?",
+                                                        status["error"])]
+                            if missing and all(status == "success" or i in missing
+                                               for i, status in enumerate(statuses)):
+                                self._reconcile_cancel([args[0][i] for i in missing])
+                                statuses = ["success" if i in missing else status
+                                            for i, status in enumerate(statuses)]
+                                result = {**result, "response": {**result["response"], "data": {
+                                    **result["response"]["data"], "statuses": statuses}}}
                         for status in statuses:
                             if isinstance(status, dict) and "resting" in status:
                                 gate.owned.add(int(status["resting"]["oid"]))

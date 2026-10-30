@@ -21,6 +21,18 @@ Implemented for Outcome, BBO/MID, Freqtrade and their dashboard supervisor.
 
 - Stop disables quoting, cancels session orders and attempts to close inventory.
 - An execution error follows the same safety sequence and requires manual Start.
+- Outcome's exact `Order was never placed, already canceled, or filled.` cancel
+  response is reconciled under the execution lock. It is treated as resolved
+  only after independent open-order verification and a fresh inventory/order
+  synchronization. No cancellation is resent and opening rearm is preserved.
+  Still-open orders, failed/ambiguous reads and all other rejections still halt.
+  This exception never revives a session that was already stopped.
+- New Outcome submissions refresh balances and open orders under the execution
+  gate. Buys are bounded by available USDC at the actual limit price; sells by
+  whole available tokens (`total - hold`). Total inventory still includes held
+  tokens. Existing orders and changed trade direction prevent a stale submission.
+  Insufficient available funds wait with a cooldown, without sending a rejected
+  order. An actual exchange rejection still latches the session for safety.
 - `Vérifier l’arrêt` / `POST /api/sessions/reconcile` performs read-only checks.
   It never cancels someone else's orders or restarts a session.
 - An interrupted child that is still alive, residual orders/positions, a corrupt
