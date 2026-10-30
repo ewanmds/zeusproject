@@ -125,6 +125,19 @@ def main():
                 assert submissions[-1]["exec_mode"] == "taker"
                 assert submissions[-1]["max_spread_pct"] == 0.02
                 assert "maker_spread_pct" not in submissions[-1]
+                before_recovery = len(submissions)
+                state.update(phase="recovering", recovery_error="Insufficient spot balance; synchronisation")
+                page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", state)
+                expect(page.locator("#outcome-run-banner")).to_contain_text("reprise automatique")
+                expect(page.locator("#outcome-form-alert")).to_contain_text("Insufficient spot balance")
+                expect(page.locator("#outcome-start-btn")).to_be_disabled()
+                expect(page.locator("#outcome-stop-btn")).to_be_enabled()
+                expect(mode).to_be_disabled()
+                state.update(phase="running", recovery_error="")
+                page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", state)
+                expect(page.locator("#outcome-run-banner")).to_contain_text("Session active")
+                expect(page.locator("#outcome-form-alert")).to_be_hidden()
+                assert len(submissions) == before_recovery, "Recovery must not call Start again"
                 fail_stop[0] = True
                 page.locator("#outcome-stop-btn").click()
                 expect(page.locator("#toast-stack")).to_contain_text("Stop not confirmed")

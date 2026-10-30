@@ -336,12 +336,17 @@ class BotManager:
 
     def _verify_session_flat(self, record):
         from hyperliquid.info import Info
+        from zeus.safety import confirmed_client_order
         kind = record["account_kind"]
         account = os.getenv("WALLET_ADDRESS_OUTCOME" if kind == "outcome" else "WALLET_ADDRESS", "").strip()
         if not account:
             raise RuntimeError("Account unavailable for stop verification")
         info = Info("https://api.hyperliquid.xyz", skip_ws=True, timeout=5)
         symbols = record["symbols"]
+        for cloid in record.get("pending_cloids", []):
+            _, status = confirmed_client_order(info, account, cloid, symbols)
+            if status == "open":
+                raise RuntimeError("Placement still open; stop not confirmed")
         rows = account_snapshot(info, account, symbols, spot=kind == "outcome",
                                 balances={s: "+" + s.lstrip("#") for s in symbols})
         if any(position or orders for _, position, orders in rows):

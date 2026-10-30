@@ -1113,10 +1113,10 @@
             outcomeRunning = data.running;
             updateOutcomeButtons();
         }
-        const incident = [data.error, data.cleanup_error, data.stale ? "État périmé : arrêt non vérifié." : ""].filter(Boolean).join(" · ");
+        const incident = [data.error, data.recovery_error, data.cleanup_error, data.stale ? "État périmé : arrêt non vérifié." : ""].filter(Boolean).join(" · ");
         setFormError("outcome", incident);
         const banner = $("#outcome-run-banner");
-        const stateLabel = data.stale ? "État périmé" : data.phase === "stopping" ? "Arrêt en cours" : data.phase === "failed" ? (data.cleanup_confirmed ? "Erreur · à plat, relance manuelle" : "Erreur · arrêt non confirmé") : "Session active";
+        const stateLabel = data.stale ? "État périmé" : data.phase === "recovering" ? "Session active · vérification avant reprise automatique" : data.phase === "stopping" ? "Arrêt en cours" : data.phase === "failed" ? (data.cleanup_confirmed ? "Erreur · à plat, relance manuelle" : "Erreur · arrêt non confirmé") : "Session active";
         if (banner) {
             banner.hidden = !data.running && data.phase !== "failed";
             const title = banner.querySelector("strong");

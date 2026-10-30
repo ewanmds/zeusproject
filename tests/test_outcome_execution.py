@@ -450,7 +450,7 @@ class OutcomeExecutionTests(unittest.TestCase):
         self.assertEqual(state.bid_oid, 789)
         bot.exchange.order.assert_not_called()
 
-    def test_balance_read_failure_still_halts_before_sending(self):
+    def test_balance_read_failure_pauses_quotes_without_stopping_session(self):
         for failure in (TimeoutError("offline"), {"balances": [
                 {"coin": "USDC", "total": "100", "hold": "nan"}]}):
             bot, state = self.funding_fixture()
@@ -459,7 +459,9 @@ class OutcomeExecutionTests(unittest.TestCase):
             else:
                 bot.info.spot_user_state.return_value = failure
             bot.place_or_requote(state)
-            self.assertTrue(bot.safety.stopped.is_set())
+            self.assertFalse(bot.safety.stopped.is_set())
+            self.assertTrue(bot.running)
+            self.assertEqual(bot.safety.phase, "recovering")
             bot.exchange.order.assert_not_called()
 
     def test_real_insufficient_balance_rejection_is_not_ignored(self):

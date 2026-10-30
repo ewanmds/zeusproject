@@ -18,7 +18,7 @@ Install deps if needed:
 from __future__ import annotations
 
 from zeus import PROJECT_ROOT
-from zeus.safety import SafetyLatch, account_snapshot, finite
+from zeus.safety import SafetyLatch, account_snapshot, finite, confirmed_client_order, safe_error
 
 import argparse
 import math
@@ -346,6 +346,8 @@ class HyperliquidSpreadBot:
         self.stats = SessionStats()
         self.account_revision = 0
         self.safety = SafetyLatch(self._halt, cfg.safety_file, is_running=lambda: self.running)
+        self.recovery_next = 0.0
+        self.recovery_delay = 2.0
 
         perp_dexs = [cfg.perp_dex] if cfg.perp_dex else None
         self.info = Info(cfg.base_url, skip_ws=True, perp_dexs=perp_dexs, timeout=10)
@@ -358,7 +360,8 @@ class HyperliquidSpreadBot:
         if cfg.live:
             self._init_exchange(perp_dexs)
             self.exchange = self.safety.wrap(
-                self.exchange, self._reconcile_missing_cancels if cfg.worldcup else None)
+                self.exchange, self._reconcile_missing_cancels if cfg.worldcup else None,
+                self._pause_execution if cfg.worldcup else None)
 
         self.specs = self.discover_markets()
         self.states: Dict[str, MarketState] = {spec.symbol: MarketState(spec) for spec in self.specs}
@@ -447,10 +450,81 @@ class HyperliquidSpreadBot:
     def request_stop(self):
         self.safety.stop()
 
+    def _pause_execution(self, error, pending_cloids=()):
+        if not self.cfg.worldcup:
+            self.safety.fail(error)
+            return
+        self.safety.pause(error, pending_cloids)
+        self.recovery_next = max(getattr(self, "recovery_next", 0), time.monotonic() + 2.0)
+        with self.lock:
+            for state in self.states.values():
+                state.reconcile_required = True
+                state.last_action = "session active; exchange reconciliation pending"
+        self.wake.set()
+
+    def _try_recovery(self):
+        gate = self.safety
+        if gate.phase != "recovering" or time.monotonic() < getattr(self, "recovery_next", 0):
+            return False
+        with gate.lock:
+            if gate.stopped.is_set() or not self.running:
+                return False
+            revision = gate.recovery_revision
+            try:
+                # A timed-out placement is never blindly repeated. Locate its
+                # unique client ID before trusting account balances alone.
+                resolved = set()
+                live_orders = set()
+                for cloid in sorted(gate.pending_cloids):
+                    oid, status = confirmed_client_order(self.info, self.cfg.account_address, cloid, self.states)
+                    gate.owned.add(oid)
+                    if status == "open":
+                        live_orders.add(oid)
+                    resolved.add(cloid)
+                rows = self._cleanup_snapshot()
+                if any(not gate.owns(order) for _, _, orders in rows for order in orders):
+                    raise RuntimeError("Unrelated orders on managed market; awaiting reconciliation")
+                open_ids = {int(order["oid"]) for _, _, orders in rows for order in orders}
+                if not live_orders.issubset(open_ids):
+                    raise RuntimeError("Order changed during verification; checking again later")
+                if not self.sync_account():
+                    raise RuntimeError("Account synchronization not yet confirmed")
+                with self.lock:
+                    if any(state.reconcile_required for state in self.states.values()):
+                        raise RuntimeError("Account changed during verification")
+                    for state in self.states.values():
+                        state.pending_until = max(state.pending_until, time.time() + 2.0)
+                        state.opening_rearm_until = max(state.opening_rearm_until, time.time() + 2.0)
+                    gate.pending_cloids.difference_update(resolved)
+                    resumed = gate.resume(revision)
+                if resumed:
+                    self.recovery_delay = 2.0
+                return resumed
+            except Exception as exc:
+                gate.metadata["last_recovery_check"] = safe_error(exc)
+                gate.publish()
+                self.recovery_delay = min(30.0, max(2.0, getattr(self, "recovery_delay", 2.0)) * 2)
+                self.recovery_next = time.monotonic() + self.recovery_delay
+                return False
+
     def _cleanup_snapshot(self):
-        return account_snapshot(self.info, self.cfg.account_address, list(self.states),
+        resolved, live_orders = set(), set()
+        if self.safety.stopped.is_set():
+            for cloid in sorted(self.safety.pending_cloids):
+                oid, status = confirmed_client_order(self.info, self.cfg.account_address, cloid, self.states)
+                self.safety.owned.add(oid)
+                if status == "open":
+                    live_orders.add(oid)
+                resolved.add(cloid)
+        rows = account_snapshot(self.info, self.cfg.account_address, list(self.states),
                                 spot=self.cfg.worldcup,
                                 balances={s.spec.symbol: s.spec.balance_coin for s in self.states.values()})
+        if live_orders - {int(order["oid"]) for _, _, orders in rows for order in orders}:
+            raise RuntimeError("Order changed during stop verification")
+        self.safety.pending_cloids.difference_update(resolved)
+        if resolved and not self.safety.publish():
+            raise RuntimeError("Session journal unavailable")
+        return rows
 
     def _reconcile_missing_cancels(self, requests):
         """Resolve a cancel/fill race without resending or resuming a halted session."""
@@ -898,6 +972,7 @@ class HyperliquidSpreadBot:
             updates = payload if isinstance(payload, list) else payload.get("orders", [])
             terminal = ("fill", "cancel", "reject", "margin", "badalo", "reduceonly", "expired")
             changed = False
+            rejection_error = None
             with self.lock:
                 for update in updates or []:
                     order = update.get("order", update) if isinstance(update, dict) else {}
@@ -922,7 +997,7 @@ class HyperliquidSpreadBot:
                             if "reject" in status:
                                 self.stats.rejected += 1
                                 st.last_error = status
-                                self.safety.fail(f"Order rejected: {status}")
+                                rejection_error = f"Order rejected: {status}"
                         elif status in {"open", "resting"}:
                             side = str(order.get("side", "")).upper()
                             if side == "B":
@@ -936,6 +1011,8 @@ class HyperliquidSpreadBot:
                     self.account_revision = getattr(self, "account_revision", 0) + 1
             if changed:
                 self.wake.set()
+            if rejection_error:
+                self._pause_execution(rejection_error)
         except Exception:
             return
 
@@ -1018,7 +1095,7 @@ class HyperliquidSpreadBot:
                         raise ValueError("Invalid spot balance or reservation")
                     available[coin] = max(0.0, total - hold)
             except Exception as exc:
-                self.safety.fail(f"Account synchronization failed: {exc}")
+                self._pause_execution(f"Account synchronization failed: {exc}")
                 return False
         else:
             try:
@@ -1035,7 +1112,7 @@ class HyperliquidSpreadBot:
                     or finite(order.get("limitPx")) <= 0 for order in orders):
                 raise ValueError("Invalid open orders response")
         except Exception as exc:
-            self.safety.fail(f"Order synchronization failed: {exc}")
+            self._pause_execution(f"Order synchronization failed: {exc}")
             return False
         with self.lock:
             if revision != getattr(self, "account_revision", 0):
@@ -1270,7 +1347,7 @@ class HyperliquidSpreadBot:
                         self.states[symbol].reconcile_required = True
 
     def place_or_requote(self, st: MarketState) -> None:
-        if not self.running or self.safety.stopped.is_set():
+        if not self.running or self.safety.stopped.is_set() or self.safety.phase == "recovering":
             return
         closing_inventory = st.position >= 1.0
         block = self.risk_block_reason(st, closing_inventory=closing_inventory)
@@ -1519,23 +1596,31 @@ class HyperliquidSpreadBot:
         None (headless: lancé par bot_server, l'affichage est le web)."""
         last_sync = 0.0
         while self.running:
-            if time.time() - last_sync > self.cfg.account_sync_sec:
-                self.sync_account()
-                last_sync = time.time()
-
-            self.restart_ws_if_needed()
-            self.refresh_rest_bbos()
-            if not self.running:
-                break
-            with self.lock:
-                states = list(self.states.values())
-            for st in states:
+            try:
+                if self.safety.phase == "recovering":
+                    self._try_recovery()
+                else:
+                    if time.time() - last_sync > self.cfg.account_sync_sec:
+                        self.sync_account()
+                        last_sync = time.time()
+                    self.restart_ws_if_needed()
+                    self.refresh_rest_bbos()
+                    if not self.running:
+                        break
+                    with self.lock:
+                        states = list(self.states.values())
+                    for st in states:
+                        if not self.running:
+                            break
+                        self.place_or_requote(st)
+                if live is not None:
+                    live.update(self.render())
+            except Exception as exc:
+                if not self.cfg.worldcup:
+                    raise
+                self._pause_execution(exc)
                 if not self.running:
                     break
-                self.place_or_requote(st)
-
-            if live is not None:
-                live.update(self.render())
             self.wake.wait(refresh)
             self.wake.clear()
 
@@ -1561,7 +1646,8 @@ class HyperliquidSpreadBot:
             if not self.running:
                 return
             self.refresh_rest_bbos(force=True)
-            self.safety.phase = "running" if self.running else "stopping"
+            if self.safety.phase != "recovering":
+                self.safety.phase = "running" if self.running else "stopping"
             self.safety.publish()
             refresh = max(0.05, 1.0 / max(self.cfg.refresh_hz, 0.1))
             if headless:

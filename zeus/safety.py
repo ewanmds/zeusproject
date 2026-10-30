@@ -17,6 +17,10 @@ class ExecutionStopped(RuntimeError):
     pass
 
 
+class ExecutionPaused(RuntimeError):
+    pass
+
+
 def supervisor_alive():
     """Standalone runs have no supervisor; supervised children stop on its death."""
     value = os.getenv("ZEUS_PARENT_PID")
@@ -72,6 +76,36 @@ def finite(value):
     return result
 
 
+def confirmed_client_order(info, account, cloid, symbols):
+    result = info.post("/info", {"type": "orderStatus", "user": account, "oid": cloid})
+    if not isinstance(result, dict) or result.get("status") != "order":
+        raise RuntimeError("Placement still unconfirmed; awaiting client order ID")
+    entry = result["order"]
+    order, status = entry["order"], str(entry["status"])
+    if order.get("cloid") != cloid or order.get("coin") not in symbols:
+        raise ValueError("Mismatched order status response")
+    oid = int(order["oid"])
+    if oid <= 0:
+        raise ValueError("Invalid order ID")
+    if status not in {"open", "filled", "canceled"} and not status.endswith(("Canceled", "Rejected")):
+        raise RuntimeError("Order status not yet settled")
+    return oid, status
+
+
+def acknowledged_status(status, placing):
+    if status == "success":
+        return not placing
+    if not isinstance(status, dict):
+        return False
+    if isinstance(status.get("error"), str) and status["error"]:
+        return True
+    if isinstance(status.get("resting"), dict):
+        return int(status["resting"]["oid"]) > 0
+    if isinstance(status.get("filled"), dict):
+        return finite(status["filled"]["totalSz"]) >= 0 and finite(status["filled"]["avgPx"]) > 0
+    return False
+
+
 class SafetyLatch:
     def __init__(self, on_stop=None, path=None, is_running=None):
         self.lock = threading.RLock()
@@ -97,12 +131,16 @@ class SafetyLatch:
         self.owned.update(self.metadata.get("owned_oids", []))
         self.cloids.update(self.metadata.get("cloids", []))
         self.exposure_started = self.metadata.get("exposure_started", False)
+        self.pending_cloids = set(self.metadata.get("pending_cloids", []))
+        self.recovery_error = ""
+        self.recovery_revision = 0
 
     def snapshot(self):
         return dict(phase=self.phase, error=self.error, cleanup_error=self.cleanup_error,
                     cleanup_confirmed=self.cleanup_confirmed, can_start=self.cleanup_confirmed,
                     position_known=self.account_known or self.cleanup_confirmed, session_id=self.session_id,
-                    quoting_enabled=not self.stopped.is_set() and self.phase == "running")
+                    quoting_enabled=not self.stopped.is_set() and self.phase == "running",
+                    recovery_error=self.recovery_error)
 
     def publish(self):
         if self.path:
@@ -110,6 +148,7 @@ class SafetyLatch:
                 atomic_json(self.path, {**self.metadata, **self.snapshot(), "pid": os.getpid(),
                                         "owned_oids": sorted(self.owned), "cloids": sorted(self.cloids),
                                         "exposure_started": self.exposure_started,
+                                        "pending_cloids": sorted(self.pending_cloids),
                                         "ts": time.time()})
             except (OSError, ValueError) as exc:
                 self.stopped.set()
@@ -135,6 +174,28 @@ class SafetyLatch:
         self.account_known = False
         self.stop(error)
 
+    def pause(self, error, pending_cloids=()):
+        """Keep the session alive while an opt-in engine reconciles read-only."""
+        with self.lock:
+            if self.stopped.is_set():
+                return
+            self.account_known = False
+            self.phase = "recovering"
+            self.recovery_error = self.recovery_error or safe_error(error)
+            self.metadata["last_recovery_error"] = safe_error(error)
+            self.pending_cloids.update(pending_cloids)
+            self.recovery_revision += 1
+            self.publish()
+
+    def resume(self, revision):
+        with self.lock:
+            if (self.stopped.is_set() or not self.is_running() or self.phase != "recovering"
+                    or revision != self.recovery_revision or self.pending_cloids):
+                return False
+            self.phase = "running"
+            self.recovery_error = ""
+            return self.publish()
+
     @contextmanager
     def cleanup_scope(self):
         previous = getattr(self.local, "cleanup", False)
@@ -147,8 +208,8 @@ class SafetyLatch:
     def owns(self, order):
         return int(order.get("oid", 0)) in self.owned or str(order.get("cloid", "")) in self.cloids
 
-    def wrap(self, exchange, reconcile_cancel=None):
-        return GuardedExchange(exchange, self, reconcile_cancel)
+    def wrap(self, exchange, reconcile_cancel=None, on_error=None):
+        return GuardedExchange(exchange, self, reconcile_cancel, on_error)
 
     def cleanup(self, snapshot, cancel, close, timeout=30, sleep=time.sleep):
         """snapshot returns fresh [(symbol, position, orders)] or raises.
@@ -190,6 +251,8 @@ class SafetyLatch:
                         rows = snapshot()
                         if any(orders or abs(finite(position)) > 1e-9 for _, position, orders in rows):
                             raise RuntimeError("Residual orders or position; stop not confirmed")
+                        if self.pending_cloids:
+                            raise RuntimeError("Placement client IDs remain unconfirmed")
                         self.cleanup_confirmed = True
                         self.cleanup_error = ""
                         break
@@ -208,10 +271,11 @@ class SafetyLatch:
 class GuardedExchange:
     ACTIONS = {"order", "bulk_orders", "bulk_modify_orders_new", "modify_order", "bulk_cancel", "cancel", "update_leverage"}
 
-    def __init__(self, exchange, safety, reconcile_cancel=None):
+    def __init__(self, exchange, safety, reconcile_cancel=None, on_error=None):
         self._exchange = exchange
         self._safety = safety
         self._reconcile_cancel = reconcile_cancel
+        self._on_error = on_error
 
     def __getattr__(self, name):
         method = getattr(self._exchange, name)
@@ -225,7 +289,11 @@ class GuardedExchange:
                 if (gate.stopped.is_set() or not gate.is_running()) and not cleanup:
                     gate.stop()
                     raise ExecutionStopped("Session halted; manual restart required")
+                if gate.phase == "recovering" and not cleanup:
+                    raise ExecutionPaused("Session active; waiting for exchange reconciliation")
                 placing = name in {"order", "bulk_orders", "bulk_modify_orders_new"}
+                operation_cloids = set()
+                acknowledged = False
                 try:
                     if placing:
                         gate.exposure_started = True
@@ -233,11 +301,13 @@ class GuardedExchange:
                         if name == "order":
                             kwargs["cloid"] = kwargs.get("cloid") or Cloid.from_str("0x" + uuid.uuid4().hex)
                             gate.cloids.add(str(kwargs["cloid"]))
+                            operation_cloids.add(str(kwargs["cloid"]))
                         else:
                             for item in args[0]:
                                 request = item["order"] if name == "bulk_modify_orders_new" else item
                                 request["cloid"] = request.get("cloid") or Cloid.from_str("0x" + uuid.uuid4().hex)
                                 gate.cloids.add(str(request["cloid"]))
+                                operation_cloids.add(str(request["cloid"]))
                     if not gate.publish():  # persist intent before the request can reach the exchange
                         raise RuntimeError("Session journal unavailable")
                     if (gate.stopped.is_set() or not gate.is_running()) and not cleanup:
@@ -249,6 +319,8 @@ class GuardedExchange:
                     if name != "update_leverage":
                         statuses = result.get("response", {}).get("data", {}).get("statuses", [])
                         expected = len(args[0]) if name.startswith("bulk_") else 1
+                        acknowledged = len(statuses) == expected and all(
+                            acknowledged_status(status, placing) for status in statuses)
                         # This specific cancel race is not an execution failure if
                         # independent reads prove absence and refresh inventory.
                         # Keep the execution lock throughout reconciliation.
@@ -281,7 +353,10 @@ class GuardedExchange:
                         if placing:
                             gate.uncertain_close = True
                     else:
-                        gate.fail(exc)
+                        if self._on_error:
+                            self._on_error(exc, () if acknowledged else operation_cloids)
+                        else:
+                            gate.fail(exc)
                     raise
         return execute
 
