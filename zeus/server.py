@@ -24,18 +24,46 @@ import asyncio
 import logging
 import signal
 import secrets
+import uuid
+from contextlib import asynccontextmanager
 import subprocess
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Literal
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 from zeus import PROJECT_ROOT
+from zeus.safety import atomic_json, account_snapshot, safe_error
+
+
+def _pid_alive(pid):
+    if not pid:
+        return False
+    if os.name == "nt":
+        import ctypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel.OpenProcess(0x1000, False, int(pid))
+        if not handle:
+            return ctypes.get_last_error() == 5
+        code = ctypes.c_ulong()
+        kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel.CloseHandle(handle)
+        return bool(ok and code.value == 259)
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
 
 GRID_NUM_LEVELS = 1
 logger = logging.getLogger("zeus.server")
@@ -111,6 +139,8 @@ class GridStopRequest(BaseModel):
 
 
 class WorldcupStartRequest(BaseModel):
+    exec_mode: Literal["maker", "taker"] = "taker"
+    maker_spread_pct: float = Field(default=0.005, ge=0, allow_inf_nan=False)
     order_size_usd: float = 50
     # En %, même convention que --max-spread-pct (0.02 = 0.02% = 2 bps).
     max_spread_pct: Optional[float] = None
@@ -149,11 +179,9 @@ def _safe_import(module_name: str):
     try:
         import sys
         import importlib
-        if module_name in sys.modules:
-            # Force reload the module from disk to apply new edits/constants
-            return importlib.reload(sys.modules[module_name])
         return importlib.import_module(module_name)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
+        logger.error("Module %s unavailable: %s", module_name, safe_error(exc))
         return None
 
 
@@ -269,7 +297,7 @@ signal.signal = _safe_signal
 class BotManager:
     """Manages lifecycle and stats for both trading bots."""
 
-    def __init__(self) -> None:
+    def __init__(self, state_dir=None) -> None:
         # OBI bots: un PROCESS ENFANT par token. token_key -> {proc, symbol,
         # stats_file, stop_file, started, config}
         self.obi_procs: Dict[str, Dict[str, Any]] = {}
@@ -280,6 +308,10 @@ class BotManager:
         self.wc_thread: Optional[threading.Thread] = None
         self.wc_running: bool = False
         self.wc_config: Dict[str, Any] = {}
+        self.wc_stop_event = threading.Event()
+        self.wc_state_file = None
+        self.wc_lifecycle = {"phase": "stopped", "cleanup_confirmed": True, "can_start": True, "error": "", "cleanup_error": ""}
+        self.state_dir = None if state_dir is False else Path(state_dir or PROJECT_ROOT / ".zeus-state")
 
         # Connected WebSocket clients
         self.ws_clients: set = set()
@@ -290,6 +322,84 @@ class BotManager:
 
         # Manager-level lock
         self.lock = threading.Lock()
+
+    def _session_files(self):
+        if self.state_dir is None:
+            return []
+        result = []
+        for path in self.state_dir.glob("*.json"):
+            try:
+                result.append((path, json.loads(path.read_text(encoding="utf-8"))))
+            except (OSError, ValueError):
+                raise RuntimeError("Session journal unreadable; manual verification required")
+        return result
+
+    def _verify_session_flat(self, record):
+        from hyperliquid.info import Info
+        kind = record["account_kind"]
+        account = os.getenv("WALLET_ADDRESS_OUTCOME" if kind == "outcome" else "WALLET_ADDRESS", "").strip()
+        if not account:
+            raise RuntimeError("Account unavailable for stop verification")
+        info = Info("https://api.hyperliquid.xyz", skip_ws=True, timeout=5)
+        symbols = record["symbols"]
+        rows = account_snapshot(info, account, symbols, spot=kind == "outcome",
+                                balances={s: "+" + s.lstrip("#") for s in symbols})
+        if any(position or orders for _, position, orders in rows):
+            raise RuntimeError("Residual orders/position; manual reconciliation required")
+
+    def _reserve_session(self, key, symbols, kind):
+        for _, record in self._session_files():
+            if record.get("key") == key and not record.get("cleanup_confirmed"):
+                raise RuntimeError("Previous session stop not confirmed; reconcile before starting")
+        if self.state_dir is None:
+            return None
+        path = self.state_dir / (uuid.uuid4().hex + ".json")
+        atomic_json(path, {"session_id": path.stem, "key": key, "symbols": symbols,
+                           "account_kind": kind, "phase": "connecting", "pid": os.getpid(),
+                           "cleanup_confirmed": False, "can_start": False, "ts": time.time()})
+        return path
+
+    def _session_status(self, path, fallback=None):
+        if path:
+            try:
+                return json.loads(Path(path).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return {"phase": "failed", "cleanup_confirmed": False, "can_start": False,
+                        "cleanup_error": "Session status unreadable", "stale": True}
+        return fallback or {}
+
+    def reconcile_sessions(self):
+        unresolved = []
+        for path, record in self._session_files():
+            if record.get("cleanup_confirmed"):
+                continue
+            owned = any(str(info.get("safety_file")) == str(path) and info["proc"].poll() is None
+                        for info in self.obi_procs.values())
+            if str(self.wc_state_file) == str(path) and self.wc_thread and self.wc_thread.is_alive():
+                owned = True
+            if owned or record.get("pid") != os.getpid() and _pid_alive(record.get("pid")) or _pid_alive(record.get("child_pid")):
+                unresolved.append(record["key"])
+                continue
+            try:
+                self._verify_session_flat(record)
+                atomic_json(path, {**record, "phase": "failed", "cleanup_confirmed": True,
+                                   "can_start": True, "cleanup_error": "", "ts": time.time()})
+                if str(path) == str(self.wc_state_file) and self.wc_bot is not None:
+                    self.wc_bot.safety.cleanup_confirmed = True
+                    self.wc_bot.safety.cleanup_error = ""
+                    self.wc_bot.safety.phase = "failed"
+            except Exception as exc:
+                unresolved.append(record["key"])
+                atomic_json(path, {**record, "phase": "failed", "cleanup_confirmed": False,
+                                   "can_start": False, "cleanup_error": safe_error(exc), "ts": time.time()})
+        return {"unresolved": unresolved, "can_start": not unresolved}
+
+    def _orphans(self, kind):
+        attached = {str(info.get("safety_file")) for info in self.obi_procs.values()}
+        if self.wc_state_file:
+            attached.add(str(self.wc_state_file))
+        return [record for path, record in self._session_files()
+                if str(path) not in attached and record.get("account_kind") == kind and not record.get("cleanup_confirmed")]
 
     # -----------------------------------------------------------------------
     # Market-making bots
@@ -353,6 +463,10 @@ class BotManager:
 
             env = os.environ.copy()
             env["OBI_HEADLESS"] = "1"   # pas de Rich Live dans un process enfant
+            env["ZEUS_PARENT_PID"] = str(os.getpid())
+            safety_file = self._reserve_session("grid:" + symbol, [symbol], "perp")
+            if safety_file:
+                env["ZEUS_SAFETY_FILE"] = str(safety_file)
             cmd = [
                 sys.executable, "-u", "-m", module_name,
                 "--token", token_key, "--live", "--notional", str(order_usd),
@@ -364,7 +478,11 @@ class BotManager:
                 cmd, cwd=str(BASE_DIR), env=env,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
+            if safety_file:
+                record = self._session_status(safety_file)
+                atomic_json(safety_file, {**record, "pid": proc.pid})
             self.obi_procs[token_key] = {
+                "safety_file": safety_file,
                 "proc": proc,
                 "symbol": symbol,
                 "stats_file": obi_mod.stats_file_path(symbol),
@@ -401,44 +519,31 @@ class BotManager:
                 keys = list(self.obi_procs.keys())
             targets = [(k, self.obi_procs[k]) for k in keys if k in self.obi_procs]
         if not targets:
+            if self._orphans("perp"):
+                raise RuntimeError("Interrupted session: reconcile orders/positions before confirming stop")
             return
 
+        failures = []
+        stop_started = time.monotonic()
         for key, info in targets:
             try:
                 Path(info["stop_file"]).write_text("stop", encoding="utf-8")
-            except Exception:
-                pass
-
-        # Laisser le temps du cancel all + flatten market avant d'escalader.
-        stop_started = time.time()
-        unconfirmed = []
+            except Exception as exc:
+                info["stop_unconfirmed"] = True
+                failures.append(key)
         for key, info in targets:
             deadline = stop_started + (95 if info["config"].get("strategy") == "freqtrade" else 30)
             proc = info["proc"]
-            while proc.poll() is None and time.time() < deadline:
-                time.sleep(0.4)
-            if proc.poll() is None:
-                proc.terminate()
-            if info["config"].get("strategy") == "freqtrade":
-                try:
-                    status = json.loads(Path(info["stats_file"]).read_bytes())
-                    confirmed = (status.get("symbol") == info["symbol"] and status.get("start_time", 0) >= info["started"] - 5
-                                 and status.get("phase") == "stopped" and status.get("position_known") is True)
-                except (OSError, ValueError):
-                    confirmed = False
-                if not confirmed:
-                    info["stop_unconfirmed"] = True
-                    unconfirmed.append(key)
-            try:
-                os.remove(info["stop_file"])
-            except OSError:
-                pass
-        with self.lock:
-            for key, _ in targets:
-                if key not in unconfirmed:
-                    self.obi_procs.pop(key, None)
-        if unconfirmed:
-            raise RuntimeError(f"Arrêt Freqtrade non confirmé : {', '.join(unconfirmed)} ; état à vérifier")
+            while proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.1)
+            lifecycle = self._session_status(info.get("safety_file"))
+            confirmed = proc.poll() is not None and lifecycle.get("cleanup_confirmed") is True
+            info["stop_unconfirmed"] = not confirmed
+            if not confirmed:
+                failures.append(key)
+            # Keep final records/statistics and the sentinel until verified.
+        if failures:
+            raise RuntimeError("Stop not confirmed: " + ", ".join(sorted(set(failures))))
 
     def get_grid_stats(self) -> Dict[str, Any]:
         default = {
@@ -463,10 +568,13 @@ class BotManager:
             now = time.time()
             with self.lock:
                 items = list(self.obi_procs.items())
-            if not items:
-                return default
-
-            bots = []
+            bots = [{"token": r["symbols"][0].split(":")[-1], "symbol": r["symbols"][0],
+                     "strategy": r.get("strategy", "bbo"), "running": _pid_alive(r.get("pid")),
+                     "phase": "failed", "error": r.get("error") or "Interrupted session; stop not confirmed",
+                     "cleanup_error": r.get("cleanup_error", ""), "cleanup_confirmed": False,
+                     "can_start": False, "position_known": False, "position_usd": None,
+                     "stale": True, "volume_usd": 0, "fills": 0, "fees": 0, "accounting_complete": False}
+                    for r in self._orphans("perp")]
             tot_vol = tot_fees = tot_rpnl = tot_pos = 0.0
             tot_fills = 0
             earliest = None
@@ -493,8 +601,10 @@ class BotManager:
                 modifications = int(st.get("order_modifications", 0) or 0)
                 cancellations = int(st.get("order_cancellations", 0) or 0)
                 action_count = placements + modifications + cancellations
-                phase = str(st.get("phase") or ("running" if st else "connecting"))
+                lifecycle = self._session_status(info.get("safety_file"), st)
+                phase = str(lifecycle.get("phase") or st.get("phase") or "connecting")
                 error = str(st.get("error", ""))
+                error = str(lifecycle.get("error") or error)
                 if info.get("stop_unconfirmed"):
                     phase = "failed"
                     error = error or "Arrêt non confirmé ; ordres ou position à vérifier"
@@ -502,8 +612,13 @@ class BotManager:
                     phase = "failed"
                     if not error:
                         error = f"Le processus s'est arrêté (code {info['proc'].returncode})."
-                position_known = (st.get("position_known") is True and not info.get("stop_unconfirmed") and (alive or phase == "stopped")) if info["config"].get("strategy") == "freqtrade" else True
+                confirmed = lifecycle.get("cleanup_confirmed") is True and not alive
+                position_known = bool(st.get("position_known")) if alive else confirmed
                 entry = {
+                    "cleanup_confirmed": confirmed,
+                    "cleanup_error": lifecycle.get("cleanup_error", ""),
+                    "can_start": not alive and confirmed,
+                    "stale": bool(alive and (not st or now - float(st.get("ts", 0)) > 5)),
                     "token": key,
                     "strategy": info["config"].get("strategy", "bbo"),
                     "offset_bps": _json_float(info["config"].get("offset_bps", 0.0), 2),
@@ -543,7 +658,7 @@ class BotManager:
                     "error": error,
                 }
                 bots.append(entry)
-                if alive and entry['mode'] == 'live':
+                if entry['mode'] == 'live':
                     tot_vol += vol
                     tot_fees += fees_v
                     tot_rpnl += rpnl
@@ -575,16 +690,18 @@ class BotManager:
             }
             self._grid_stats_cache = result
             return result
-        except Exception:
-            return self._grid_stats_cache or default
+        except Exception as exc:
+            return {**(self._grid_stats_cache or default), "stale": True, "error": safe_error(exc), "can_start": False}
 
     # -----------------------------------------------------------------------
     # Outcome (HIP-4) Spread Bot
     # -----------------------------------------------------------------------
     def start_worldcup(self, config: WorldcupStartRequest) -> None:
         with self.lock:
-            if self.wc_running:
+            if self.wc_running or self.wc_thread is not None and self.wc_thread.is_alive():
                 raise RuntimeError("Outcome bot is already running")
+            if not self.wc_lifecycle.get("can_start", False):
+                raise RuntimeError("Previous Outcome session is not reconciled")
 
             wc_mod = _safe_import("zeus.bots.worldcup")
             if wc_mod is None:
@@ -627,6 +744,9 @@ class BotManager:
                     "Outcome requires WALLET_ADDRESS_OUTCOME and PRIVATE_KEY_OUTCOME in .env"
                 )
 
+            self.wc_state_file = self._reserve_session("outcome", symbols, "outcome")
+            self.wc_stop_event = threading.Event()
+            self.wc_lifecycle = {"phase": "connecting", "cleanup_confirmed": False, "can_start": False, "error": "", "cleanup_error": ""}
             cfg = wc_mod.BotConfig(
                 base_url=base_url,
                 perp_dex="xyz",
@@ -661,41 +781,68 @@ class BotManager:
                 worldcup=True,
                 countries=[],
                 outcome_side="no",
+                exec_mode=config.exec_mode,
+                maker_offset_pct=0.0,
+                maker_spread_pct=config.maker_spread_pct,
+                safety_file=str(self.wc_state_file) if self.wc_state_file else None,
             )
 
+            self.wc_bot = None
             self.wc_config = config.model_dump()
 
             def run_wc():
+                bot = None
                 try:
-                    self.wc_bot = wc_mod.HyperliquidSpreadBot(cfg)
-                    self.wc_bot.run()
-                except Exception:
-                    pass
+                    bot = wc_mod.HyperliquidSpreadBot(cfg)
+                    self.wc_bot = bot
+                    if self.wc_stop_event.is_set():
+                        bot.request_stop()
+                    else:
+                        bot.run()
+                except BaseException as exc:
+                    self.wc_lifecycle.update(error=safe_error(exc), phase="failed")
+                    if bot is not None:
+                        bot.safety.fail(exc)
                 finally:
+                    if bot is not None:
+                        bot.shutdown()
+                        self.wc_lifecycle = bot.safety.snapshot()
+                    else:
+                        self.wc_lifecycle.update(phase="failed", cleanup_confirmed=False, can_start=False)
+                        if self.wc_state_file:
+                            record = self._session_status(self.wc_state_file)
+                            atomic_json(self.wc_state_file, {**record, **self.wc_lifecycle})
                     self.wc_running = False
 
-            self.wc_thread = threading.Thread(
-                target=run_wc, name="worldcup-bot", daemon=True
-            )
-            self.wc_thread.start()
+            self.wc_thread = threading.Thread(target=run_wc, name="worldcup-bot", daemon=True)
             self.wc_running = True
+            self.wc_thread.start()
 
     def stop_worldcup(self) -> None:
         with self.lock:
-            if not self.wc_running or self.wc_bot is None:
+            self.wc_stop_event.set()
+            thread, bot = self.wc_thread, self.wc_bot
+            if thread is None:
+                if self._orphans("outcome") or not self.wc_lifecycle.get("cleanup_confirmed"):
+                    raise RuntimeError("Previous stop not confirmed")
                 return
-
-        # shutdown() sets running=False and cancels open orders
-        try:
-            self.wc_bot.shutdown()
-        except Exception:
-            pass
-
-        if self.wc_thread is not None:
-            self.wc_thread.join(timeout=10)
+            if thread.is_alive():
+                self.wc_lifecycle["phase"] = "stopping"
+                if bot is not None:
+                    bot.request_stop()
+        thread.join(timeout=30)
+        if thread.is_alive() or not self.wc_lifecycle.get("cleanup_confirmed"):
+            raise RuntimeError("Outcome stop not confirmed; orders/position require verification")
         self.wc_running = False
 
     def get_worldcup_stats(self) -> Dict[str, Any]:
+        if self.wc_bot is None:
+            orphans = self._orphans("outcome")
+            if orphans:
+                self.wc_lifecycle = {**orphans[-1], "phase": "failed", "can_start": False,
+                                     "error": orphans[-1].get("error") or "Interrupted session; stop not confirmed"}
+            elif self.wc_thread is None:
+                self.wc_lifecycle.update(cleanup_confirmed=True, can_start=True)
         default = {
             "type": "worldcup_stats",
             "running": False,
@@ -711,8 +858,11 @@ class BotManager:
             "active_markets": 0,
             "config": self.wc_config,
         }
-        if not self.wc_running or self.wc_bot is None:
-            return default
+        lifecycle = self.wc_bot.safety.snapshot() if self.wc_bot is not None else self.wc_lifecycle
+        active = bool(self.wc_thread and self.wc_thread.is_alive())
+        default.update(lifecycle, running=active)
+        if self.wc_bot is None:
+            return {**self._wc_stats_cache, **default}
 
         bot = self.wc_bot
         try:
@@ -720,9 +870,9 @@ class BotManager:
             if snap is None:
                 if self._wc_stats_cache:
                     cached = dict(self._wc_stats_cache)
-                    cached["running"] = True
+                    cached.update(lifecycle, running=active, stale=True)
                     return cached
-                return {**default, "running": True}
+                return {**default, "stale": True}
 
             result = {
                 "type": "worldcup_stats",
@@ -739,16 +889,41 @@ class BotManager:
                 "active_markets": int(snap["active_markets"]),
                 "config": self.wc_config,
             }
+            result.update(lifecycle, running=active, stale=False)
             self._wc_stats_cache = result
             return result
         except Exception:
-            return self._wc_stats_cache or default
+            return {**(self._wc_stats_cache or default), **lifecycle, "running": active, "stale": True}
 
 
 # ---------------------------------------------------------------------------
 # FastAPI Application
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Trading Bot Dashboard")
+@asynccontextmanager
+async def _server_lifespan(_app):
+    await reconcile_on_startup()
+    try:
+        yield
+    finally:
+        await stop_on_server_shutdown()
+
+
+app = FastAPI(title="Trading Bot Dashboard", lifespan=_server_lifespan)
+
+
+async def reconcile_on_startup():
+    try:
+        await asyncio.to_thread(manager.reconcile_sessions)
+    except Exception as exc:
+        logger.error("Session recovery failed: %s", safe_error(exc))
+
+
+async def stop_on_server_shutdown():
+    results = await asyncio.gather(asyncio.to_thread(manager.stop_worldcup),
+                                   asyncio.to_thread(manager.stop_grid), return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            logger.error("Shutdown not confirmed: %s", safe_error(result))
 
 app.add_middleware(
     CORSMiddleware,
@@ -914,7 +1089,7 @@ async def start_grid(req: GridStartRequest, _: None = Depends(_require_api_token
     except Exception as e:
         return JSONResponse(
             status_code=400,
-            content={"status": "error", "message": str(e)},
+            content={"status": "error", "message": safe_error(e)},
         )
 
 
@@ -928,7 +1103,7 @@ async def stop_grid(req: Optional[GridStopRequest] = None, _: None = Depends(_re
     except Exception as e:
         return JSONResponse(
             status_code=400,
-            content={"status": "error", "message": str(e)},
+            content={"status": "error", "message": safe_error(e)},
         )
 
 @app.post("/api/grid/restart")
@@ -940,14 +1115,13 @@ async def restart_grid(_: None = Depends(_require_api_token)):
                 content={"status": "error", "message": "No previous configuration to restart"},
             )
         req = GridStartRequest(**manager.grid_config)
-        manager.stop_grid()
-        time.sleep(1) # Ensure connection closed properly
-        manager.start_grid(req)
+        await asyncio.to_thread(manager.stop_grid)
+        await asyncio.to_thread(manager.start_grid, req)
         return {"status": "ok", "message": "Grid bot restarted"}
     except Exception as e:
         return JSONResponse(
             status_code=400,
-            content={"status": "error", "message": str(e)},
+            content={"status": "error", "message": safe_error(e)},
         )
 
 
@@ -963,12 +1137,12 @@ async def grid_status(_: None = Depends(_require_api_token)):
 @app.post("/api/worldcup/start")
 async def start_outcome(req: WorldcupStartRequest, _: None = Depends(_require_api_token)):
     try:
-        manager.start_worldcup(req)
+        await asyncio.to_thread(manager.start_worldcup, req)
         return {"status": "ok", "message": "Outcome bot started"}
     except Exception as e:
         return JSONResponse(
             status_code=400,
-            content={"status": "error", "message": str(e)},
+            content={"status": "error", "message": safe_error(e)},
         )
 
 
@@ -976,12 +1150,15 @@ async def start_outcome(req: WorldcupStartRequest, _: None = Depends(_require_ap
 @app.post("/api/worldcup/stop")
 async def stop_outcome(_: None = Depends(_require_api_token)):
     try:
-        manager.stop_worldcup()
-        return {"status": "ok", "message": "Outcome bot stopped"}
+        await asyncio.to_thread(manager.stop_worldcup)
+        state = manager.get_worldcup_stats()
+        if state.get("running") or state.get("cleanup_confirmed") is not True:
+            raise RuntimeError("Outcome stop not confirmed")
+        return {"status": "ok", "message": "Outcome stop verified", "state": state}
     except Exception as e:
         return JSONResponse(
             status_code=400,
-            content={"status": "error", "message": str(e)},
+            content={"status": "error", "message": safe_error(e)},
         )
 
 
@@ -1038,3 +1215,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+@app.post("/api/sessions/reconcile")
+async def reconcile_sessions(_: None = Depends(_require_api_token)):
+    return await asyncio.to_thread(manager.reconcile_sessions)

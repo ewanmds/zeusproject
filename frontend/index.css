@@ -439,6 +439,18 @@ main {
   margin-top: 2px;
 }
 
+.field-help {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+#outcome-exec-mode:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

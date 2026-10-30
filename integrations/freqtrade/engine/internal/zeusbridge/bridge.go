@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,9 +24,28 @@ type State struct {
 	start         int64
 	seen          map[string]bool
 	data          map[string]any
+	onError       func(error)
+}
+
+func (s *State) SetErrorHook(fn func(error)) { s.mu.Lock(); s.onError = fn; s.mu.Unlock() }
+func (s *State) notifyError(err error) {
+	s.mu.Lock()
+	hook := s.onError
+	s.mu.Unlock()
+	if hook != nil {
+		hook(err)
+	}
 }
 
 var active *State
+
+var privateMaterial = regexp.MustCompile(`(?:0x)?[a-fA-F0-9]{64}\b`)
+var sensitiveParameter = regexp.MustCompile(`(?i)(token|api[_-]?key|private[_-]?key|password|secret)([=: ]+)[^\s&,]+`)
+
+func redactError(text string) string {
+	text = privateMaterial.ReplaceAllString(text, "[redacted]")
+	return sensitiveParameter.ReplaceAllString(text, "${1}${2}[redacted]")
+}
 
 func (s *State) StartMillis() int64 { return s.start }
 
@@ -45,6 +65,14 @@ func (s *State) Update(values map[string]any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, v := range values {
+		if k == "error" || k == "cleanup_error" {
+			v = redactError(fmt.Sprint(v))
+		}
+		if k == "error" {
+			if previous, ok := s.data[k].(string); ok && previous != "" {
+				v = previous
+			}
+		}
 		s.data[k] = v
 	}
 }
@@ -146,6 +174,7 @@ func (h ErrorHandler) Handle(_ context.Context, r slog.Record) error {
 		msg = string(runes[:maxZeusErrorLen])
 	}
 	h.State.Update(map[string]any{"error": msg})
+	h.State.notifyError(fmt.Errorf("%s", redactError(msg)))
 	h.State.Emit()
 	return nil
 }

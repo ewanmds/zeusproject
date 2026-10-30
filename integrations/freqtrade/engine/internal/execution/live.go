@@ -48,6 +48,7 @@ func (t *RPSTracker) Snapshot() RPSSnapshot {
 
 // LiveExecutor executes real orders on Hyperliquid via the SDK.
 type LiveExecutor struct {
+	safety   executionSafety
 	sdk      *hyperliquid.SDK
 	dexes    map[string]string // coin → dex name ("xyz" or "")
 	hasDex   bool              // true if any asset is HIP-3
@@ -393,6 +394,11 @@ func (le *LiveExecutor) Init(ctx context.Context, assets []string) error {
 		if err != nil {
 			return fmt.Errorf("init: query dex clearinghouse: %w", err)
 		}
+		if le.cfg != nil && le.cfg.ZeusMode {
+			if err := validatePositionState(state); err != nil {
+				return err
+			}
+		}
 		parsePositionsInto(state, le.dexName, le.positions)
 	}
 
@@ -402,6 +408,11 @@ func (le *LiveExecutor) Init(ctx context.Context, assets []string) error {
 		le.stats.RecordInfo()
 		if err != nil {
 			return fmt.Errorf("init: query perps clearinghouse: %w", err)
+		}
+		if le.cfg != nil && le.cfg.ZeusMode {
+			if err := validatePositionState(state); err != nil {
+				return err
+			}
 		}
 		parsePositionsInto(state, "", le.positions)
 	}
@@ -557,9 +568,9 @@ func (le *LiveExecutor) Run(ctx context.Context) {
 	// a nil channel never fires in select, which is the desired default.
 	reconnectCh := le.reconcileCh
 
-	go le.pollEquity(ctx)
-	go le.pollOpenOrders(ctx)
-	go le.pollFills(ctx)
+	go le.guardedWorker("equity poller", func() { le.pollEquity(ctx) })
+	go le.guardedWorker("order poller", func() { le.pollOpenOrders(ctx) })
+	go le.guardedWorker("fill poller", func() { le.pollFills(ctx) })
 
 	const (
 		normalReconcileInterval = 30 * time.Second // V1 analysis: reduced from 60s — faster drift detection
@@ -805,6 +816,7 @@ func (le *LiveExecutor) doPollFills() {
 	fills, err := le.queryFillsByTime(startTime)
 	le.stats.RecordInfo()
 	if err != nil {
+		le.failExecution(err)
 		le.recordFillPollResult(false)
 		slog.Warn("fill poller: query failed", "error", err)
 		return
@@ -974,8 +986,15 @@ func (le *LiveExecutor) reconcilePositions() {
 		state, err := le.sdk.Info().ClearinghouseState(le.sdk.Address(), hyperliquid.WithDex(le.dexName))
 		le.stats.RecordInfo()
 		if err != nil {
+			le.failExecution(err)
 			slog.Warn("reconciliation: failed to query dex clearinghouse", "error", err)
 			return
+		}
+		if le.cfg != nil && le.cfg.ZeusMode {
+			if err := validatePositionState(state); err != nil {
+				le.failExecution(err)
+				return
+			}
 		}
 		parsePositionsInto(state, le.dexName, onChain)
 	}
@@ -983,8 +1002,15 @@ func (le *LiveExecutor) reconcilePositions() {
 		state, err := le.sdk.Info().ClearinghouseState(le.sdk.Address())
 		le.stats.RecordInfo()
 		if err != nil {
+			le.failExecution(err)
 			slog.Warn("reconciliation: failed to query perps clearinghouse", "error", err)
 			return
+		}
+		if le.cfg != nil && le.cfg.ZeusMode {
+			if err := validatePositionState(state); err != nil {
+				le.failExecution(err)
+				return
+			}
 		}
 		parsePositionsInto(state, "", onChain)
 	}
@@ -1901,7 +1927,11 @@ func sizeDiffPct(a, b float64) float64 {
 // Refresh updates orders for the coin. Modifies existing orders in-place when
 // possible, cancels removed orders, and places new ones. Falls back to full
 // cancel-and-replace when order tracking is unavailable.
-func (le *LiveExecutor) Refresh(ctx context.Context, coin string, orders []types.OrderRequest) error {
+func (le *LiveExecutor) Refresh(ctx context.Context, coin string, orders []types.OrderRequest) (err error) {
+	defer func() { le.failExecution(err) }()
+	if le.cfg != nil && le.cfg.ZeusMode && (le.safety.halted.Load() || ctx.Err() != nil) {
+		return ErrExecutionHalted
+	}
 	le.refreshInProgress.Add(1)
 	defer le.refreshInProgress.Add(-1)
 
@@ -2127,7 +2157,11 @@ func (le *LiveExecutor) Refresh(ctx context.Context, coin string, orders []types
 // RefreshMulti refreshes quotes for multiple coins in coalesced batch API calls.
 // Each coin's orders are diffed independently, then all modifies/cancels/places
 // are batched into at most 3 API calls total (vs 2N for N coins).
-func (le *LiveExecutor) RefreshMulti(ctx context.Context, ordersByCoin map[string][]types.OrderRequest) error {
+func (le *LiveExecutor) RefreshMulti(ctx context.Context, ordersByCoin map[string][]types.OrderRequest) (err error) {
+	defer func() { le.failExecution(err) }()
+	if le.cfg != nil && le.cfg.ZeusMode && (le.safety.halted.Load() || ctx.Err() != nil) {
+		return ErrExecutionHalted
+	}
 	le.refreshInProgress.Add(1)
 	defer le.refreshInProgress.Add(-1)
 
@@ -2735,7 +2769,12 @@ func (le *LiveExecutor) modifyOrder(ctx context.Context, coin string, tracked *t
 	return le.transport.ModifyOrder(ctx, tracked, desired)
 }
 
-func (le *LiveExecutor) modifyWithRetry(ctx context.Context, coin string, tracked *trackedOrder, desired *types.OrderRequest) (placeOrderResult, error) {
+func (le *LiveExecutor) modifyWithRetry(ctx context.Context, coin string, tracked *trackedOrder, desired *types.OrderRequest) (resultOut placeOrderResult, resultErr error) {
+	defer func() {
+		if ctx.Value(cleanupKey{}) != true {
+			le.failExecution(resultErr)
+		}
+	}()
 	priceStr := strconv.FormatFloat(desired.Price, 'f', -1, 64)
 	sizeStr := strconv.FormatFloat(desired.Size, 'f', -1, 64)
 	side := normalizeSide(desired.Side)
@@ -2757,9 +2796,27 @@ func (le *LiveExecutor) modifyWithRetry(ctx context.Context, coin string, tracke
 		if capped.ReduceOnly {
 			opts = append(opts, hyperliquid.ModifyWithReduceOnly())
 		}
+		release, gateErr := le.beginAction(ctx)
+		if gateErr != nil {
+			return placeOrderResult{}, gateErr
+		}
 		order, err := le.sdk.Modify(tracked.OID, coin, side, priceStr, sizeStr, opts...)
+		if err == nil && order != nil {
+			le.rememberOrder(coin, order.OID)
+		}
+		if le.cfg != nil && le.cfg.ZeusMode && ctx.Value(cleanupKey{}) != true {
+			if err != nil {
+				le.failExecution(err)
+			} else if order == nil || !(order.IsFilled() || order.IsResting()) || order.OID <= 0 {
+				le.failExecution(fmt.Errorf("invalid modify acknowledgement"))
+			}
+		}
+		release()
 		le.stats.RecordExchange()
 		if err == nil {
+			if le.cfg != nil && le.cfg.ZeusMode && (order == nil || !(order.IsFilled() || order.IsResting()) || order.OID <= 0) {
+				return placeOrderResult{}, fmt.Errorf("order rejected or invalid acknowledgement")
+			}
 			le.recordUpstreamSuccess()
 			if order != nil && order.IsError() {
 				statusLower := strings.ToLower(order.Status)
@@ -2772,6 +2829,7 @@ func (le *LiveExecutor) modifyWithRetry(ctx context.Context, coin string, tracke
 			result := placeOrderResult{}
 			if order != nil && order.OID > 0 {
 				result.oid = order.OID
+				le.rememberOrder(coin, order.OID)
 			}
 			return result, nil
 		}
@@ -2839,6 +2897,7 @@ func (le *LiveExecutor) queryOpenOrders(coin string) []types.OrderRequest {
 		orders, err := le.sdk.Info().OpenOrders(le.sdk.Address(), hyperliquid.WithDex(coinDex))
 		le.stats.RecordInfo()
 		if err != nil {
+			le.failExecution(err)
 			slog.Error("failed to query dex open orders", "error", err)
 			return nil
 		}
@@ -3176,6 +3235,9 @@ func (le *LiveExecutor) CancelSide(ctx context.Context, coin string, side string
 // 2. Limit IOC with slippage: try 1x and 2x slippage multipliers
 // 3. Market close: SDK market close as last resort
 func (le *LiveExecutor) ClosePosition(ctx context.Context, coin string, reason string) error {
+	if le.cfg != nil && le.cfg.ZeusMode {
+		return le.closeZeusPosition(ctx, coin)
+	}
 	if _, _, isFlat := le.positionSnapshot(coin); isFlat {
 		return nil
 	}
@@ -3697,6 +3759,7 @@ func (le *LiveExecutor) queryClearinghouseEquityRaw(opts ...hyperliquid.InfoOpti
 	state, err := le.sdk.Info().ClearinghouseState(le.sdk.Address(), opts...)
 	le.stats.RecordInfo()
 	if err != nil {
+		le.failExecution(err)
 		slog.Error("failed to get clearinghouse state for equity", "error", err)
 		return 0
 	}
@@ -3719,6 +3782,7 @@ func (le *LiveExecutor) querySpotUSDC() float64 {
 	state, err := le.sdk.Info().SpotClearinghouseState(le.sdk.Address())
 	le.stats.RecordInfo()
 	if err != nil {
+		le.failExecution(err)
 		slog.Error("failed to get spot clearinghouse state", "error", err)
 		return 0
 	}
@@ -4004,12 +4068,32 @@ func timeInForceOpt(tif string) hyperliquid.TIF {
 	return hyperliquid.TIFALO
 }
 
-func (le *LiveExecutor) placeWithRetry(ctx context.Context, tif string, fn func() (*hyperliquid.PlacedOrder, error)) (placeOrderResult, error) {
+func (le *LiveExecutor) placeWithRetry(ctx context.Context, tif string, fn func() (*hyperliquid.PlacedOrder, error)) (resultOut placeOrderResult, resultErr error) {
+	defer func() {
+		if ctx.Value(cleanupKey{}) != true {
+			le.failExecution(resultErr)
+		}
+	}()
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
+		release, gateErr := le.beginAction(ctx)
+		if gateErr != nil {
+			return placeOrderResult{}, gateErr
+		}
 		order, err := fn()
+		if le.cfg != nil && le.cfg.ZeusMode && ctx.Value(cleanupKey{}) != true {
+			if err != nil {
+				le.failExecution(err)
+			} else if order == nil || !(order.IsFilled() || order.IsResting()) || order.OID <= 0 {
+				le.failExecution(fmt.Errorf("invalid order acknowledgement"))
+			}
+		}
+		release()
 		le.stats.RecordExchange()
 		if err == nil {
+			if le.cfg != nil && le.cfg.ZeusMode && (order == nil || !(order.IsFilled() || order.IsResting()) || order.OID <= 0) {
+				return placeOrderResult{}, fmt.Errorf("order rejected or invalid acknowledgement")
+			}
 			le.recordUpstreamSuccess()
 			if order != nil && order.IsError() {
 				// ALO rejection (would cross the book) — don't retry, next refresh will correct.

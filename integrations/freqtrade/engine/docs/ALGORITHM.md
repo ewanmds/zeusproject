@@ -2,6 +2,38 @@
 
 A comprehensive guide to how this market-making bot works, how it makes trading decisions, and what every configuration parameter controls.
 
+## Zeus execution safety and manual recovery
+
+In `ZeusMode`, an execution rejection (including ALO), invalid acknowledgement,
+transport failure, or unreadable account/order state permanently latches the
+session off. Ordinary local eligibility filters remain nonfatal. Successful
+requests and feed reconnections cannot clear the latch. Standalone mode retains
+its existing execution policy.
+
+Every placement/modification passes a serialized SDK gate which checks the
+session latch and context immediately before sending. Shutdown closes the gate
+before draining in-flight requests. Only the shutdown coordinator's explicit
+cleanup context may place reducing IOC orders through a closed gate.
+
+Cleanup cancels session-owned OIDs/client IDs, independently checks exchange
+orders and positions, and closes only freshly read residual inventory. It does
+not cancel unrelated orders. Zeus closes use at most three reducing IOC attempts,
+with 2s/4s spacing and fresh position reads; an uncertain send stops escalation.
+The configured slippage bound is retained. No passive/market fallback can silently
+resume trading or exceed that bound.
+
+Bridge states distinguish `connecting`, `running`, `stopping`, `stopped`, and
+`failed`. `cleanup_confirmed` is independent of the first fatal `error`; a failed
+session can be flat, or still have an unconfirmed cleanup. `can_start` requires
+verified cleanup and the previous process to have exited. The Python supervisor
+keeps a durable secret-free session journal and never automatically restarts a
+trading session. After an interrupted supervisor, read-only reconciliation must
+verify the account before another session can start.
+
+An API outage, hung request, or machine/power failure cannot prove that resting
+exchange orders were removed. Such a stop remains visibly unconfirmed. Stop
+sentinels are retained while children are alive; timeouts never imply success.
+
 ---
 
 ## Table of Contents

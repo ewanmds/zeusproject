@@ -41,7 +41,7 @@ func (le *LiveExecutor) capZeusOrder(req types.OrderRequest, replacing int64) (t
 	mult := math.Pow10(le.szDecimals[req.Coin])
 	req.Size = math.Floor(math.Min(req.Size, math.Max(0, allowed))*mult+1e-9) / mult
 	if req.Size <= 0 || (!reducing && req.Size*req.Price < 10) {
-		return req, fmt.Errorf("inventory cap or exchange minimum")
+		return req, fmt.Errorf("%w: inventory cap or exchange minimum", ErrQuoteIneligible)
 	}
 	return req, nil
 }

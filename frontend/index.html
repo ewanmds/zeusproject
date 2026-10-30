@@ -53,6 +53,7 @@
         <svg aria-hidden="true"><use href="#icon-play"></use></svg>
         Reconnecter
       </button>
+      <button class="backend-btn" id="sessions-reconcile-btn" type="button" hidden>Vérifier l’arrêt</button>
       <div class="connection-pill" role="status">
         <span class="status-dot" aria-hidden="true"></span>
         <span class="status-text">Connexion…</span>
@@ -249,13 +250,26 @@
             <fieldset class="form-block">
               <legend>Parameters</legend>
               <div class="field">
+                <label for="outcome-exec-mode">Exécution</label>
+                <select id="outcome-exec-mode" aria-describedby="outcome-exec-help">
+                  <option value="taker">Market / Taker</option>
+                  <option value="maker">Limit / Maker</option>
+                </select>
+                <p class="field-help" id="outcome-exec-help" aria-live="polite">Exécution immédiate avec limite de slippage.</p>
+              </div>
+              <div class="field">
                 <label for="outcome-order-size">Order (USD)</label>
                 <input type="number" id="outcome-order-size" value="50" min="10" step="1" inputmode="decimal" aria-describedby="outcome-form-alert" required>
               </div>
               <div class="field-row">
-                <div class="field">
+                <div class="field" id="outcome-spread-field">
                   <label for="outcome-spread">Max spread (%)</label>
                   <input type="number" id="outcome-spread" value="0.02" min="0" step="0.005" inputmode="decimal" aria-describedby="outcome-form-alert" required>
+                </div>
+                <div class="field" id="outcome-maker-spread-field" hidden>
+                  <label for="outcome-maker-spread">Spread Limit (%)</label>
+                  <input type="number" id="outcome-maker-spread" value="0.005" min="0" step="0.001" inputmode="decimal" aria-describedby="outcome-maker-spread-help outcome-form-alert" disabled>
+                  <p class="field-help" id="outcome-maker-spread-help">Écart cible total autour du milieu du carnet. Arrondi au pas de prix, sans croiser le carnet.</p>
                 </div>
                 <div class="field">
                   <label for="outcome-max-pos">Max position (USD)</label>
@@ -276,6 +290,7 @@
                 Stop
               </button>
             </div>
+            <p class="field-help">Stop annule les ordres et tente de vendre immédiatement les positions au marché, même en Limit.</p>
           </form>
         </aside>
 
@@ -284,6 +299,7 @@
             <span class="run-dot" aria-hidden="true"></span>
             <div class="run-copy">
               <strong>Session active</strong>
+              <span id="outcome-active-mode"></span>
               <span id="outcome-run-duration">00:00:00</span>
             </div>
           </div>

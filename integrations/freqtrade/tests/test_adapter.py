@@ -154,7 +154,7 @@ class AdapterTests(unittest.TestCase):
     def test_runtime_consumes_protocol_and_confirms_stop_without_disk_logs(self):
         session = 'test-session'
         raw = dict(protocol=1, session_id=session, symbol='xyz:SP500', phase='stopped', running=False,
-                   position_known=True, position=0, position_usd=0, volume=100, fees=0.01, rpnl=0.02,
+                   position_known=True, cleanup_confirmed=True, can_start=True, position=0, position_usd=0, volume=100, fees=0.01, rpnl=0.02,
                    fills=2, cost_per_1m=-100)
         child = Mock(returncode=0)
         child.poll.return_value = 0
@@ -163,7 +163,7 @@ class AdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(ft, 'acquire_lock'), patch.object(ft, 'require_binary', return_value=Path('fake.exe')), \
              patch.object(ft, 'post_info', side_effect=[META, {'levels': [[{'px': '99.9'}], [{'px': '100.1'}]]}]), \
-             patch.object(ft, 'preflight') as checks, \
+             patch.object(ft, 'preflight') as checks, patch.object(ft, 'confirm_flat', return_value=True), \
              patch.object(ft.uuid, 'uuid4', return_value=SimpleNamespace(hex=session)), \
              patch.object(ft.signal, 'signal'), patch('dotenv.load_dotenv'), \
              patch.object(ft, 'stop_file_path', return_value=str(Path(directory) / 'stop.flag')), \
@@ -200,7 +200,7 @@ class ServerTests(unittest.TestCase):
                 stats_file_path=lambda _: str(Path(directory) / 'stats.json'))
             proc = Mock(pid=123, returncode=None)
             proc.poll.return_value = None
-            manager = server.BotManager()
+            manager = server.BotManager(state_dir=False)
             with patch.object(server, '_safe_import', return_value=module), \
                  patch.object(server.subprocess, 'Popen', return_value=proc) as spawn, patch.object(server.time, 'sleep'):
                 manager.start_grid(server.GridStartRequest(strategy='freqtrade', order_size_usd=40))
@@ -216,7 +216,7 @@ class ServerTests(unittest.TestCase):
             root = Path(directory)
             proc = Mock(returncode=1)
             proc.poll.return_value = 1
-            manager = server.BotManager()
+            manager = server.BotManager(state_dir=False)
             started = time.time()
             (root / 'stats.json').write_text(json.dumps(dict(symbol='xyz:SP500', start_time=started,
                 phase='failed', position_known=False, error='Network unavailable')))
@@ -237,7 +237,7 @@ class ServerTests(unittest.TestCase):
                 volume=100, fees=0.01, rpnl=0)))
             proc = Mock(returncode=None)
             proc.poll.return_value = None
-            manager = server.BotManager()
+            manager = server.BotManager(state_dir=False)
             manager.obi_procs['SP500'] = dict(proc=proc, symbol='xyz:SP500', started=started,
                 stats_file=str(path), config={'strategy': 'freqtrade', 'mode': 'live'})
             result = manager.get_grid_stats()

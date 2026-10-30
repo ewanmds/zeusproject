@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -57,6 +58,26 @@ func TestEmptyCPMUnknownPosition(t *testing.T) {
 	_ = json.Unmarshal(out.Bytes(), &got)
 	if got["cost_per_1m"] != nil || got["position_known"] != false {
 		t.Fatal(got)
+	}
+}
+
+func TestFatalErrorCannotBeClearedAndSecretsAreRedacted(t *testing.T) {
+	state := Configure("test", "xyz:SP500")
+	defer func() { active = nil }()
+	invoked := false
+	state.SetErrorHook(func(error) { invoked = true })
+	state.out = &bytes.Buffer{}
+	handler := ErrorHandler{State: state}
+	record := slog.NewRecord(time.Now(), slog.LevelError, "request failed token=secret-value", 0)
+	if err := handler.Handle(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	state.Update(map[string]any{"error": ""})
+	state.mu.Lock()
+	message := fmt.Sprint(state.data["error"])
+	state.mu.Unlock()
+	if !invoked || message == "" || strings.Contains(message, "secret-value") {
+		t.Fatal(message)
 	}
 }
 
@@ -122,6 +143,11 @@ func TestErrorHandlerAppendsAttrsAndCapsLength(t *testing.T) {
 	}
 
 	// A verbose attr value must not flood the Zeus banner.
+	// Each session retains its first error; use a new session to test the cap.
+	s = Configure("verbose-test", "xyz:SP500")
+	out = &bytes.Buffer{}
+	s.out = out
+	h = ErrorHandler{State: s}
 	verbose := strings.Repeat("x", 400)
 	rec := slog.NewRecord(time.Now(), slog.LevelError, "op failed", 0)
 	rec.AddAttrs(slog.String("error", verbose))

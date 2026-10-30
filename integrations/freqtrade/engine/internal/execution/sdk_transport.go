@@ -36,6 +36,22 @@ func (t *SDKTransport) PlaceOrder(ctx context.Context, req types.OrderRequest) (
 			return nil, err
 		}
 		submitted = capped.Size
+		if t.le.cfg != nil && t.le.cfg.ZeusMode {
+			builder := hyperliquid.Order().Size(capped.Size).Price(capped.Price).TIF(timeInForceOpt(tif)).CLOID(t.le.newClientID(capped.Coin))
+			if normalizeSide(capped.Side) == "buy" {
+				builder.Buy(capped.Coin)
+			} else {
+				builder.Sell(capped.Coin)
+			}
+			if capped.ReduceOnly {
+				builder.ReduceOnly()
+			}
+			order, err := t.le.sdk.PlaceOrder(builder)
+			if err == nil && order != nil {
+				t.le.rememberOrder(capped.Coin, order.OID)
+			}
+			return order, err
+		}
 		opts := []hyperliquid.OrderOption{hyperliquid.WithSize(capped.Size), hyperliquid.WithPrice(capped.Price), hyperliquid.WithTIF(timeInForceOpt(tif))}
 		if capped.ReduceOnly {
 			opts = append(opts, hyperliquid.WithReduceOnly())
@@ -45,6 +61,9 @@ func (t *SDKTransport) PlaceOrder(ctx context.Context, req types.OrderRequest) (
 		}
 		return t.le.sdk.Sell(capped.Coin, opts...)
 	})
+	if err == nil {
+		t.le.rememberOrder(req.Coin, result.oid)
+	}
 	result.size = submitted
 	t.le.zeusSubmissionResult(req.Coin, result, err)
 	return result, err
@@ -70,7 +89,16 @@ func (t *SDKTransport) CancelOrder(ctx context.Context, oid int64, coin string) 
 	// fallback path, but without going through a dispatch wrapper).
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		_, err := t.le.sdk.Cancel(oid, coin)
+		response, err := t.le.sdk.Cancel(oid, coin)
+		if t.le.cfg != nil && t.le.cfg.ZeusMode {
+			if err == nil {
+				err = validateCancelAck(response)
+			}
+			if err != nil {
+				t.le.failExecution(err)
+				return err
+			}
+		}
 		t.le.stats.RecordExchange()
 		if err == nil {
 			t.le.recordUpstreamSuccess()
@@ -96,6 +124,9 @@ func (t *SDKTransport) CancelBatch(_ context.Context, _ []cancelTarget) error {
 }
 
 func (t *SDKTransport) CancelAll(ctx context.Context, coin string) error {
+	if t.le.cfg != nil && t.le.cfg.ZeusMode {
+		return t.le.cancelZeusOrders(ctx, coin)
+	}
 	// Delegates to cancelWithRetry which calls sdk.CancelAll (perps) or
 	// cancelDexOrders (HIP-3) with retry.
 	return t.le.cancelWithRetry(ctx, coin)

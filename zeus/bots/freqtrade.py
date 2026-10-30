@@ -16,12 +16,13 @@ import time
 import uuid
 
 from zeus import PROJECT_ROOT
+from zeus.safety import SafetyLatch, safe_error, supervisor_alive
 from zeus.markets import resolve_symbol
 from zeus.network import post_info
 
 ROOT = PROJECT_ROOT / 'integrations' / 'freqtrade'
 _lock_handle = None
-FIELDS = {'phase', 'running', 'position_known', 'position', 'position_usd', 'entry',
+FIELDS = {'cleanup_confirmed', 'cleanup_error', 'can_start', 'quoting_enabled', 'phase', 'running', 'position_known', 'position', 'position_usd', 'entry',
           'accounting_complete',
           'mid', 'spread_bps', 'upnl', 'action', 'error', 'volume', 'fees', 'rpnl',
           'fills', 'order_placements', 'order_modifications', 'order_cancellations',
@@ -338,7 +339,6 @@ def run(token, amount):
     load_dotenv(PROJECT_ROOT / '.env')
     symbol = resolve_token(token)
     acquire_lock(symbol)
-    binary = require_binary()
     stop = threading.Event()
     stop_path = Path(stop_file_path(symbol))
     session = uuid.uuid4().hex
@@ -346,9 +346,17 @@ def run(token, amount):
                  phase='connecting', running=True, position_known=False,
                  action='Validation Freqtrade', error='', volume=0, fees=0, rpnl=0, fills=0,
                  cost_per_1m=None, notional=amount)
+    safety = SafetyLatch(path=os.getenv("ZEUS_SAFETY_FILE"))
+    first_error = ""
     def write():
         state['ts'] = time.time()
         derive_metrics(state)
+        if safety.path:
+            safety.phase = state["phase"]
+            safety.error = state.get("error", "")
+            safety.cleanup_error = state.get("cleanup_error", "")
+            safety.cleanup_confirmed = state.get("cleanup_confirmed") is True
+            safety.publish()
         publish(stats_file_path(symbol), state)
     def halted(*_):
         stop.set()
@@ -358,6 +366,7 @@ def run(token, amount):
     child = None
     temporary = None
     try:
+        binary = require_binary()
         metadata = post_info('https://api.hyperliquid.xyz', {'type': 'metaAndAssetCtxs', 'dex': symbol.split(':')[0]})
         config = session_config(symbol, amount, metadata)
         edge = market_eligibility(symbol)
@@ -372,12 +381,14 @@ def run(token, amount):
         # Observe the Zeus sentinel during read-only preflight as well.
         def watch():
             while not stop.wait(0.1):
-                if stop_path.exists():
+                if stop_path.exists() or not supervisor_alive():
                     stop.set()
         threading.Thread(target=watch, daemon=True).start()
         # Même séquence que start-live.ps1 du Bureau : un seul -check-account,
         # puis démarrage direct (pas de -validate supplémentaire).
         preflight(binary, config_path, '-check-account', stop)
+        if not confirm_flat(symbol, os.getenv("WALLET_ADDRESS", "")):
+            raise RuntimeError("Existing orders/position or unreadable account; no session started")
         if stop.is_set():
             raise RuntimeError('Démarrage annulé avant ordres')
         child = subprocess.Popen([str(binary), '-config', str(config_path), '-zeus-session', session,
@@ -406,31 +417,50 @@ def run(token, amount):
                     updates.put_nowait(snapshot)
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
+        stop_deadline = None
         while child.poll() is None or reader.is_alive() or not updates.empty():
             if stop.is_set():
                 go_stop.touch(exist_ok=True)
+                if stop_deadline is None:
+                    stop_deadline = time.monotonic() + 90
+                if child.poll() is None and time.monotonic() >= stop_deadline:
+                    raise TimeoutError("Freqtrade stop not confirmed; child process still alive")
             try:
-                state.update(updates.get(timeout=0.1))
+                snapshot = updates.get(timeout=0.1)
+                if snapshot.get("error") and not first_error:
+                    first_error = safe_error(snapshot["error"])
+                    stop.set()
+                state.update(snapshot)
+                if first_error:
+                    state["error"] = first_error
                 write()
 
             except queue.Empty:
                 pass
         child.wait()
         child.stdout.close()
-        if child.returncode != 0 or state.get('phase') != 'stopped':
+        if child.returncode != 0 or state.get('cleanup_confirmed') is not True:
             state.update(phase='failed', running=False, position_known=False,
                          error=state.get('error') or f'Freqtrade interrompu (code {child.returncode}) ; état à vérifier')
-    except Exception as exc:
-        state.update(phase='failed', running=False, position_known=False, error=str(exc))
+    except BaseException as exc:
+        state.update(phase='failed', running=False, cleanup_confirmed=False, can_start=False, position_known=False, error=first_error or safe_error(exc))
         if child is not None and child.poll() is None:
             go_stop.touch(exist_ok=True)
-            child.wait(timeout=90)
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                state["cleanup_error"] = "Go child still alive; sentinel retained"
     finally:
         stop.set()
         if temporary is not None:
-            temporary.cleanup()
+            if child is not None and child.poll() is None:
+                temporary._finalizer.detach()  # retain stop sentinel for the surviving child
+                if safety.path:
+                    safety.metadata["child_pid"] = child.pid
+            else:
+                temporary.cleanup()
         write()
-    return 0 if state.get('phase') == 'stopped' else 1
+    return 0 if state.get('cleanup_confirmed') is True else 1
 
 
 def main():

@@ -12,10 +12,11 @@ ExecStart=/home/ec2-user/zeusproject/.venv/bin/python /home/ec2-user/zeusproject
 Restart=always
 RestartSec=5
 KillSignal=SIGINT
+TimeoutStopSec=120
 NoNewPrivileges=true
 PrivateTmp=true
-StandardOutput=null
-StandardError=null
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

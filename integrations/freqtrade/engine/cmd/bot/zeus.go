@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func watchZeusStop(ctx context.Context, cancel context.CancelFunc, path string) {
+func watchZeusStop(ctx context.Context, cancel context.CancelFunc, path string, parents ...int) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -22,11 +22,27 @@ func watchZeusStop(ctx context.Context, cancel context.CancelFunc, path string) 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if len(parents) > 0 && !parentAlive(parents[0]) {
+				cancel()
+				return
+			}
 			if _, err := os.Stat(path); err == nil {
 				cancel()
 				return
 			}
 		}
+	}
+}
+
+func runZeusComponent(ctx context.Context, name string, run func(context.Context), fail func(error)) {
+	defer func() {
+		if value := recover(); value != nil {
+			fail(fmt.Errorf("%s panic: %v", name, value))
+		}
+	}()
+	run(ctx)
+	if ctx.Err() == nil {
+		fail(fmt.Errorf("%s stopped unexpectedly", name))
 	}
 }
 func emitZeusState(ctx context.Context, s *zeusbridge.State, exec *execution.LiveExecutor, manager *quoting.Manager, coin string) {
@@ -51,12 +67,7 @@ func emitZeusState(ctx context.Context, s *zeusbridge.State, exec *execution.Liv
 			if fresh {
 				phase = "running"
 				action = "FREQTRADE | moteur actif"
-				// L'erreur vient du dernier log ERROR et reste collée. Dès que le
-				// moteur peut requoter normalement, on efface l'alerte périmée ;
-				// en halt réel, blocked reste vrai et le message est conservé.
-				if _, blocked := manager.ZeusQuoteStatus(coin); !blocked && !health.Coins[coin].QuoteHalt {
-					s.Update(map[string]any{"error": ""})
-				}
+
 			}
 			if h := health.Coins[coin]; h.QuoteHalt {
 				action = "FREQTRADE | execution suspendue: " + h.Reason
@@ -79,6 +90,10 @@ func emitZeusState(ctx context.Context, s *zeusbridge.State, exec *execution.Liv
 			default:
 				quoteHalf = math.Min(diag.QuoteHalfBidBps, diag.QuoteHalfAskBps)
 				required = math.Max(diag.EdgeRequiredBidBps, diag.EdgeRequiredAskBps)
+			}
+			if exec.SafetyError() != nil {
+				phase = "stopping"
+				s.Update(map[string]any{"error": exec.SafetyError().Error()})
 			}
 			margin := quoteHalf - required
 			s.Update(map[string]any{"phase": phase, "running": true, "position_known": known, "position": qty, "position_usd": qty * book.Mid, "entry": pos.AvgEntry, "mid": book.Mid, "spread_bps": spread, "upnl": qty * (book.Mid - pos.AvgEntry), "action": action,

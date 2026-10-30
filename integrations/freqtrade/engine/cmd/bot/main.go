@@ -514,8 +514,9 @@ func main() {
 	// Create context with signal handling.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	parentPID := os.Getppid()
 	if bridge != nil {
-		go watchZeusStop(ctx, cancel, *zeusStop)
+		go watchZeusStop(ctx, cancel, *zeusStop, parentPID)
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -578,6 +579,24 @@ func main() {
 	if cfg.Execution.LiveMode {
 		liveExec = execution.NewLiveExecutor(sdk, fillCh, cfg.Strategy.Assets, cfg.Risk.MaxCloseSlippageBps)
 		liveExec.SetConfig(cfg)
+		if bridge != nil {
+			liveExec.SetStopCheck(func() bool {
+				_, err := os.Stat(*zeusStop)
+				stop := err == nil || !parentAlive(parentPID)
+				if stop {
+					cancel()
+				}
+				return stop
+			})
+			bridge.SetErrorHook(liveExec.HaltOnRuntimeError)
+		}
+		liveExec.SetFailureHandler(func(err error) {
+			if bridge != nil {
+				bridge.Update(map[string]any{"error": err.Error(), "phase": "stopping", "quoting_enabled": false})
+				bridge.Emit()
+			}
+			cancel()
+		})
 		liveExec.SetSzDecimals(szDecimals)
 		exec = liveExec
 		slog.Info("using SDK executor", "account", sdk.Address(), "signer", sdk.SignerAddress())
@@ -913,12 +932,19 @@ func main() {
 	// Start processing components.
 	slog.Info("starting processing components...")
 
-	if spreadEngine != nil {
-		go spreadEngine.Run(ctx)
+	startComponent := func(name string, run func(context.Context)) {
+		if bridge == nil {
+			go run(ctx)
+			return
+		}
+		go runZeusComponent(ctx, name, run, func(err error) { liveExec.HaltOnRuntimeError(err); cancel() })
 	}
-	go exec.Run(ctx)
-	go riskMgr.Run(ctx)
-	go quoteMgr.Run(ctx)
+	if spreadEngine != nil {
+		startComponent("spread", spreadEngine.Run)
+	}
+	startComponent("execution", exec.Run)
+	startComponent("risk", riskMgr.Run)
+	startComponent("quotes", quoteMgr.Run)
 
 	slog.Info("all components started, waiting for data...",
 		"warm_up_ticks", cfg.Strategy.LookbackWindow,
@@ -1309,6 +1335,11 @@ func main() {
 	case <-ctx.Done():
 	}
 
+	if liveExec != nil && bridge != nil {
+		liveExec.Quiesce()
+		bridge.Update(map[string]any{"phase": "stopping", "quoting_enabled": false})
+		bridge.Emit()
+	}
 	// Begin graceful shutdown.
 	slog.Info("initiating graceful shutdown...")
 
@@ -1377,7 +1408,7 @@ func main() {
 			var fwg sync.WaitGroup
 			for _, asset := range cfg.Strategy.Assets {
 				pos := exec.Position(asset)
-				if pos.Side == "" || pos.Size == 0 {
+				if (pos.Side == "" || pos.Size == 0) && bridge == nil {
 					slog.Info("session flatten: already flat, skipping", "asset", asset)
 					continue
 				}
@@ -1392,7 +1423,7 @@ func main() {
 						"size", pos.Size,
 						"notional", pos.Notional,
 					)
-					if err := exec.ClosePosition(closeCtx, asset, "session_flatten_shutdown"); err != nil {
+					if err := exec.ClosePosition(execution.CleanupContext(closeCtx), asset, "session_flatten_shutdown"); err != nil {
 						slog.Error("session flatten: close failed", "asset", asset, "error", err)
 						return
 					}
@@ -1437,9 +1468,12 @@ func main() {
 		bridge.Update(map[string]any{"accounting_complete": ledgerErr == nil})
 		err := verifyZeusFlat(sdk, *zeusSymbol)
 		if err != nil {
-			bridge.Update(map[string]any{"phase": "failed", "running": false, "position_known": false, "error": "Arret non confirme: " + err.Error()})
+			bridge.Update(map[string]any{"phase": "failed", "running": false, "cleanup_confirmed": false, "can_start": false, "position_known": false, "cleanup_error": "Arret non confirme: " + err.Error()})
 		} else {
-			bridge.Update(map[string]any{"phase": "stopped", "running": false, "position_known": true, "position": 0.0, "position_usd": 0.0, "error": ledgerWarning, "action": "Arret confirme: ordres et position a zero"})
+			bridge.Update(map[string]any{"phase": "stopped", "running": false, "cleanup_confirmed": true, "can_start": true, "position_known": true, "position": 0.0, "position_usd": 0.0, "error": ledgerWarning, "action": "Arret confirme: ordres et position a zero"})
+		}
+		if liveExec.SafetyError() != nil {
+			bridge.Update(map[string]any{"phase": "failed", "error": liveExec.SafetyError().Error()})
 		}
 		bridge.Emit()
 		if err != nil {

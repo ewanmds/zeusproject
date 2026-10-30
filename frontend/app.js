@@ -31,6 +31,8 @@
     let reconnectTimer = null;
     let gridRunning = false;
     let outcomeRunning = false;
+    let outcomeState = { can_start: false, phase: "connecting" };
+    let gridSessions = [];
     let gridTokens = [];
     let selectedGridToken = normalizeToken({ key: "SP500", symbol: "xyz:SP500" });
 
@@ -216,9 +218,18 @@
         // Stop (global) n'est actif que si au moins un bot tourne.
         const startBtn = $("#grid-start-btn");
         const stopBtn = $("#grid-stop-btn");
-        if (startBtn) startBtn.disabled = startBtn.getAttribute("aria-busy") === "true";
+        const token = $("#grid-token")?.value;
+        const blocked = gridSessions.some((bot) => (bot.token === token || bot.symbol === selectedGridToken.symbol) && bot.can_start === false);
+        if (startBtn) startBtn.disabled = blocked || startBtn.getAttribute("aria-busy") === "true";
         if (stopBtn) stopBtn.disabled = !gridRunning || stopBtn.getAttribute("aria-busy") === "true";
         setRunState("grid", gridRunning);
+        updateReconcileButton();
+    }
+
+    function updateReconcileButton() {
+        const button = $("#sessions-reconcile-btn");
+        if (button) button.hidden = !(outcomeState.phase === "failed" && outcomeState.cleanup_confirmed !== true
+            || gridSessions.some((bot) => bot.phase === "failed" && bot.cleanup_confirmed !== true));
     }
 
     function updateGridStrategy() {
@@ -244,9 +255,36 @@
     function updateOutcomeButtons() {
         const startBtn = $("#outcome-start-btn");
         const stopBtn = $("#outcome-stop-btn");
-        if (startBtn) startBtn.disabled = outcomeRunning || startBtn.getAttribute("aria-busy") === "true";
+        if (startBtn) startBtn.disabled = outcomeRunning || outcomeState.stale || outcomeState.can_start === false || startBtn.getAttribute("aria-busy") === "true";
         if (stopBtn) stopBtn.disabled = !outcomeRunning || stopBtn.getAttribute("aria-busy") === "true";
+        const modeSelect = $("#outcome-exec-mode");
+        if (modeSelect) modeSelect.disabled = outcomeRunning || startBtn?.getAttribute("aria-busy") === "true";
+        updateOutcomeExecutionMode();
         setRunState("outcome", outcomeRunning);
+        updateReconcileButton();
+    }
+
+    function updateOutcomeExecutionMode() {
+        const maker = $("#outcome-exec-mode")?.value === "maker";
+        const spreadField = $("#outcome-spread-field");
+        const spreadInput = $("#outcome-spread");
+        const makerField = $("#outcome-maker-spread-field");
+        const makerInput = $("#outcome-maker-spread");
+        if (makerField) makerField.hidden = !maker;
+        if (makerInput) {
+            makerInput.required = maker;
+            makerInput.disabled = !maker || outcomeRunning || $("#outcome-start-btn")?.getAttribute("aria-busy") === "true";
+            if (!maker) makerInput.classList.remove("invalid");
+        }
+        if (spreadField) spreadField.hidden = maker;
+        if (spreadInput) {
+            spreadInput.disabled = maker;
+            spreadInput.required = !maker;
+            if (maker) spreadInput.classList.remove("invalid");
+        }
+        setText("outcome-exec-help", maker
+            ? "Post-only : règle le Spread Limit pour rapprocher les prix d’achat et de vente à l’intérieur du carnet. La protection anti-spam reste active."
+            : "Exécution immédiate avec limite de slippage. Max spread filtre les entrées Taker.");
     }
 
     function switchPage(pageName) {
@@ -385,6 +423,7 @@
         setText("grid-token-symbol", tokenSubtitle(selectedGridToken));
         setText("grid-run-token", selectedGridToken.key);
         renderTokenOptions($("#grid-token-search")?.value || "");
+        updateGridButtons();
     }
 
     function gridDexCounts() {
@@ -889,6 +928,7 @@
 
         ws.onclose = () => {
             setConnectionStatus(false);
+            updateOutcomeDashboard({ ...outcomeState, type: "worldcup_stats", stale: true });
             showToast("error", "WebSocket disconnected", "Reconnecting automatically.");
             scheduleReconnect();
         };
@@ -919,6 +959,7 @@
         setText("grid-run-duration", data.duration || "00:00:00");
 
         const bots = Array.isArray(data.bots) ? data.bots : [];
+        gridSessions = bots;
         const active = bots.filter((bot) => bot.running);
         const sumKnown = (field) => active.length && active.every((bot) => typeof bot[field] === "number" && Number.isFinite(bot[field]))
             ? active.reduce((sum, bot) => sum + bot[field], 0) : null;
@@ -1008,7 +1049,7 @@
             const modeLabel = b.strategy === "mid" ? `MID · ${Number(b.offset_bps || 0).toFixed(1)} BPS`
                 : b.strategy === "freqtrade" ? "FREQTRADE"
                 : b.strategy === "bbo" ? "BBO" : "ANCIEN MODE";
-            const stateLabel = b.phase === "failed" ? "ÉCHEC" : !b.running ? "ARRÊTÉ" : b.phase === "connecting" ? "CONNEXION" : "LIVE";
+            const stateLabel = b.stale ? "ÉTAT PÉRIMÉ" : b.phase === "failed" ? (b.cleanup_confirmed ? "ÉCHEC · À PLAT" : "ÉCHEC · ARRÊT NON CONFIRMÉ") : b.phase === "stopping" ? "ARRÊT EN COURS" : !b.running ? "ARRÊTÉ" : b.phase === "connecting" ? "CONNEXION" : "LIVE";
             set("title", `${b.token} · ${modeLabel} · ${stateLabel}`);
             set("duration", b.duration || "00:00:00");
             set("mid", formatPrice(b.mid_price));
@@ -1027,7 +1068,7 @@
             set("spread", formatBPS(b.spread_bps));
             set("markout", `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
             set("edge", b.edge_required_bps ? `${formatBPS(b.edge_required_bps)} / ${formatBPS(b.quote_half_spread_bps)}` : "—");
-            set("action", b.error ? `${riskNotice ? "" : "⚠ "}${b.error}` : (b.action || ""));
+            set("action", [b.error, b.cleanup_error].filter(Boolean).join(" · ") || b.action || "");
             const stopBtn = card.querySelector(".bot-card-stop");
             if (stopBtn) {
                 if (!b.running && document.activeElement === stopBtn) {
@@ -1041,6 +1082,16 @@
 
     function updateOutcomeDashboard(data) {
         if (!data || data.type !== "worldcup_stats") return;
+        outcomeState = data;
+
+        if (data.running || outcomeRunning) {
+            const mode = data.config?.exec_mode === "maker" ? "maker" : "taker";
+            const modeSelect = $("#outcome-exec-mode");
+            if (modeSelect) modeSelect.value = mode;
+            const makerInput = $("#outcome-maker-spread");
+            if (makerInput && data.config?.maker_spread_pct != null) makerInput.value = data.config.maker_spread_pct;
+            setText("outcome-active-mode", mode === "maker" ? "Limit / Maker" : "Market / Taker");
+        }
 
         setText("outcome-duration", data.duration || "00:00:00");
         setText("outcome-run-duration", data.duration || "00:00:00");
@@ -1061,6 +1112,15 @@
         if (typeof data.running === "boolean") {
             outcomeRunning = data.running;
             updateOutcomeButtons();
+        }
+        const incident = [data.error, data.cleanup_error, data.stale ? "État périmé : arrêt non vérifié." : ""].filter(Boolean).join(" · ");
+        setFormError("outcome", incident);
+        const banner = $("#outcome-run-banner");
+        const stateLabel = data.stale ? "État périmé" : data.phase === "stopping" ? "Arrêt en cours" : data.phase === "failed" ? (data.cleanup_confirmed ? "Erreur · à plat, relance manuelle" : "Erreur · arrêt non confirmé") : "Session active";
+        if (banner) {
+            banner.hidden = !data.running && data.phase !== "failed";
+            const title = banner.querySelector("strong");
+            if (title) title.textContent = stateLabel;
         }
     }
 
@@ -1134,6 +1194,8 @@
     }
 
     async function startOutcomeBot() {
+        const exec_mode = $("#outcome-exec-mode")?.value || "taker";
+        const maker_spread_pct = Number.parseFloat($("#outcome-maker-spread")?.value);
         const order_size_usd = Number.parseFloat($("#outcome-order-size")?.value) || 50;
         // En %, même convention que --max-spread-pct (0.02 = 0.02% = 2 bps)
         const max_spread_pct = Number.parseFloat($("#outcome-spread")?.value);
@@ -1143,26 +1205,29 @@
         if (!validateMin("outcome", [
             { selector: "#outcome-order-size", min: 10, fallback: order_size_usd, message: "Order USD must be at least 10." },
             { selector: "#outcome-max-pos", min: 10, fallback: max_position_usd, message: "Max Pos USD must be at least 10." },
-            { selector: "#outcome-spread", min: 0, message: "Le spread doit être un nombre positif ou nul." },
+            ...(exec_mode === "taker" ? [{ selector: "#outcome-spread", min: 0, message: "Le spread doit être un nombre positif ou nul." }] : []),
+            ...(exec_mode === "maker" ? [{ selector: "#outcome-maker-spread", min: 0, message: "Le Spread Limit doit être un nombre positif ou nul." }] : []),
         ])) {
             showToast("error", "Check Outcome settings", "Correct the highlighted field before starting.");
             return;
         }
 
         setBusy("outcome-start-btn", true);
+        updateOutcomeButtons();
 
         try {
             await fetchJson(`${API_BASE}/api/outcomes/start`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ order_size_usd, max_spread_pct, max_position_usd, market }),
+                body: JSON.stringify({ order_size_usd, ...(exec_mode === "taker" ? { max_spread_pct } : { maker_spread_pct }), max_position_usd, market, exec_mode }),
             });
             outcomeRunning = true;
+            setText("outcome-active-mode", exec_mode === "maker" ? "Limit / Maker" : "Market / Taker");
             updateOutcomeButtons();
             const marketTxt = market === "ALL"
                 ? (outcomeMarkets.length ? `tous les marchés (${outcomeMarkets.length})` : "tous les marchés")
                 : (selectedOutcomeMarket.name || market);
-            showToast("success", "Outcome bot started", `${marketTxt} · spread < ${max_spread_pct}%`);
+            showToast("success", "Outcome bot started", `${marketTxt} · ${exec_mode === "maker" ? `Limit / Maker · spread cible ${maker_spread_pct}%` : `Market / Taker · spread < ${max_spread_pct}%`}`);
         } catch (error) {
             setFormError("outcome", error.message);
             showToast("error", "Outcome start failed", error.message);
@@ -1175,9 +1240,10 @@
     async function stopOutcomeBot() {
         setBusy("outcome-stop-btn", true);
         try {
-            await fetchJson(`${API_BASE}/api/outcomes/stop`, { method: "POST" });
-            outcomeRunning = false;
-            updateOutcomeButtons();
+            const response = await fetchJson(`${API_BASE}/api/outcomes/stop`, { method: "POST" });
+            const state = response.state || await fetchJson(`${API_BASE}/api/outcomes/status`);
+            updateOutcomeDashboard(state);
+            if (state.running || state.cleanup_confirmed !== true) throw new Error("Arrêt non confirmé : vérifier les ordres et la position.");
             showToast("info", "Outcome bot stopped", "The strategy has been stopped.");
         } catch (error) {
             showToast("error", "Outcome stop failed", error.message);
@@ -1401,6 +1467,16 @@
         $("#grid-stop-btn")?.addEventListener("click", () => stopGridBot());
         $("#outcome-start-btn")?.addEventListener("click", startOutcomeBot);
         $("#outcome-stop-btn")?.addEventListener("click", stopOutcomeBot);
+        $("#outcome-exec-mode")?.addEventListener("change", updateOutcomeExecutionMode);
+        $("#sessions-reconcile-btn")?.addEventListener("click", async () => {
+            setBusy("sessions-reconcile-btn", true);
+            try {
+                const state = await fetchJson(`${API_BASE}/api/sessions/reconcile`, { method: "POST" });
+                await loadInitialStatus();
+                showToast(state.can_start ? "success" : "error", "Vérification de l’arrêt", state.can_start ? "Ordres et positions vérifiés. Relance manuelle possible." : "Arrêt non confirmé : " + state.unresolved.join(", "));
+            } catch (error) { showToast("error", "Vérification impossible", error.message); }
+            finally { setBusy("sessions-reconcile-btn", false); }
+        });
 
         gridTokens = [selectedGridToken];
         renderDexChips();

@@ -26,6 +26,33 @@ func TestZeusStopBeforeFirstBook(t *testing.T) {
 		t.Fatal("stop was not honored")
 	}
 }
+
+func TestZeusComponentPanicAndUnexpectedExitTriggerStop(t *testing.T) {
+	for _, run := range []func(context.Context){func(context.Context) { panic("boom") }, func(context.Context) {}} {
+		failed := false
+		runZeusComponent(context.Background(), "test", run, func(error) { failed = true })
+		if !failed {
+			t.Fatal("component failure did not stop execution")
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runZeusComponent(ctx, "stopped", func(context.Context) {}, func(error) { t.Fatal("normal shutdown reported as failure") })
+}
+
+func TestZeusParentDeathTriggersStopWithoutAQuote(t *testing.T) {
+	if !parentAlive(os.Getpid()) {
+		t.Fatal("current process not detected")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchZeusStop(ctx, cancel, filepath.Join(t.TempDir(), "absent.flag"), -1)
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("orphan did not stop")
+	}
+}
 func TestZeusIndependentFlatVerification(t *testing.T) {
 	for _, tc := range []struct {
 		name, state, orders string

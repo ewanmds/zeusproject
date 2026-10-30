@@ -16,6 +16,7 @@ import threading
 from collections import deque
 from typing import Optional, List, Dict, Any, Tuple, NamedTuple
 from zeus import PROJECT_ROOT
+from zeus.safety import SafetyLatch, account_snapshot, supervisor_alive
 from zeus.network import StartupNetworkError, post_info, retry_read
 
 # Windows: stdout redirigé = cp1252 → crash sur les emojis. Forcer UTF-8.
@@ -1161,6 +1162,10 @@ class OrderBookBot:
         # de sweep, scratch toxique) en concurrence avec la boucle principale:
         # sérialiser les appels exchange (requests.Session non thread-safe).
         self.api_lock = threading.Lock()
+        self.safety = SafetyLatch(self._halt, os.getenv("ZEUS_SAFETY_FILE"),
+                                  is_running=lambda: self.running and not os.path.exists(self._stop_file) and supervisor_alive())
+        if self.live:
+            self.exchange = self.safety.wrap(self.exchange)
         self._emerg_ts: Dict[str, float] = {"B": 0.0, "A": 0.0}
         self._scratch_ts = 0.0
         # Queue position model: taille devant nous à la pose / restante.
@@ -1171,11 +1176,7 @@ class OrderBookBot:
         self._stats_file = stats_file_path(SYMBOL)
         self._stop_file = stop_file_path(SYMBOL)
         self._last_stats_write = 0.0
-        try:
-            if os.path.exists(self._stop_file):
-                os.remove(self._stop_file)   # stopfile d'un run précédent
-        except Exception:
-            pass
+        # A stop request may arrive during construction; never delete it here.
         try:
             signal.signal(signal.SIGINT, self._sig_shutdown)
             signal.signal(signal.SIGTERM, self._sig_shutdown)
@@ -1184,6 +1185,9 @@ class OrderBookBot:
 
     # ------------------------------------------------------------------ setup
     def _sig_shutdown(self, *_):
+        self.safety.stop()
+
+    def _halt(self):
         self.running = False
         self.wake.set()
 
@@ -1193,7 +1197,7 @@ class OrderBookBot:
         try:
             self.exchange.update_leverage(LEVERAGE, SYMBOL, is_cross=IS_CROSS)
         except Exception as exc:
-            print(f"⚠️ update_leverage: {exc}")
+            self.safety.fail(f"Leverage setup failed: {exc}")
 
     def startup_sweep(self):
         """Annule les ordres orphelins de NOTRE coin laissés par un run
@@ -1511,6 +1515,9 @@ class OrderBookBot:
         try:
             started = time.time()
             st = self.info.user_state(ACCOUNT_ADDRESS, dex=self.dex)
+            if not isinstance(st, dict) or not isinstance(st.get("assetPositions"), list):
+                raise ValueError("Invalid account response")
+            self.safety.account_known = True
             try:
                 spot = self.info.spot_user_state(ACCOUNT_ADDRESS)
                 spot_usdc = sum(max(0.0, float(b.get("total", 0) or 0) - float(b.get("hold", 0) or 0))
@@ -1538,8 +1545,8 @@ class OrderBookBot:
                 self.unrealized_pnl = 0.0
                 self.entry_price = 0.0
                 self.pos_since = 0.0
-        except Exception:
-            pass
+        except Exception as exc:
+            self.safety.fail(f"Position synchronization failed: {exc}")
 
     def reconcile_orders(self):
         """Le snapshot REST des ordres ouverts est la seule vérité — les oids
@@ -1549,7 +1556,10 @@ class OrderBookBot:
                 return
         try:
             oo = self.info.open_orders(ACCOUNT_ADDRESS, dex=self.dex)
-        except Exception:
+            if not isinstance(oo, list):
+                raise ValueError("Invalid order snapshot")
+        except Exception as exc:
+            self.safety.fail(f"Order synchronization failed: {exc}")
             return
         real: Dict[int, Dict[str, Any]] = {}
         for o in oo:
@@ -1617,6 +1627,8 @@ class OrderBookBot:
         return "post only" in e or "alo" in e or "immediately match" in e or "would have matched" in e
 
     def place_quotes(self, reqs: List[Dict[str, Any]]) -> None:
+        if not self.running or self.safety.stopped.is_set():
+            return
         if not self.live:
             return
         if not reqs:
@@ -1700,6 +1712,8 @@ class OrderBookBot:
         réussi renvoie un NOUVEL oid → remplacé dans le tracking. Retourne
         False au moindre échec: l'appelant invalide last_intent et le cycle
         suivant repasse par le chemin cancel+place classique (anti-fantômes)."""
+        if not self.running or self.safety.stopped.is_set():
+            return False
         if not self.live:
             return True
         if not pairs:
@@ -2135,10 +2149,12 @@ class OrderBookBot:
 
     # -------------------------------------------------- IPC dashboard (files)
     def _check_stop_file(self):
+        if not supervisor_alive():
+            self.safety.fail("Supervisor unavailable; manual restart required")
+            return
         try:
             if os.path.exists(self._stop_file):
-                os.remove(self._stop_file)
-                self.running = False
+                self._sig_shutdown()
                 self.last_action = "stop demandé par le dashboard"
         except Exception:
             pass
@@ -2151,10 +2167,10 @@ class OrderBookBot:
                 spread_bps = ((self.best_ask - self.best_bid) / mid * 10000.0
                               if mid > 0 and self.best_ask > self.best_bid > 0 else 0.0)
                 data = {
+                    **self.safety.snapshot(),
                     "symbol": SYMBOL,
                     "running": running,
-                    "phase": phase or ("running" if running and self.ws_ready
-                                       else "connecting" if running else "stopped"),
+                    "phase": phase or self.safety.phase,
                     "live": self.live,
                     "ts": time.time(),
                     "start_time": self.start_time,
@@ -2179,7 +2195,7 @@ class OrderBookBot:
                     "strategy": STRATEGY,
                     "notional": ORDER_NOTIONAL_USD,
                     "action": self.last_action,
-                    "error": self.last_error,
+                    "error": self.safety.error or self.last_error,
                     "protect": self.protect,
                     "hourly_net": self.hourly_net_pnl,
                     "hourly_pause_until": self.hourly_pause_until,
@@ -2352,7 +2368,49 @@ class OrderBookBot:
                 last_render = now
                 live_display.update(self.dashboard())
 
+    def _cleanup_snapshot(self):
+        return account_snapshot(self.info, ACCOUNT_ADDRESS, [SYMBOL])
+
+    def _cleanup_close(self, symbol, position):
+        book = self.info.l2_snapshot(symbol)
+        levels = book.get("levels", [])
+        bb, ba = float(levels[0][0]["px"]), float(levels[1][0]["px"])
+        if bb <= 0 or ba <= bb:
+            raise RuntimeError("Cannot close: no fresh book")
+        tick = dyn_tick((bb + ba) / 2)
+        buy = position < 0
+        px = px_up(ba + 20 * tick, tick) if buy else px_down(max(tick, bb - 20 * tick), tick)
+        self.exchange.order(name=symbol, is_buy=buy, sz=round_sz(abs(position)), limit_px=px,
+                            order_type={"limit": {"tif": "Ioc"}}, reduce_only=True)
+
     def run(self):
+        try:
+            self._check_stop_file()
+            if self.live and self.running:
+                initial = self._cleanup_snapshot()
+                if any(position or orders for _, position, orders in initial):
+                    raise RuntimeError("Existing position/orders; manual reconciliation required")
+            if self.running:
+                self._run_session()
+        except BaseException as exc:
+            self.safety.fail(exc)
+        finally:
+            self.safety.stop()
+            if self.live:
+                self.safety.cleanup(self._cleanup_snapshot,
+                    lambda rows: self.exchange.bulk_cancel([{"coin": symbol, "oid": oid} for symbol, oid in rows]),
+                    self._cleanup_close)
+            else:
+                self.safety.cleanup_confirmed = True
+                self.safety.phase = "failed" if self.safety.error else "stopped"
+            try:
+                if self.ws_info is not None:
+                    self.ws_info.disconnect_websocket()
+            except Exception:
+                pass
+            self.write_stats(running=False)
+
+    def _run_session(self):
         # Headless: lancé dans un thread (dashboard in-process) OU en process
         # enfant du dashboard (OBI_HEADLESS=1) — pas de Rich Live ni de prompt.
         headless = (threading.current_thread() is not threading.main_thread()
@@ -2360,8 +2418,11 @@ class OrderBookBot:
         if not headless:
             print(f"⏳ {SYMBOL} — attente du premier book L2...")
         self.set_leverage()
-        self.startup_sweep()
+        if not self.running:
+            return
         self.sync_position()
+        if not self.running:
+            return
         if MACRO_ENABLE:
             try:
                 n = self.macro.backfill(self.info, SYMBOL, MACRO_INTERVAL)
@@ -2374,40 +2435,26 @@ class OrderBookBot:
         except StartupNetworkError as exc:
             self.last_error = str(exc)
             self.last_action = "Connexion Hyperliquid impossible"
-            self.running = False
-            print(str(exc), flush=True)
+            self.safety.fail(exc)
+            print(self.safety.error, flush=True)
             self.write_stats(running=False, phase="failed")
             return
         deadline = time.time() + 15
-        while not self.ws_ready and time.time() < deadline:
+        while self.running and not self.ws_ready and time.time() < deadline:
             time.sleep(0.2)
         if not self.ws_ready:
             self.refresh_bbo_rest()
 
+        if not self.running:
+            return
+        self.safety.phase = "running"
+        self.safety.publish()
         if headless:
             self._trading_loop(None)
         else:
             with Live(self.dashboard(), console=self.console, refresh_per_second=2, screen=False) as live:
                 self._trading_loop(live)
 
-        # STOP = tout couper: cancel all + flatten market (règle projet).
-        if not headless:
-            print("\n🛑 Stop — cancel all + flatten...")
-        try:
-            self.cancel_all()
-        except Exception:
-            pass
-        try:
-            self.flatten("stop")
-        except Exception:
-            pass
-        try:
-            self.ws_info.disconnect_websocket()
-        except Exception:
-            pass
-        self.write_stats(running=False)   # dernier snapshot pour le dashboard
-        if not headless:
-            print("✅ Terminé.")
 
 
 # =============================================================================
