@@ -15,7 +15,7 @@ await cp(new URL("assets", source), new URL("assets", output), { recursive: true
 
 const config = {
     // This URL is public frontend configuration, not a wallet secret.
-    apiBase: process.env.ZEUS_API_BASE || "https://3-112-81-235.sslip.io",
+    apiBase: process.env.ZEUS_API_BASE || "https://3-113-242-142.sslip.io",
     apiToken: process.env.ZEUS_API_TOKEN || "",
     wsUrl: process.env.ZEUS_WS_URL || "",
 };

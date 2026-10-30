@@ -1,4 +1,4 @@
-3-112-81-235.sslip.io {
+3-113-242-142.sslip.io {
     encode zstd gzip
     reverse_proxy 127.0.0.1:8080
 }
