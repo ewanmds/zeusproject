@@ -126,6 +126,15 @@ is resent, no fill is invented, and successful reconciliation creates no fatal
 error or failed lifecycle. Unavailable snapshots and actually open OIDs are not
 silently classified as absent.
 
+`Cannot modify canceled or filled order` is also reconciled as a normal BBO/MID
+order race when a complete batch acknowledgement identifies that exact rejection.
+Fresh order snapshots must confirm the old OID absent, and inventory is refreshed
+before another quote. Accepted replacements in a mixed batch and the other
+side's queue are preserved. Only the missing side is deferred, then receives a
+new quote rather than another modification of the dead OID. This produces a
+warning, not a failed lifecycle or red failure border. Incomplete acknowledgements,
+other rejections and unverifiable exchange state still retain the interlock.
+
 ```powershell
 python -m unittest discover -s tests -p 'test_*.py' -v
 python tests/check_outcome_ui.py

@@ -131,6 +131,11 @@ def post_only_rejection(error):
         error) is not None
 
 
+def missing_modify_rejection(error):
+    return isinstance(error, str) and re.fullmatch(
+        r"Cannot modify canceled or filled order\.?(?: asset=\d+)?", error) is not None
+
+
 class SafetyLatch:
     def __init__(self, on_stop=None, path=None, is_running=None):
         self.lock = threading.RLock()
@@ -233,8 +238,8 @@ class SafetyLatch:
     def owns(self, order):
         return int(order.get("oid", 0)) in self.owned or str(order.get("cloid", "")) in self.cloids
 
-    def wrap(self, exchange, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None):
-        return GuardedExchange(exchange, self, reconcile_cancel, on_error, reconcile_reduce_only, reconcile_post_only)
+    def wrap(self, exchange, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None, reconcile_modify=None):
+        return GuardedExchange(exchange, self, reconcile_cancel, on_error, reconcile_reduce_only, reconcile_post_only, reconcile_modify)
 
     def cleanup(self, snapshot, cancel, close, timeout=30, sleep=time.sleep):
         """snapshot returns fresh [(symbol, position, orders)] or raises.
@@ -296,13 +301,14 @@ class SafetyLatch:
 class GuardedExchange:
     ACTIONS = {"order", "bulk_orders", "bulk_modify_orders_new", "modify_order", "bulk_cancel", "cancel", "update_leverage"}
 
-    def __init__(self, exchange, safety, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None):
+    def __init__(self, exchange, safety, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None, reconcile_modify=None):
         self._exchange = exchange
         self._safety = safety
         self._reconcile_cancel = reconcile_cancel
         self._on_error = on_error
         self._reconcile_reduce_only = reconcile_reduce_only
         self._reconcile_post_only = reconcile_post_only
+        self._reconcile_modify = reconcile_modify
 
     def __getattr__(self, name):
         method = getattr(self._exchange, name)
@@ -390,7 +396,10 @@ class GuardedExchange:
                                          if self._reconcile_post_only and isinstance(status, dict)
                                          and post_only_rejection(status.get("error"))
                                          and requests[i].get("order_type", {}).get("limit", {}).get("tif") == "Alo"]
-                            recoverable = set(rejected + post_only)
+                            missing_modifies = [i for i, status in enumerate(statuses)
+                                                if name == "bulk_modify_orders_new" and self._reconcile_modify
+                                                and isinstance(status, dict) and missing_modify_rejection(status.get("error"))]
+                            recoverable = set(rejected + post_only + missing_modifies)
                             if recoverable and all(i in recoverable or isinstance(status, dict)
                                                    and ("resting" in status or "filled" in status)
                                                    for i, status in enumerate(statuses)):
@@ -398,6 +407,8 @@ class GuardedExchange:
                                     self._reconcile_reduce_only()
                                 if post_only:
                                     self._reconcile_post_only([requests[i] for i in post_only], name)
+                                if missing_modifies:
+                                    self._reconcile_modify([args[0][i] for i in missing_modifies])
                                 resolved_rejections = recoverable
                         if len(statuses) != expected or any(i not in resolved_rejections and not (
                                 status == "success" or isinstance(status, dict) and

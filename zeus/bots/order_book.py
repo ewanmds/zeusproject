@@ -16,7 +16,7 @@ import threading
 from collections import deque
 from typing import Optional, List, Dict, Any, Tuple, NamedTuple
 from zeus import PROJECT_ROOT
-from zeus.safety import SafetyLatch, account_snapshot, supervisor_alive, finite, post_only_rejection
+from zeus.safety import SafetyLatch, account_snapshot, supervisor_alive, finite, post_only_rejection, missing_modify_rejection
 from zeus.network import StartupNetworkError, post_info, retry_read
 
 # Windows: stdout redirigé = cp1252 → crash sur les emojis. Forcer UTF-8.
@@ -1181,7 +1181,8 @@ class OrderBookBot:
         if self.live:
             self.exchange = self.safety.wrap(self.exchange, reconcile_cancel=self._reconcile_missing_cancels,
                                             reconcile_reduce_only=self._reconcile_reduce_only,
-                                            reconcile_post_only=self._reconcile_post_only)
+                                            reconcile_post_only=self._reconcile_post_only,
+                                            reconcile_modify=self._reconcile_missing_modifies)
         self._emerg_ts: Dict[str, float] = {"B": 0.0, "A": 0.0}
         self._scratch_ts = 0.0
         # Queue position model: taille devant nous à la pose / restante.
@@ -1754,6 +1755,19 @@ class OrderBookBot:
             self.reconcile_orders(force=True)
             if self.safety.stopped.is_set():
                 raise RuntimeError("Post-only replacement: order synchronization unconfirmed")
+        self._defer_quote_requests(requests, "Post-only : carnet déplacé, recalcul du côté rejeté.")
+
+    def _reconcile_missing_modifies(self, modifications):
+        missing = {int(item["oid"]) for item in modifications}
+        self._reconcile_execution_state(missing)
+        with self.lock:
+            for oid in missing:
+                self.queue_init.pop(oid, None)
+                self.queue_ahead.pop(oid, None)
+        self._defer_quote_requests([item["order"] for item in modifications],
+                                   "Ordre déjà rempli ou annulé : cotation recalculée après synchronisation.")
+
+    def _defer_quote_requests(self, requests, warning):
         with self.lock:
             self.quote_retry_after = getattr(self, "quote_retry_after", {"B": 0.0, "A": 0.0})
             self.quote_reject_count = getattr(self, "quote_reject_count", {"B": 0, "A": 0})
@@ -1762,7 +1776,7 @@ class OrderBookBot:
                 count = min(4, self.quote_reject_count[side] + 1)
                 self.quote_reject_count[side] = count
                 self.quote_retry_after[side] = time.time() + min(8.0, 2 ** (count - 1))
-            self.quote_warning = "Post-only : carnet déplacé, recalcul du côté rejeté."
+            self.quote_warning = warning
             self.position_revision += 1
             self.position_dirty = True
             self.force_quote = True
@@ -1870,7 +1884,7 @@ class OrderBookBot:
         """Requote en UN round-trip via batchModify (au lieu de cancel+place).
         pairs = [(old_oid, req)] avec req au format place_quotes. Un modify
         réussi renvoie un NOUVEL oid → remplacé dans le tracking. Retourne
-        False au moindre échec: l'appelant invalide last_intent et le cycle
+        False si un échec reste non réconcilié: l'appelant invalide last_intent et le cycle
         suivant repasse par le chemin cancel+place classique (anti-fantômes)."""
         if not self.running or self.safety.stopped.is_set():
             return False
@@ -1951,7 +1965,8 @@ class OrderBookBot:
                     self.force_quote = True
                     self.wake.set()
                 else:
-                    if isinstance(status, dict) and post_only_rejection(status.get("error")):
+                    if isinstance(status, dict) and (post_only_rejection(status.get("error"))
+                                                    or missing_modify_rejection(status.get("error"))):
                         continue  # reconciled and deferred; preserve the other side's queue
                     ok_all = False
                     self.last_error = str(status.get("error", status)

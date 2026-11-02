@@ -208,6 +208,10 @@ def main():
                 expect(card).to_contain_text("LIVE")
                 expect(card).not_to_have_class(__import__("re").compile(r"\bfailed\b"))
                 expect(card.get_by_role("button", name="Arrêter IO_ANTH")).to_be_visible()
+                grid["bots"][0].update(error="", warning="Ordre déjà rempli ou annulé : cotation recalculée après synchronisation.")
+                page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", grid)
+                expect(card).to_contain_text("déjà rempli ou annulé")
+                expect(card).not_to_have_class(__import__("re").compile(r"\bfailed\b"))
                 page.screenshot(path=str(Path(tempfile.gettempdir()) / f"zeus-bbo-post-only-{width}.png"), full_page=True)
                 assert not errors, errors
                 print(f"PASS {width}px: independent bots, keyboard, recovery, scoped Stop, Stop all, reload; {screenshot}")
