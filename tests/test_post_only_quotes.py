@@ -3,9 +3,11 @@ import unittest
 from unittest.mock import Mock, patch
 
 import test_reduce_only_preflight as fixtures
+from zeus.safety import post_only_rejection
 
 
 REJECT = {"error": "Post only order would have immediately matched, bbo was 1738.6@1738.9. asset=200001"}
+WRAPPED_REJECT = {"error": "Error placing new order during modify: Post only order would have immediately matched, bbo was 1744.6@1744.7."}
 OID = 592672244205
 
 
@@ -96,6 +98,51 @@ class PostOnlyQuoteTests(unittest.TestCase):
         self.assertTrue(self.bot.running)
         self.assertFalse(self.bot.last_error)
         self.raw.bulk_cancel.assert_not_called()
+
+    def wrapped_modify(self, keep_old):
+        self.bot.orders = {10: {"side": "B", "px": 99, "sz": 1, "ro": False},
+                           20: {"side": "A", "px": 100.1, "sz": 1, "ro": False}}
+        self.bot.safety.owned.update((10, 20))
+        self.bot.info.open_orders.return_value = [{"coin": "io:ANTH", "oid": 20,
+            "side": "A", "limitPx": "100.1", "sz": "1"}]
+        if keep_old:
+            self.bot.info.open_orders.return_value.append({"coin": "io:ANTH", "oid": 10,
+                "side": "B", "limitPx": "99", "sz": "1"})
+        self.raw.bulk_modify_orders_new.return_value = response([WRAPPED_REJECT])
+        self.assertTrue(self.bot.modify_quotes([(10, self.request(buy=True, size=1, ro=False))]))
+
+    def test_exact_wrapped_error_keeps_observed_old_quote_and_bot_active(self):
+        self.wrapped_modify(keep_old=True)
+        self.assertTrue(self.bot.running)
+        self.assertFalse(self.bot.safety.stopped.is_set())
+        self.assertFalse(self.bot.safety.error)
+        self.assertFalse(self.bot.last_error)
+        self.assertFalse(self.bot.safety.pending_cloids)
+        self.assertEqual(set(self.bot.orders), {10, 20})
+        self.assertIn("Post-only", self.bot.quote_warning)
+        self.raw.bulk_cancel.assert_not_called()
+
+    def test_wrapped_error_when_old_quote_was_removed_requotes_only_missing_side(self):
+        with patch("zeus.bots.order_book.time.time", return_value=1000) as clock:
+            self.wrapped_modify(keep_old=False)
+            self.assertEqual(set(self.bot.orders), {20})
+            clock.return_value = 1000.2
+            self.bot.apply_intent()
+            self.raw.bulk_orders.assert_not_called()
+            clock.return_value = 1001.1
+            self.bot.apply_intent()
+        self.assertTrue(self.bot.running)
+        self.raw.bulk_modify_orders_new.assert_called_once()
+        self.raw.bulk_orders.assert_called_once()
+        self.assertTrue(self.raw.bulk_orders.call_args.args[0][0]["is_buy"])
+        self.assertIn(20, self.bot.orders)
+        self.raw.bulk_cancel.assert_not_called()
+
+    def test_modify_prefix_does_not_hide_unrelated_execution_errors(self):
+        self.assertTrue(post_only_rejection(WRAPPED_REJECT["error"]))
+        self.assertFalse(post_only_rejection("Error placing new order during modify: permission denied"))
+        self.assertFalse(post_only_rejection("Error placing new order during modify: Insufficient margin"))
+        self.assertFalse(post_only_rejection("Unexpected wrapper: " + REJECT["error"]))
 
     def test_post_only_error_is_not_accepted_for_an_ioc_request(self):
         request = self.request(buy=True, ro=False)

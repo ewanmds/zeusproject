@@ -126,7 +126,12 @@ def acknowledged_status(status, placing):
 
 
 def post_only_rejection(error):
-    return isinstance(error, str) and re.fullmatch(
+    if not isinstance(error, str):
+        return False
+    prefix = "Error placing new order during modify: "
+    if error.startswith(prefix):
+        error = error[len(prefix):]
+    return re.fullmatch(
         r"Post only order would have immediately matched(?:, bbo was [0-9.eE+-]+@[0-9.eE+-]+)?\.?(?: asset=\d+)?",
         error) is not None
 

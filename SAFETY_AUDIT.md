@@ -117,6 +117,8 @@ is retained while correct; genuine risk pulls and closing orders remain urgent.
 Rejected modifications reconcile actual resting orders before continuing.
 Expected quote warnings are separate from fatal errors, and the dashboard's
 red failure border follows the lifecycle rather than any warning string.
+The exact `Error placing new order during modify: ` wrapper is removed before
+classifying a post-only rejection; other wrapped execution errors stay fatal.
 
 BBO/MID also reconcile the exact already-canceled/filled cancel response, including
 mixed `success`/missing-OID batches. Fresh position and order snapshots must show
