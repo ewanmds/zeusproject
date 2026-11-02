@@ -31,6 +31,7 @@
     let reconnectTimer = null;
     let gridRunning = false;
     let outcomeRunning = false;
+    let outcomeSessions = [];
     let outcomeState = { can_start: false, phase: "connecting" };
     let gridSessions = [];
     let gridTokens = [];
@@ -228,7 +229,7 @@
 
     function updateReconcileButton() {
         const button = $("#sessions-reconcile-btn");
-        if (button) button.hidden = !(outcomeState.phase === "failed" && outcomeState.cleanup_confirmed !== true
+        if (button) button.hidden = !(outcomeSessions.some((bot) => bot.phase === "failed" && bot.cleanup_confirmed !== true)
             || gridSessions.some((bot) => bot.phase === "failed" && bot.cleanup_confirmed !== true));
     }
 
@@ -255,10 +256,17 @@
     function updateOutcomeButtons() {
         const startBtn = $("#outcome-start-btn");
         const stopBtn = $("#outcome-stop-btn");
-        if (startBtn) startBtn.disabled = outcomeRunning || outcomeState.stale || outcomeState.can_start === false || startBtn.getAttribute("aria-busy") === "true";
+        const selected = outcomeSessions.find((bot) => bot.market === selectedOutcomeCoin());
+        const blocked = selected && (selected.running || selected.cleanup_confirmed !== true);
+        if (startBtn) startBtn.disabled = !selectedOutcomeMarket.key || blocked || outcomeState.stale || outcomeState.can_start === false || startBtn.getAttribute("aria-busy") === "true";
+        setText("outcome-start-help", !selectedOutcomeMarket.key ? "Choisis un marché pour lancer son bot." : blocked ? "Ce marché possède déjà un bot actif ou un arrêt à vérifier. Tu peux choisir un autre marché." : "Un processus indépendant sera lancé pour ce marché.");
         if (stopBtn) stopBtn.disabled = !outcomeRunning || stopBtn.getAttribute("aria-busy") === "true";
         const modeSelect = $("#outcome-exec-mode");
-        if (modeSelect) modeSelect.disabled = outcomeRunning || startBtn?.getAttribute("aria-busy") === "true";
+        if (modeSelect) modeSelect.disabled = startBtn?.getAttribute("aria-busy") === "true";
+        const busy = startBtn?.getAttribute("aria-busy") === "true";
+        $$("input[name='outcome-side']").forEach((input) => {
+            input.disabled = busy || input.value === "no" && selectedOutcomeMarket.sides?.length === 1;
+        });
         updateOutcomeExecutionMode();
         setRunState("outcome", outcomeRunning);
         updateReconcileButton();
@@ -273,7 +281,7 @@
         if (makerField) makerField.hidden = !maker;
         if (makerInput) {
             makerInput.required = maker;
-            makerInput.disabled = !maker || outcomeRunning || $("#outcome-start-btn")?.getAttribute("aria-busy") === "true";
+            makerInput.disabled = !maker || $("#outcome-start-btn")?.getAttribute("aria-busy") === "true";
             if (!maker) makerInput.classList.remove("invalid");
         }
         if (spreadField) spreadField.hidden = maker;
@@ -555,9 +563,9 @@
     }
 
     /* --------- Outcome market picker (catalogue HIP-4 dynamique) --------- */
-    const OUTCOME_ALL_MARKET = {
-        key: "ALL",
-        name: "Tous les marchés",
+    const OUTCOME_EMPTY_MARKET = {
+        key: "",
+        name: "Choisir un marché",
         logo: "OU",
         logoUrl: "",
         category: "all",
@@ -576,8 +584,18 @@
     let outcomeCategories = [];
     let outcomeCatalogLoaded = false;
     let outcomeCatalogPromise = null;
-    let selectedOutcomeMarket = OUTCOME_ALL_MARKET;
+    let selectedOutcomeMarket = OUTCOME_EMPTY_MARKET;
     let activeOutcomeCategory = "all";
+
+    function selectedOutcomeSide() {
+        return $("input[name='outcome-side']:checked")?.value || "no";
+    }
+
+    function selectedOutcomeCoin() {
+        if (!selectedOutcomeMarket.key) return "";
+        const id = Math.floor(Number(selectedOutcomeMarket.key.slice(1)) / 10);
+        return `#${id * 10 + (selectedOutcomeSide() === "yes" ? 0 : 1)}`;
+    }
 
     function normalizeOutcome(raw) {
         const sides = Array.isArray(raw?.sides) && raw.sides.length > 0
@@ -605,7 +623,7 @@
     }
 
     function outcomeProbability(market, sideIndex) {
-        if (!market || market.key === "ALL") return "—";
+        if (!market || !market.key) return "—";
         const value = sideIndex === 0 ? market.mid0 : market.mid1;
         const other = sideIndex === 0 ? market.mid1 : market.mid0;
         if ((!Number.isFinite(value) || value <= 0) && (!Number.isFinite(other) || other <= 0)) return "—";
@@ -614,7 +632,7 @@
     }
 
     function outcomeTriggerSubtitle(market) {
-        if (!market || market.key === "ALL") {
+        if (!market || !market.key) {
             return outcomeMarkets.length > 0
                 ? `${outcomeMarkets.length} marchés · deployer out`
                 : "catalogue HIP-4 · out";
@@ -622,13 +640,14 @@
         const parts = [];
         if (market.questionTitle) parts.push(market.questionTitle);
         else if (market.categoryLabel) parts.push(market.categoryLabel);
-        const prob = outcomeProbability(market, market.sideIndex);
-        if (prob !== "—") parts.push(`${market.sideName} ${prob}`);
+        const sideIndex = selectedOutcomeSide() === "yes" ? 0 : 1;
+        const prob = outcomeProbability(market, sideIndex);
+        parts.push(`${sideIndex === 0 ? "Yes" : "No"}${prob !== "—" ? ` ${prob}` : ""}`);
         return parts.join(" · ") || "marché HIP-4";
     }
 
     function outcomeOptionSubtitle(market) {
-        if (market.key === "ALL") return "Panier complet du deployer out";
+        if (!market.key) return "Choisir un marché précis";
         if (market.questionTitle) return market.questionTitle;
         const parts = [];
         if (market.underlying) parts.push(market.underlying);
@@ -691,13 +710,17 @@
     }
 
     function setSelectedOutcomeMarket(market) {
-        selectedOutcomeMarket = market || OUTCOME_ALL_MARKET;
+        selectedOutcomeMarket = market || OUTCOME_EMPTY_MARKET;
+        if (selectedOutcomeMarket.sides?.length === 1) $("#outcome-side-yes").checked = true;
         const hidden = $("#outcome-market");
-        if (hidden) hidden.value = selectedOutcomeMarket.key;
+        if (hidden) hidden.value = selectedOutcomeCoin();
+        setText("outcome-side-yes-prob", outcomeProbability(selectedOutcomeMarket, 0));
+        setText("outcome-side-no-prob", selectedOutcomeMarket.sides?.length === 1 ? "Indisponible" : outcomeProbability(selectedOutcomeMarket, 1));
         paintOutcomeLogo($("#outcome-market-logo"), selectedOutcomeMarket);
         setText("outcome-market-name", selectedOutcomeMarket.name);
         setText("outcome-market-symbol", outcomeTriggerSubtitle(selectedOutcomeMarket));
         renderOutcomeMarketOptions($("#outcome-market-search")?.value || "");
+        updateOutcomeButtons();
     }
 
     function renderOutcomeMarketOptions(filter = "") {
@@ -714,8 +737,7 @@
             ).toLowerCase();
             return terms.every((term) => haystack.includes(term));
         });
-        const showBasket = terms.length === 0 && activeOutcomeCategory === "all";
-        const options = showBasket ? [OUTCOME_ALL_MARKET, ...shown] : shown;
+        const options = shown;
         const filtering = terms.length > 0 || activeOutcomeCategory !== "all";
         setText("outcome-market-results", filtering
             ? `${shown.length} résultat${shown.length > 1 ? "s" : ""}`
@@ -750,7 +772,7 @@
                 name.textContent = market.name;
                 const badge = document.createElement("span");
                 badge.className = "token-dex";
-                badge.textContent = market.key === "ALL" ? "out" : (market.categoryLabel || "out");
+                badge.textContent = market.categoryLabel || "out";
                 title.append(name, badge);
 
                 const subtitle = document.createElement("span");
@@ -759,9 +781,8 @@
 
                 const price = document.createElement("span");
                 price.className = "token-vol";
-                price.textContent = market.key === "ALL"
-                    ? `${outcomeMarkets.length}`
-                    : `${market.sideName} ${outcomeProbability(market, market.sideIndex)}`;
+                const yes = selectedOutcomeSide() === "yes";
+                price.textContent = `${yes ? "Yes" : "No"} ${outcomeProbability(market, yes ? 0 : 1)}`;
 
                 meta.append(title, subtitle);
                 button.append(logo, meta, price);
@@ -791,7 +812,7 @@
             activeOutcomeCategory = "all";
             renderOutcomeCategoryChips();
             const current = outcomeMarkets.find((market) => market.key === selectedOutcomeMarket.key);
-            setSelectedOutcomeMarket(current || OUTCOME_ALL_MARKET);
+            setSelectedOutcomeMarket(current || OUTCOME_EMPTY_MARKET);
             setText("outcome-market-count", `${markets.length} marchés`);
             return true;
         } catch (error) {
@@ -1041,7 +1062,7 @@
             if (!card) return;
             const riskNotice = /^(?:max drawdown exceeded|session stop-loss triggered)\b/i.test(String(b.error || "").trim());
             card.classList.toggle("stopped", !b.running);
-            card.classList.toggle("failed", Boolean(b.error) && !riskNotice);
+            card.classList.toggle("failed", (b.phase === "failed" || !b.phase && !b.running && Boolean(b.error)) && !riskNotice);
             const set = (f, v) => {
                 const el = card.querySelector(`[data-f="${f}"]`);
                 if (el && el.textContent !== v) el.textContent = v;
@@ -1068,7 +1089,7 @@
             set("spread", formatBPS(b.spread_bps));
             set("markout", `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
             set("edge", b.edge_required_bps ? `${formatBPS(b.edge_required_bps)} / ${formatBPS(b.quote_half_spread_bps)}` : "—");
-            set("action", [b.error, b.cleanup_error].filter(Boolean).join(" · ") || b.action || "");
+            set("action", [b.error, b.cleanup_error].filter(Boolean).join(" · ") || b.warning || b.action || "");
             const stopBtn = card.querySelector(".bot-card-stop");
             if (stopBtn) {
                 if (!b.running && document.activeElement === stopBtn) {
@@ -1080,32 +1101,68 @@
         });
     }
 
+    function renderOutcomeSessions(bots) {
+        const container = $("#outcome-bots-list");
+        if (!container) return;
+        setText("outcome-sessions-count", `${bots.filter((bot) => bot.running).length} actif(s)`);
+        const keep = new Set(bots.map((bot) => bot.session_id));
+        Array.from(container.children).forEach((card) => {
+            if (!keep.has(card.dataset.sessionId)) {
+                if (card.contains(document.activeElement)) $("#outcome-sessions-heading")?.focus();
+                card.remove();
+            }
+        });
+        bots.forEach((bot) => {
+            let card = Array.from(container.children).find((el) => el.dataset.sessionId === bot.session_id);
+            if (!card) {
+                card = document.createElement("article");
+                card.className = "bot-card";
+                card.dataset.sessionId = bot.session_id;
+                card.innerHTML = `<header class="bot-card-head"><span class="bot-dot" aria-hidden="true"></span><strong class="bot-card-token" data-f="title"></strong><span class="bot-card-duration" data-f="duration"></span><button class="btn btn-stop bot-card-stop" type="button">Arrêter</button></header><p class="bot-card-action" data-f="settings"></p><div class="bot-card-grid"><div class="bot-stat"><span>État</span><strong data-f="state"></strong></div><div class="bot-stat"><span>Volume</span><strong data-f="volume_usd"></strong></div><div class="bot-stat"><span>Net PnL</span><strong data-f="net_pnl"></strong></div><div class="bot-stat"><span>Frais</span><strong data-f="fees"></strong></div><div class="bot-stat"><span>Coût / 1M</span><strong data-f="cost_per_1m"></strong></div><div class="bot-stat"><span>Fills</span><strong data-f="fills"></strong></div><div class="bot-stat"><span>Position</span><strong data-f="position_usd"></strong></div></div><footer class="bot-card-action" data-f="error"></footer>`;
+                card.querySelector("button").addEventListener("click", () => stopOutcomeBot(card.dataset.sessionId));
+                container.append(card);
+            }
+            const set = (key, value) => { card.querySelector(`[data-f="${key}"]`).textContent = value; };
+            const config = bot.config || {};
+            const name = bot.market_name || outcomeMarkets.find((market) => Math.floor(Number(market.key.slice(1)) / 10) === Math.floor(Number(bot.market?.slice(1)) / 10))?.name || bot.market;
+            const side = config.outcome_side || (Number(bot.market?.slice(1)) % 10 === 0 ? "yes" : "no");
+            set("title", `${name} · ${side === "yes" ? "Yes" : "No"}`);
+            set("duration", bot.duration || "00:00:00");
+            set("settings", `${config.exec_mode === "maker" ? "Limit / Maker" : "Market / Taker"} · ordre ${formatUSD(config.order_size_usd)} · plafond ${formatUSD(config.max_position_usd)} · ${config.exec_mode === "maker" ? `spread cible ${config.maker_spread_pct}%` : `spread max ${config.max_spread_pct ?? config.max_spread_bps / 100}%`}`);
+            set("state", bot.stale || outcomeState.stale ? "Données périmées" : ({ connecting: "Démarrage", running: "Actif", recovering: "Vérification · reprise auto", stopping: "Arrêt en cours", stopped: "Arrêt confirmé", failed: bot.cleanup_confirmed ? "Erreur · à plat" : "Arrêt non confirmé" }[bot.phase] || bot.phase));
+            for (const key of ["volume_usd", "net_pnl", "fees", "cost_per_1m", "position_usd"]) set(key, bot.accounting_complete === false ? "—" : formatUSD(bot[key]));
+            set("fills", bot.accounting_complete === false ? "—" : String(bot.fills || 0));
+            set("error", [bot.error, bot.recovery_error, bot.cleanup_error].filter(Boolean).join(" · "));
+            card.classList.toggle("stopped", !bot.running);
+            card.classList.toggle("failed", bot.phase === "failed");
+            setPnLColor(card.querySelector('[data-f="net_pnl"]'), bot.net_pnl);
+            const button = card.querySelector("button");
+            button.setAttribute("aria-label", `Arrêter ${name} ${side === "yes" ? "Yes" : "No"}`);
+            if (!bot.running && document.activeElement === button) { card.tabIndex = -1; card.focus({ preventScroll: true }); }
+            button.hidden = !bot.running;
+            button.disabled = bot.phase === "stopping" || button.getAttribute("aria-busy") === "true";
+        });
+    }
+
     function updateOutcomeDashboard(data) {
         if (!data || data.type !== "worldcup_stats") return;
         outcomeState = data;
 
-        if (data.running || outcomeRunning) {
-            const mode = data.config?.exec_mode === "maker" ? "maker" : "taker";
-            const modeSelect = $("#outcome-exec-mode");
-            if (modeSelect) modeSelect.value = mode;
-            const makerInput = $("#outcome-maker-spread");
-            if (makerInput && data.config?.maker_spread_pct != null) makerInput.value = data.config.maker_spread_pct;
-            setText("outcome-active-mode", mode === "maker" ? "Limit / Maker" : "Market / Taker");
-        }
-
+        outcomeSessions = Array.isArray(data.bots) ? data.bots : [];
+        renderOutcomeSessions(outcomeSessions);
         setText("outcome-duration", data.duration || "00:00:00");
         setText("outcome-run-duration", data.duration || "00:00:00");
-        setText("outcome-volume", formatUSD(data.volume_usd));
-        setText("outcome-fees", formatUSD(data.fees));
-        setText("outcome-cost-1m", data.volume_usd > 0 ? formatUSD(data.cost_per_1m) : "—");
-        setText("outcome-fills", String(data.fills || 0));
+        setText("outcome-volume", data.accounting_complete === false ? "—" : formatUSD(data.volume_usd));
+        setText("outcome-fees", data.accounting_complete === false ? "—" : formatUSD(data.fees));
+        setText("outcome-cost-1m", data.accounting_complete !== false && data.volume_usd > 0 ? formatUSD(data.cost_per_1m) : "—");
+        setText("outcome-fills", data.accounting_complete === false ? "—" : String(data.fills || 0));
         setText("outcome-mid-price", formatPrice(data.mid_price));
         setText("outcome-spread-display", formatBPS(data.spread_bps));
         setText("outcome-position", formatUSD(data.position_usd));
 
         const pnl = $("#outcome-pnl");
         if (pnl) {
-            pnl.textContent = formatUSD(data.net_pnl, true);
+            pnl.textContent = data.accounting_complete === false ? "—" : formatUSD(data.net_pnl, true);
             setPnLColor(pnl, data.net_pnl);
         }
 
@@ -1116,7 +1173,7 @@
         const incident = [data.error, data.recovery_error, data.cleanup_error, data.stale ? "État périmé : arrêt non vérifié." : ""].filter(Boolean).join(" · ");
         setFormError("outcome", incident);
         const banner = $("#outcome-run-banner");
-        const stateLabel = data.stale ? "État périmé" : data.phase === "recovering" ? "Session active · vérification avant reprise automatique" : data.phase === "stopping" ? "Arrêt en cours" : data.phase === "failed" ? (data.cleanup_confirmed ? "Erreur · à plat, relance manuelle" : "Erreur · arrêt non confirmé") : "Session active";
+        const stateLabel = data.stale ? "État périmé" : `${data.active_markets || 0} bot(s) Outcome actif(s)`;
         if (banner) {
             banner.hidden = !data.running && data.phase !== "failed";
             const title = banner.querySelector("strong");
@@ -1200,7 +1257,9 @@
         // En %, même convention que --max-spread-pct (0.02 = 0.02% = 2 bps)
         const max_spread_pct = Number.parseFloat($("#outcome-spread")?.value);
         const max_position_usd = Number.parseFloat($("#outcome-max-pos")?.value) || 250;
-        const market = $("#outcome-market")?.value || "ALL";
+        const market = $("#outcome-market")?.value || "";
+        const outcome_side = selectedOutcomeSide();
+        if (!market) { setFormError("outcome", "Choisis un marché précis."); return; }
 
         if (!validateMin("outcome", [
             { selector: "#outcome-order-size", min: 10, fallback: order_size_usd, message: "Order USD must be at least 10." },
@@ -1216,18 +1275,17 @@
         updateOutcomeButtons();
 
         try {
-            await fetchJson(`${API_BASE}/api/outcomes/start`, {
+            const started = await fetchJson(`${API_BASE}/api/outcomes/start`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ order_size_usd, ...(exec_mode === "taker" ? { max_spread_pct } : { maker_spread_pct }), max_position_usd, market, exec_mode }),
+                body: JSON.stringify({ order_size_usd, ...(exec_mode === "taker" ? { max_spread_pct } : { maker_spread_pct }), max_position_usd, market, exec_mode, outcome_side }),
             });
-            outcomeRunning = true;
-            setText("outcome-active-mode", exec_mode === "maker" ? "Limit / Maker" : "Market / Taker");
-            updateOutcomeButtons();
-            const marketTxt = market === "ALL"
-                ? (outcomeMarkets.length ? `tous les marchés (${outcomeMarkets.length})` : "tous les marchés")
-                : (selectedOutcomeMarket.name || market);
-            showToast("success", "Outcome bot started", `${marketTxt} · ${exec_mode === "maker" ? `Limit / Maker · spread cible ${maker_spread_pct}%` : `Market / Taker · spread < ${max_spread_pct}%`}`);
+            const marketName = outcomeMarkets.find((item) => Math.floor(Number(item.key.slice(1)) / 10) === Math.floor(Number(market.slice(1)) / 10))?.name || market;
+            const placeholder = { ...started, config: { market, exec_mode, outcome_side, maker_spread_pct, max_spread_pct, order_size_usd, max_position_usd }, running: true, phase: "connecting", cleanup_confirmed: false, can_start: false, market_name: marketName };
+            updateOutcomeDashboard({ ...outcomeState, type: "worldcup_stats", running: true, active_markets: outcomeSessions.filter((bot) => bot.running).length + 1, bots: [...outcomeSessions.filter((bot) => bot.market !== market), placeholder] });
+            updateOutcomeDashboard(await fetchJson(`${API_BASE}/api/outcomes/status`));
+            const marketTxt = `${marketName} · ${outcome_side === "yes" ? "Yes" : "No"}`;
+            showToast("success", "Démarrage du bot Outcome", `${marketTxt} · ${exec_mode === "maker" ? `Limit / Maker · spread cible ${maker_spread_pct}%` : `Market / Taker · spread < ${max_spread_pct}%`}`);
         } catch (error) {
             setFormError("outcome", error.message);
             showToast("error", "Outcome start failed", error.message);
@@ -1237,19 +1295,22 @@
         }
     }
 
-    async function stopOutcomeBot() {
-        setBusy("outcome-stop-btn", true);
+    async function stopOutcomeBot(sessionId = null) {
+        const button = sessionId ? Array.from($("#outcome-bots-list")?.children || []).find((card) => card.dataset.sessionId === sessionId)?.querySelector("button") : $("#outcome-stop-btn");
+        if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
         try {
-            const response = await fetchJson(`${API_BASE}/api/outcomes/stop`, { method: "POST" });
+            const response = await fetchJson(`${API_BASE}/api/outcomes/stop`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sessionId ? { session_id: sessionId } : {}) });
             const state = response.state || await fetchJson(`${API_BASE}/api/outcomes/status`);
             updateOutcomeDashboard(state);
-            if (state.running || state.cleanup_confirmed !== true) throw new Error("Arrêt non confirmé : vérifier les ordres et la position.");
-            showToast("info", "Outcome bot stopped", "The strategy has been stopped.");
+            const targets = (state.bots || []).filter((bot) => !sessionId || bot.session_id === sessionId);
+            if (!targets.length || targets.some((bot) => bot.running || bot.cleanup_confirmed !== true)) throw new Error("Arrêt non confirmé : vérifier les ordres et la position.");
+            showToast("info", "Arrêt confirmé", sessionId ? "Le bot sélectionné est arrêté." : "Tous les bots Outcome sont arrêtés.");
         } catch (error) {
             showToast("error", "Outcome stop failed", error.message);
         } finally {
-            setBusy("outcome-stop-btn", false);
+            if (button) button.removeAttribute("aria-busy");
             updateOutcomeButtons();
+            renderOutcomeSessions(outcomeSessions);
         }
     }
 
@@ -1466,8 +1527,9 @@
         $("#grid-start-btn")?.addEventListener("click", startGridBot);
         $("#grid-stop-btn")?.addEventListener("click", () => stopGridBot());
         $("#outcome-start-btn")?.addEventListener("click", startOutcomeBot);
-        $("#outcome-stop-btn")?.addEventListener("click", stopOutcomeBot);
+        $("#outcome-stop-btn")?.addEventListener("click", () => stopOutcomeBot());
         $("#outcome-exec-mode")?.addEventListener("change", updateOutcomeExecutionMode);
+        $$("input[name='outcome-side']").forEach((input) => input.addEventListener("change", () => setSelectedOutcomeMarket(selectedOutcomeMarket)));
         $("#sessions-reconcile-btn")?.addEventListener("click", async () => {
             setBusy("sessions-reconcile-btn", true);
             try {

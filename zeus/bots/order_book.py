@@ -16,7 +16,7 @@ import threading
 from collections import deque
 from typing import Optional, List, Dict, Any, Tuple, NamedTuple
 from zeus import PROJECT_ROOT
-from zeus.safety import SafetyLatch, account_snapshot, supervisor_alive
+from zeus.safety import SafetyLatch, account_snapshot, supervisor_alive, finite, post_only_rejection
 from zeus.network import StartupNetworkError, post_info, retry_read
 
 # Windows: stdout redirigé = cp1252 → crash sur les emojis. Forcer UTF-8.
@@ -452,8 +452,17 @@ def fetch_token_meta(symbol: str) -> Dict[str, Any]:
             ctx = ctxs[i] if i < len(ctxs) else {}
             mid = float(ctx.get("midPx") or 0)
             return {"szDecimals": int(u.get("szDecimals", 0)), "mid": mid,
-                    "maxLeverage": int(u.get("maxLeverage", 50) or 50)}
+                    "maxLeverage": int(u.get("maxLeverage", 50) or 50),
+                    "onlyIsolated": bool(u.get("onlyIsolated", False))}
     raise ValueError(f"{symbol} introuvable dans le meta {dex}")
+
+
+def leverage_settings(meta, requested):
+    """Respect the venue's leverage ceiling and mandatory margin mode."""
+    ceiling = int(meta["maxLeverage"])
+    if ceiling < 1:
+        raise ValueError("Invalid market maximum leverage")
+    return min(int(requested), ceiling), not bool(meta.get("onlyIsolated", False))
 
 
 # =============================================================================
@@ -1079,6 +1088,8 @@ class OrderBookBot:
 
         # Account state
         self.position = 0.0
+        self.position_revision = 0
+        self.position_dirty = False
         self.entry_price = 0.0
         self.unrealized_pnl = 0.0
         self.equity = 0.0
@@ -1153,6 +1164,9 @@ class OrderBookBot:
         self.last_fill_ts = 0.0
         self.last_action = "init"
         self.last_error = ""
+        self.quote_warning = ""
+        self.quote_retry_after = {"B": 0.0, "A": 0.0}
+        self.quote_reject_count = {"B": 0, "A": 0}
         self.start_time = time.time()
 
         self.running = True
@@ -1165,7 +1179,9 @@ class OrderBookBot:
         self.safety = SafetyLatch(self._halt, os.getenv("ZEUS_SAFETY_FILE"),
                                   is_running=lambda: self.running and not os.path.exists(self._stop_file) and supervisor_alive())
         if self.live:
-            self.exchange = self.safety.wrap(self.exchange)
+            self.exchange = self.safety.wrap(self.exchange, reconcile_cancel=self._reconcile_missing_cancels,
+                                            reconcile_reduce_only=self._reconcile_reduce_only,
+                                            reconcile_post_only=self._reconcile_post_only)
         self._emerg_ts: Dict[str, float] = {"B": 0.0, "A": 0.0}
         self._scratch_ts = 0.0
         # Queue position model: taille devant nous à la pose / restante.
@@ -1393,6 +1409,8 @@ class OrderBookBot:
                         if abs(self.position) < MIN_SIZE / 2 and abs(new_pos) >= MIN_SIZE / 2:
                             self.pos_since = time.time()
                         self.position = new_pos
+                        self.position_revision += 1
+                        self.position_dirty = True
                         if abs(self.position) < MIN_SIZE / 2:
                             self.pos_since = 0.0
                         self.total_volume += px * sz
@@ -1470,6 +1488,10 @@ class OrderBookBot:
                         continue
                     status = str(u.get("status", "")).lower().replace("_", "")
                     if any(m in status for m in terminal):
+                        if "fill" in status or "reduceonly" in status:
+                            self.position_revision += 1
+                            self.position_dirty = True
+                            self.force_quote = True
                         if oid in self.orders:
                             self.orders.pop(oid, None)
                             self.queue_init.pop(oid, None)
@@ -1514,10 +1536,11 @@ class OrderBookBot:
     def sync_position(self):
         try:
             started = time.time()
+            with self.lock:
+                revision = self.position_revision
             st = self.info.user_state(ACCOUNT_ADDRESS, dex=self.dex)
             if not isinstance(st, dict) or not isinstance(st.get("assetPositions"), list):
                 raise ValueError("Invalid account response")
-            self.safety.account_known = True
             try:
                 spot = self.info.spot_user_state(ACCOUNT_ADDRESS)
                 spot_usdc = sum(max(0.0, float(b.get("total", 0) or 0) - float(b.get("hold", 0) or 0))
@@ -1526,8 +1549,8 @@ class OrderBookBot:
                 spot_usdc = self.spot_usdc
             target = SYMBOL.split(":")[-1]
             with self.lock:
-                if self.last_fill_ts > started:
-                    return
+                if self.last_fill_ts > started or revision != self.position_revision:
+                    return False
                 perp_eq = float(st.get("marginSummary", {}).get("accountValue", 0) or 0)
                 self.spot_usdc = spot_usdc
                 self.equity = perp_eq + spot_usdc
@@ -1535,24 +1558,123 @@ class OrderBookBot:
                     pos = entry.get("position", {})
                     if pos.get("coin") in (SYMBOL, target):
                         old = self.position
-                        self.position = float(pos.get("szi", 0))
+                        self.position = finite(pos.get("szi", 0))
                         self.unrealized_pnl = float(pos.get("unrealizedPnl", 0))
                         self.entry_price = float(pos.get("entryPx", 0) or 0)
                         if abs(old) < MIN_SIZE / 2 and abs(self.position) >= MIN_SIZE / 2 and not self.pos_since:
                             self.pos_since = time.time()
-                        return
+                        self.position_dirty = False
+                        self.safety.account_known = True
+                        return True
                 self.position = 0.0
                 self.unrealized_pnl = 0.0
                 self.entry_price = 0.0
                 self.pos_since = 0.0
+                self.position_dirty = False
+                self.safety.account_known = True
+                return True
         except Exception as exc:
             self.safety.fail(f"Position synchronization failed: {exc}")
+            return False
 
-    def reconcile_orders(self):
+    def _reconcile_reduce_only(self):
+        """A definitively rejected close is not a fill or permission to reopen."""
+        self._reconcile_execution_state()
+
+    def _reconcile_missing_cancels(self, requests):
+        """A cancel/fill race resolves only after the exact OIDs are absent."""
+        self._reconcile_execution_state({int(req["oid"]) for req in requests})
+
+    def _reconcile_execution_state(self, absent_oids=()):
+        synced = self.sync_position()
+        if not synced and self.safety.stopped.is_set():
+            raise RuntimeError("Execution reconciliation: position is unconfirmed")
+        with self.lock:
+            revision = self.position_revision
+        rows = self._cleanup_snapshot()
+        symbol, position, orders = rows[0]
+        if set(absent_oids) & {int(order["oid"]) for order in orders}:
+            raise RuntimeError("Cancellation rejected: order still open")
+        with self.lock:
+            changed = (not synced or revision != self.position_revision or self.position_dirty
+                       or abs(position - self.position) > MIN_SIZE / 2)
+            if revision == self.position_revision:
+                self.position = position
+                if abs(position) < MIN_SIZE / 2:
+                    self.pos_since = 0.0
+            if changed:
+                # A normal fill can overtake either read. Keep the session
+                # alive, but force the existing preflight to obtain a new
+                # authoritative position before submitting another request.
+                self.position_dirty = True
+                self.safety.account_known = False
+            owned = {}
+            for order in orders:
+                if self.safety.owns(order):
+                    oid = int(order["oid"])
+                    old = self.orders.get(oid, {})
+                    owned[oid] = {"side": order["side"], "px": finite(order["limitPx"]),
+                                  "sz": finite(order["sz"]), "ro": old.get("ro"),
+                                  "ts": old.get("ts", time.time())}
+            self.orders = owned
+            self.last_intent = None
+            self.force_quote = True
+            self.last_action = "ordres et position resynchronisés après une requête déjà résolue"
+        self.wake.set()
+
+    def _position_checked_requests(self, requests, replacing=()):
+        """Preflight exits against fresh inventory and already resting closes."""
+        retry_after = getattr(self, "quote_retry_after", {})
+        requests = [req for req in requests if req.get("reduce_only")
+                    or time.time() >= retry_after.get("B" if req["is_buy"] else "A", 0)]
+        if not requests:
+            return [], None
+        closing = any(req.get("reduce_only") for req in requests)
+        if closing or self.position_dirty:
+            if not self.sync_position():
+                return [], None
+        with self.lock:
+            revision, position = self.position_revision, self.position
+        remaining = abs(position)
+        if closing:
+            try:
+                orders = self.info.open_orders(ACCOUNT_ADDRESS, dex=self.dex)
+                if not isinstance(orders, list):
+                    raise ValueError("Invalid open orders during reduce-only preflight")
+                for order in orders:
+                    if self._coin_matches(order.get("coin")) and int(order["oid"]) not in replacing:
+                        if order.get("side") not in {"B", "A"}:
+                            raise ValueError("Invalid order side during reduce-only preflight")
+                        if (order["side"] == "B") == (position < 0):
+                            remaining -= max(0.0, finite(order["sz"]))
+            except Exception as exc:
+                self.safety.fail(f"Reduce-only preflight failed: {exc}")
+                return [], None
+        checked = []
+        for req in requests:
+            if req.get("reduce_only"):
+                if abs(position) < MIN_SIZE / 2 or bool(req["is_buy"]) != (position < 0):
+                    continue
+                size = math.floor(max(0.0, min(finite(req["sz"]), remaining)) * 10 ** SZ_DECIMALS) / 10 ** SZ_DECIMALS
+                if size < MIN_SIZE:
+                    continue
+                checked.append({**req, "sz": size})
+                remaining -= size
+            elif abs(position) < MIN_SIZE / 2:
+                checked.append(req)
+        with self.lock:
+            if revision != self.position_revision or self.position_dirty:
+                return [], None
+            if not checked:
+                self.last_intent = None
+                self.force_quote = True
+        return checked, revision
+
+    def reconcile_orders(self, force=False):
         """Le snapshot REST des ordres ouverts est la seule vérité — les oids
         locaux peuvent contenir des fantômes (event WS raté)."""
         with self.lock:
-            if time.time() - self.last_quote_ts < ORDER_RECONCILE_GRACE_SEC:
+            if not force and time.time() - self.last_quote_ts < ORDER_RECONCILE_GRACE_SEC:
                 return
         try:
             oo = self.info.open_orders(ACCOUNT_ADDRESS, dex=self.dex)
@@ -1606,15 +1728,15 @@ class OrderBookBot:
         with self.lock:
             for oid, status in zip(oids, statuses):
                 ok = status == "success"
-                if not ok and isinstance(status, dict):
-                    err = str(status.get("error", "")).lower()
-                    ok = "already" in err or "never placed" in err or "filled" in err
                 if ok:
                     self.orders.pop(oid, None)
                     self.queue_init.pop(oid, None)
                     self.queue_ahead.pop(oid, None)
             self.last_quote_ts = time.time()
-        return True
+            confirmed = len(statuses) == len(oids) and all(status == "success" for status in statuses)
+            if confirmed:
+                self.last_error = ""
+        return confirmed
 
     def cancel_all(self) -> bool:
         with self.lock:
@@ -1623,8 +1745,38 @@ class OrderBookBot:
 
     @staticmethod
     def _is_post_only_error(err: str) -> bool:
-        e = err.lower()
-        return "post only" in e or "alo" in e or "immediately match" in e or "would have matched" in e
+        return post_only_rejection(err)
+
+    def _reconcile_post_only(self, requests, action):
+        # The exchange definitively refused just these ALO requests. Existing
+        # accepted quotes are not canceled or liquidated because of that race.
+        if action == "bulk_modify_orders_new":
+            self.reconcile_orders(force=True)
+            if self.safety.stopped.is_set():
+                raise RuntimeError("Post-only replacement: order synchronization unconfirmed")
+        with self.lock:
+            self.quote_retry_after = getattr(self, "quote_retry_after", {"B": 0.0, "A": 0.0})
+            self.quote_reject_count = getattr(self, "quote_reject_count", {"B": 0, "A": 0})
+            for request in requests:
+                side = "B" if request["is_buy"] else "A"
+                count = min(4, self.quote_reject_count[side] + 1)
+                self.quote_reject_count[side] = count
+                self.quote_retry_after[side] = time.time() + min(8.0, 2 ** (count - 1))
+            self.quote_warning = "Post-only : carnet déplacé, recalcul du côté rejeté."
+            self.position_revision += 1
+            self.position_dirty = True
+            self.force_quote = True
+            self.last_intent = None
+        self.wake.set()
+
+    def _quote_side_accepted(self, request):
+        """Called under the state lock; do not clear the other side's warning."""
+        side = "B" if request["is_buy"] else "A"
+        if hasattr(self, "quote_reject_count"):
+            self.quote_reject_count[side] = 0
+            self.quote_retry_after[side] = 0.0
+            if not any(self.quote_reject_count.values()):
+                self.quote_warning = ""
 
     def place_quotes(self, reqs: List[Dict[str, Any]]) -> None:
         if not self.running or self.safety.stopped.is_set():
@@ -1650,11 +1802,12 @@ class OrderBookBot:
                 return
             try:
                 with self.api_lock:
+                    pending, revision = self._position_checked_requests(pending)
                     with self.lock:
                         # A fill can arrive after compute_intent(). Do not add
                         # exposure from a stale opening request in that case.
-                        if abs(self.position) >= MIN_SIZE / 2:
-                            pending = [r for r in pending if r["reduce_only"]]
+                        if revision != self.position_revision or self.position_dirty:
+                            pending = []
                         if not pending:
                             self.force_quote = True
                             return
@@ -1676,6 +1829,7 @@ class OrderBookBot:
                 self.last_error = ""   # action OK: purger le message collant
                 for req, status in zip(pending, statuses):
                     if isinstance(status, dict) and "resting" in status:
+                        self._quote_side_accepted(req)
                         oid = int(status["resting"]["oid"])
                         if oid not in self.orders:
                             self.orders[oid] = {"side": "B" if req["is_buy"] else "A",
@@ -1689,9 +1843,15 @@ class OrderBookBot:
                             self.queue_init[oid] = max(qa, 1e-9)
                             self.queue_ahead[oid] = qa
                     elif isinstance(status, dict) and "filled" in status:
-                        pass  # fill immédiat (rare en ALO), userFills s'en charge
+                        self._quote_side_accepted(req)
+                        self.position_revision += 1
+                        self.position_dirty = True
+                        self.force_quote = True
+                        self.wake.set()
                     else:
                         err = str(status.get("error", status) if isinstance(status, dict) else status)
+                        if post_only_rejection(err):
+                            continue  # expected ALO race: warning/backoff was recorded by the guard
                         self.last_error = err[:100]
                         if not fast_mm() and retry < POST_ONLY_MAX_RETRIES and self._is_post_only_error(err):
                             # A7: RECULER d'1 tick avant de retenter — resoumettre
@@ -1740,8 +1900,15 @@ class OrderBookBot:
             }})
         try:
             with self.api_lock:
+                checked, revision = self._position_checked_requests([r for _, r in pairs],
+                                                                      replacing={oid for oid, _ in pairs})
+                if len(checked) != len(pairs):
+                    return False
+                pairs = [(oid, req) for (oid, _), req in zip(pairs, checked)]
+                for modification, req in zip(modifies, checked):
+                    modification["order"]["sz"] = req["sz"]
                 with self.lock:
-                    if abs(self.position) >= MIN_SIZE / 2 and any(not r["reduce_only"] for _, r in pairs):
+                    if revision != self.position_revision or self.position_dirty:
                         self.force_quote = True
                         return False
                     self.order_modifications += len(pairs)
@@ -1762,6 +1929,7 @@ class OrderBookBot:
             self.last_error = ""   # action OK: purger le message collant
             for (oid, r), status in zip(pairs, statuses):
                 if isinstance(status, dict) and "resting" in status:
+                    self._quote_side_accepted(r)
                     new_oid = int(status["resting"]["oid"])
                     self.orders.pop(oid, None)
                     self.queue_init.pop(oid, None)
@@ -1776,8 +1944,15 @@ class OrderBookBot:
                     self.queue_init[new_oid] = max(qa, 1e-9)
                     self.queue_ahead[new_oid] = qa
                 elif isinstance(status, dict) and "filled" in status:
+                    self._quote_side_accepted(r)
                     self.orders.pop(oid, None)   # modifié puis rempli — userFills gère
+                    self.position_revision += 1
+                    self.position_dirty = True
+                    self.force_quote = True
+                    self.wake.set()
                 else:
+                    if isinstance(status, dict) and post_only_rejection(status.get("error")):
+                        continue  # reconciled and deferred; preserve the other side's queue
                     ok_all = False
                     self.last_error = str(status.get("error", status)
                                           if isinstance(status, dict) else status)[:100]
@@ -1803,8 +1978,14 @@ class OrderBookBot:
         px = px_up(max(px, tick), tick) if is_buy else px_down(max(px, tick), tick)
         try:
             with self.api_lock:
-                self.exchange.order(name=SYMBOL, is_buy=is_buy, sz=sz, limit_px=px,
-                                    order_type={"limit": {"tif": "Ioc"}}, reduce_only=True)
+                checked, revision = self._position_checked_requests([{"coin": SYMBOL, "is_buy": is_buy,
+                    "sz": sz, "limit_px": px, "order_type": {"limit": {"tif": "Ioc"}}, "reduce_only": True}])
+                with self.lock:
+                    if not checked or revision != self.position_revision or self.position_dirty:
+                        return
+                request = checked[0]
+                self.exchange.order(name=SYMBOL, is_buy=request["is_buy"], sz=request["sz"], limit_px=request["limit_px"],
+                                    order_type=request["order_type"], reduce_only=True)
             self.last_action = f"flatten ({reason})"
         except Exception as exc:
             with self.lock:
@@ -1926,6 +2107,8 @@ class OrderBookBot:
         allow_modify = now >= getattr(self, "_modify_block_until", 0.0)
         for side, want in zip(("B", "A"), intent):
             resting = resting_by_side[side]
+            if want is not None and not want[2] and now < getattr(self, "quote_retry_after", {}).get(side, 0):
+                continue  # keep the accepted resting quote while only this side backs off
             if want is None:
                 to_cancel.extend(resting)
                 continue
@@ -2196,6 +2379,7 @@ class OrderBookBot:
                     "notional": ORDER_NOTIONAL_USD,
                     "action": self.last_action,
                     "error": self.safety.error or self.last_error,
+                    "warning": getattr(self, "quote_warning", ""),
                     "protect": self.protect,
                     "hourly_net": self.hourly_net_pnl,
                     "hourly_pause_until": self.hourly_pause_until,
@@ -2513,7 +2697,7 @@ if __name__ == "__main__":
         SZ_DECIMALS = meta["szDecimals"]
         MIN_SIZE = 10.0 ** (-SZ_DECIMALS) if SZ_DECIMALS > 0 else 1.0
         PRICE_DECIMALS = max(0, 6 - SZ_DECIMALS)
-        LEVERAGE = min(LEVERAGE, meta.get("maxLeverage", LEVERAGE))
+        LEVERAGE, IS_CROSS = leverage_settings(meta, LEVERAGE)
         bot = OrderBookBot(live=args.live)
     except Exception as exc:
         message = str(exc) if isinstance(exc, StartupNetworkError) else f"Démarrage impossible : {type(exc).__name__}: {exc}"

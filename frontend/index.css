@@ -26,6 +26,42 @@
   --shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 
+.outcome-side-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.outcome-side-picker legend { margin-bottom: 10px; }
+.outcome-side-option { position: relative; cursor: pointer; min-width: 0; }
+.outcome-side-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: 0;
+  opacity: 0;
+}
+.outcome-side-option > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 48px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+}
+.outcome-side-option small { font-size: 12px; }
+.outcome-side-option input:checked + span { background: var(--cta-hover); border-color: var(--cta); }
+.outcome-side-option input:checked + span small { color: var(--text); }
+.outcome-side-option input:focus-visible + span { outline: 2px solid var(--secondary); outline-offset: 3px; }
+.outcome-side-option input:disabled + span { opacity: 0.5; cursor: not-allowed; }
+
 *,
 *::before,
 *::after {

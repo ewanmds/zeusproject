@@ -160,48 +160,6 @@ class SafetyTests(unittest.TestCase):
         bot.shutdown()
         self.assertEqual(bot.safety.phase, "failed")
 
-    def test_stop_while_constructing_does_not_claim_success(self):
-        manager = server.BotManager(state_dir=False)
-        manager.wc_thread = Mock()
-        manager.wc_thread.is_alive.return_value = True
-        manager.wc_lifecycle["cleanup_confirmed"] = False
-        with self.assertRaises(RuntimeError):
-            manager.stop_worldcup()
-        self.assertTrue(manager.wc_stop_event.is_set())
-
-    def test_late_constructor_cannot_start_after_stop(self):
-        manager = server.BotManager(state_dir=False)
-        entered, release = threading.Event(), threading.Event()
-        bot = Mock()
-        bot.safety = SafetyLatch()
-        def finish():
-            bot.safety.stop()
-            bot.safety.cleanup(lambda: [], Mock(), Mock(), sleep=lambda _: None)
-        bot.shutdown.side_effect = finish
-        def construct(cfg):
-            entered.set()
-            if not release.wait(2): raise TimeoutError("test constructor timed out")
-            return bot
-        from types import SimpleNamespace
-        from zeus.bots.worldcup import BotConfig
-        module = SimpleNamespace(BotConfig=BotConfig, HyperliquidSpreadBot=construct)
-        errors = []
-        def stop():
-            try: manager.stop_worldcup()
-            except Exception as exc: errors.append(exc)
-        with patch.object(server, "_safe_import", side_effect=[module, SimpleNamespace(all_market_keys=lambda:["#1"])]), \
-             patch.dict(os.environ, {"WALLET_ADDRESS_OUTCOME":"offline", "PRIVATE_KEY_OUTCOME":"dummy"}):
-            manager.start_worldcup(server.WorldcupStartRequest())
-            self.assertTrue(entered.wait(2))
-            stopper = threading.Thread(target=stop)
-            stopper.start()
-            self.assertTrue(manager.wc_stop_event.wait(2))
-            release.set(); stopper.join(2)
-        self.assertFalse(stopper.is_alive())
-        self.assertFalse(errors)
-        bot.run.assert_not_called()
-        bot.request_stop.assert_called_once()
-
     def test_parent_monitor_and_last_moment_running_check(self):
         with patch.dict(os.environ, {"ZEUS_PARENT_PID":str(os.getpid())}):
             self.assertTrue(supervisor_alive())

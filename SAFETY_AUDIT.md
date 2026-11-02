@@ -49,7 +49,82 @@ Implemented for Outcome, BBO/MID, Freqtrade and their dashboard supervisor.
 - New sessions refuse pre-existing orders/inventory on their selected markets.
 - No deployment, service restart, or live exchange mutation is part of validation.
 
+## Outcome processes
+
+- The dashboard starts one `zeus.bots.outcome_worker` OS process per canonical
+  market. `ALL` and an empty market are rejected. Admission and worker-lifetime
+  locks prevent two simultaneous owners of the same account/market.
+- The form exposes native Yes/No radio controls (default No). Start accepts
+  `outcome_side: "yes" | "no"`, resolves the corresponding exact token coin,
+  and persists that side in the worker configuration. A missing field retains
+  the side encoded by an exact coin, or the catalog default for an alias.
+  Yes and No can run separately; changing the draft never retargets a live bot.
+  Worker validation rejects a mismatched side/coin. Cards retain explicit
+  Yes/No labels after reload, and targeted Stop touches only that exact token.
+- Each UUID has its own runtime configuration, stop signal, atomic stats file
+  and durable session journal under `.zeus-state`. Wallet credentials are passed
+  only through the worker environment, never CLI arguments or runtime JSON.
+- `POST /api/outcomes/start` (and `/api/worldcup/start`) returns `session_id`,
+  `market`, `pid`, and the initial `connecting` phase. This is not a quote-ready
+  acknowledgement; the child publishes its independently observed lifecycle.
+- `POST /api/outcomes/stop` accepts optional `{"session_id":"..."}`. An empty body
+  means Stop all. All targets are signaled before concurrent 30-second waits.
+  A failed/blocked stop retains the process and blocks only that market's Start.
+- Status/WebSocket preserve aggregate fields and add `bots`, per-session configs,
+  phases, recovery errors, freshness and final accounting. Aggregates summarize
+  the latest session of each market, including its retained final results. Cost/M
+  is calculated from total net PnL and volume, never by summing per-bot ratios.
+- On server restart, journals/stats restore the last market cards. Interrupted
+  sessions are not relaunched or auto-attached. Only exchange verification and
+  process termination can clear an unconfirmed session. Legacy multi-market
+  journals continue blocking every market they covered until reconciled.
+- New Outcome submissions hold an account-wide process lock across fresh balance
+  reads and signing/submission. The same lock serializes signer nonces. Uncertain
+  buys retain durable CLOID/USD reservations, conservatively deducted from free
+  USDC until the exact client order and account are independently reconciled.
+  Orders belonging to another market/process are not canceled by targeted Stop.
+- Parent death or the per-session stop file closes the execution gate even if
+  initialization or an API response was in flight. Runtime API errors continue
+  the existing per-session read-only recovery; they do not stop other markets.
+- The offline process suite launches actual children with fake bots and blocks
+  all HTTP requests in those children. A separate concurrent fake-wallet test
+  verifies that three 50 USD requests cannot overspend a 105 USD balance.
+
 ## Validation commands
+
+BBO/MID startup retains `onlyIsolated` from live market metadata. Isolated-only
+markets use `is_cross=False`, and requested leverage stays bounded by that
+market's published maximum. Cross-compatible markets keep their cross default.
+`update_leverage` validates the documented `response.type=default` acknowledgement;
+exchange rejections retain their sanitized reason rather than a generic message.
+
+BBO/MID reduce-only placement and replacement refresh positions before sending,
+check the closing direction, round quantity down to the fresh residual, and
+subtract existing orders on that closing side (excluding replaced order IDs).
+Fills/order updates invalidate computed requests until account synchronization.
+The exact `Reduce only order would increase position.` rejection can be resolved
+only through fresh position and owned-order reconciliation. The rejected status
+remains a rejection: it is never presented as a fill and RO is never removed.
+Unknown account/order reads and unrelated rejection reasons retain the interlock.
+
+BBO/MID ALO rejections (`Post only order would have immediately matched...`)
+are normal quote races, including mixed batches with a resting order accepted
+on the other side. Complete acknowledgements preserve those accepted OIDs and
+do not trigger global cancellation, liquidation, or a failed lifecycle. Only
+the rejected opening side backs off (1, 2, 4, then at most 8 seconds) and obtains
+fresh pricing/inventory before its next attempt. Accepted-side queue priority
+is retained while correct; genuine risk pulls and closing orders remain urgent.
+Rejected modifications reconcile actual resting orders before continuing.
+Expected quote warnings are separate from fatal errors, and the dashboard's
+red failure border follows the lifecycle rather than any warning string.
+
+BBO/MID also reconcile the exact already-canceled/filled cancel response, including
+mixed `success`/missing-OID batches. Fresh position and order snapshots must show
+the requested missing OIDs absent before the guard normalizes those statuses to
+resolved cancellation. Other owned quotes survive reconciliation. No cancellation
+is resent, no fill is invented, and successful reconciliation creates no fatal
+error or failed lifecycle. Unavailable snapshots and actually open OIDs are not
+silently classified as absent.
 
 ```powershell
 python -m unittest discover -s tests -p 'test_*.py' -v

@@ -1,9 +1,8 @@
-"""Headless UI checks with all network traffic intercepted; no live backend."""
+"""Headless multi-process Outcome UI checks; every network request is mocked."""
 import mimetypes
-import tempfile
 from pathlib import Path
+import tempfile
 from urllib.parse import urlparse
-
 from playwright.sync_api import expect, sync_playwright
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
@@ -14,20 +13,21 @@ def main():
         browser = p.chromium.launch()
         try:
             for width in (1440, 390):
-                state = {"running": False, "config": {}, "type": "worldcup_stats", "phase": "stopped", "cleanup_confirmed": True, "can_start": True}
-                submissions = []
-                errors = []
-                fail_start = [False]
-                fail_stop = [False]
+                bots, starts, stops, errors = [], [], [], []
+                fail_start, fail_stop = [False], [False]
                 context = browser.new_context(viewport={"width": width, "height": 1000})
-                context.add_init_script("""
-                    window.WebSocket = class {
-                        static OPEN = 1; static CONNECTING = 0;
-                        readyState = 1;
-                        constructor() { window.__testSocket = this; }
-                        close() {}
-                    };
-                """)
+                context.add_init_script("""window.WebSocket = class {
+                    static OPEN = 1; static CONNECTING = 0; readyState = 1;
+                    constructor() { window.__testSocket = this; } close() {}
+                };""")
+
+                def status():
+                    return {"type": "worldcup_stats", "bots": bots, "can_start": True,
+                            "running": any(b["running"] for b in bots), "phase": "running",
+                            "cleanup_confirmed": all(b["cleanup_confirmed"] for b in bots),
+                            "active_markets": sum(b["running"] for b in bots), "duration": "00:01:00",
+                            "volume_usd": sum(b["volume_usd"] for b in bots), "fees": sum(b["fees"] for b in bots),
+                            "net_pnl": sum(b["net_pnl"] for b in bots), "fills": sum(b["fills"] for b in bots), "cost_per_1m": 1000}
 
                 def route_request(route):
                     url = urlparse(route.request.url)
@@ -38,133 +38,182 @@ def main():
                     if path.startswith("/api/"):
                         result = {}
                         if path == "/api/outcomes/start":
-                            body = route.request.post_data_json
-                            submissions.append(body)
+                            payload = route.request.post_data_json
+                            starts.append(payload)
                             if fail_start[0]:
                                 route.fulfill(status=400, json={"message": "Offline test rejection"})
                                 return
-                            state.update(running=True, config=body, phase="running", cleanup_confirmed=False, can_start=False)
+                            bot = {"session_id": f"session-{len(starts)}", "market": payload["market"],
+                                   "market_name": "Spurs" if payload["market"] == "#14881" else "Lakers",
+                                   "pid": 100 + len(starts), "config": payload, "running": True,
+                                   "phase": "running", "cleanup_confirmed": False, "can_start": False,
+                                   "volume_usd": 100, "fees": 0.1, "net_pnl": -0.1, "fills": 2,
+                                   "duration": "00:01:00", "position_usd": 0, "position_known": True,
+                                   "cost_per_1m": 1000, "accounting_complete": True}
+                            bots[:] = [b for b in bots if b["market"] != bot["market"]] + [bot]
+                            result = {"status": "ok", "session_id": bot["session_id"], "market": bot["market"], "pid": bot["pid"]}
                         elif path == "/api/outcomes/stop":
+                            payload = route.request.post_data_json
+                            stops.append(payload)
                             if fail_stop[0]:
                                 route.fulfill(status=400, json={"message": "Stop not confirmed"})
                                 return
-                            state.update(running=False, phase="stopped", cleanup_confirmed=True, can_start=True)
-                        elif path == "/api/sessions/reconcile":
-                            result = {"can_start": state["cleanup_confirmed"], "unresolved": [] if state["cleanup_confirmed"] else ["outcome"]}
-                        elif path == "/api/outcomes/status":
-                            result = state
+                            for bot in bots:
+                                if not payload.get("session_id") or bot["session_id"] == payload["session_id"]:
+                                    bot.update(running=False, phase="stopped", cleanup_confirmed=True, can_start=True)
+                            result = {"status": "ok", "state": status()}
+                        elif path == "/api/outcomes/status": result = status()
                         elif path == "/api/outcomes/markets":
-                            result = {"outcomes": [], "categories": []}
-                        elif path == "/api/grid/status":
-                            result = {"type": "grid_stats", "running": False, "bots": []}
-                        elif path == "/api/grid/tokens":
-                            result = {"tokens": []}
+                            result = {"outcomes": [{"key": "#14881", "id": 1488, "name": "Spurs", "mid0": 0.87, "mid1": 0.13},
+                                                   {"key": "#14751", "id": 1475, "name": "Lakers", "mid0": 0.6, "mid1": 0.4}], "categories": []}
+                        elif path == "/api/grid/status": result = {"type": "grid_stats", "running": False, "bots": []}
+                        elif path == "/api/grid/tokens": result = {"tokens": []}
+                        elif path == "/api/sessions/reconcile": result = {"can_start": True, "unresolved": []}
                         route.fulfill(json=result)
                         return
                     file = FRONTEND / (path.lstrip("/") or "index.html")
-                    if file.is_file():
-                        route.fulfill(body=file.read_bytes(), content_type=mimetypes.guess_type(file.name)[0] or "application/octet-stream")
-                    else:
-                        route.fulfill(status=404)
+                    if file.name == "config.js": route.fulfill(body="window.ZEUS_CONFIG = {};")
+                    elif file.is_file(): route.fulfill(body=file.read_bytes(), content_type=mimetypes.guess_type(file.name)[0] or "application/octet-stream")
+                    else: route.fulfill(status=404)
 
                 context.route("**/*", route_request)
                 page = context.new_page()
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto("http://zeus.test/")
                 page.locator("#tab-outcome").click()
+                start = page.locator("#outcome-start-btn")
+                expect(start).to_be_disabled()
+
+                def select(name):
+                    page.locator("#outcome-market-trigger").click()
+                    expect(page.locator("#outcome-market-options")).not_to_contain_text("Tous les marchés")
+                    page.locator("#outcome-market-options").get_by_role("option", name=name).click()
+
+                select("Spurs")
+                expect(start).to_be_enabled()
+                yes = page.locator("#outcome-side-yes")
+                no = page.locator("#outcome-side-no")
+                expect(no).to_be_checked()
+                expect(page.locator("#outcome-market-symbol")).to_contain_text("No 13.0%")
                 mode = page.locator("#outcome-exec-mode")
-                expect(mode).to_have_value("taker")
-                expect(page.locator("#outcome-spread")).to_be_visible()
                 mode.focus()
                 page.keyboard.press("ArrowDown")
                 page.keyboard.press("Enter")
                 expect(mode).to_have_value("maker")
                 expect(page.locator("#outcome-spread")).to_be_hidden()
-                expect(page.locator("#outcome-spread")).to_be_disabled()
-                maker_spread = page.locator("#outcome-maker-spread")
-                expect(maker_spread).to_be_visible()
-                expect(maker_spread).to_have_value("0.005")
-                maker_spread.fill("-1")
-                page.locator("#outcome-start-btn").click()
+                maker = page.locator("#outcome-maker-spread")
+                maker.fill("-1")
+                start.click()
                 expect(page.locator("#outcome-form-alert")).to_contain_text("Spread Limit")
-                assert not submissions
-                maker_spread.fill("0.007")
-                # An invalid hidden Taker filter must not block Limit startup.
-                page.locator("#outcome-spread").evaluate("el => el.value = ''")
+                assert not starts
+                maker.fill("0.007")
                 fail_start[0] = True
-                page.locator("#outcome-start-btn").click()
+                start.click()
                 expect(page.locator("#outcome-form-alert")).to_contain_text("Offline test rejection")
-                expect(mode).to_be_enabled()
                 fail_start[0] = False
-                page.locator("#outcome-start-btn").click()
-                expect(mode).to_be_disabled()
-                expect(page.locator("#outcome-active-mode")).to_have_text("Limit / Maker")
-                assert submissions[-1]["exec_mode"] == "maker"
-                assert "max_spread_pct" not in submissions[-1]
-                assert submissions[-1]["maker_spread_pct"] == 0.007
-                expect(maker_spread).to_be_disabled()
-                assert submissions[-1]["order_size_usd"] == 50
-                assert submissions[-1]["max_position_usd"] == 200
-                page.reload()
-                page.locator("#tab-outcome").click()
-                expect(mode).to_have_value("maker")
-                expect(mode).to_be_disabled()
-                expect(page.locator("#outcome-spread")).to_be_hidden()
-                expect(maker_spread).to_have_value("0.007")
-                expect(maker_spread).to_be_disabled()
-                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Horizontal overflow"
-                screenshot = Path(tempfile.gettempdir()) / f"zeus-outcome-limit-{width}.png"
-                page.screenshot(path=str(screenshot), full_page=True)
-                page.locator("#outcome-stop-btn").click()
+                start.click()
+                first = page.locator("#outcome-bots-list .bot-card").filter(has_text="Spurs")
+                expect(first).to_contain_text("Limit / Maker")
+                expect(first).to_contain_text("0.007%")
+                expect(first.locator('[data-f="title"]')).to_have_text("Spurs · No")
+                expect(start).to_be_disabled()
                 expect(mode).to_be_enabled()
+                expect(maker).to_be_enabled()
+                no.focus()
+                page.keyboard.press("ArrowLeft")
+                expect(yes).to_be_checked()
+                expect(page.locator("#outcome-market-symbol")).to_contain_text("Yes 87.0%")
+                expect(page.locator("#outcome-market")).to_have_value("#14880")
+                expect(start).to_be_enabled()  # the existing No bot is independent
+                expect(first.locator('[data-f="title"]')).to_have_text("Spurs · No")
+                select("Lakers")
+                expect(start).to_be_enabled()
                 mode.select_option("taker")
                 expect(page.locator("#outcome-spread")).to_be_visible()
-                expect(maker_spread).to_be_hidden()
-                page.locator("#outcome-start-btn").click()
-                expect(mode).to_be_disabled()
-                assert submissions[-1]["exec_mode"] == "taker"
-                assert submissions[-1]["max_spread_pct"] == 0.02
-                assert "maker_spread_pct" not in submissions[-1]
-                before_recovery = len(submissions)
-                state.update(phase="recovering", recovery_error="Insufficient spot balance; synchronisation")
-                page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", state)
-                expect(page.locator("#outcome-run-banner")).to_contain_text("reprise automatique")
-                expect(page.locator("#outcome-form-alert")).to_contain_text("Insufficient spot balance")
-                expect(page.locator("#outcome-start-btn")).to_be_disabled()
-                expect(page.locator("#outcome-stop-btn")).to_be_enabled()
-                expect(mode).to_be_disabled()
-                state.update(phase="running", recovery_error="")
-                page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", state)
-                expect(page.locator("#outcome-run-banner")).to_contain_text("Session active")
-                expect(page.locator("#outcome-form-alert")).to_be_hidden()
-                assert len(submissions) == before_recovery, "Recovery must not call Start again"
+                start.click()
+                second = page.locator("#outcome-bots-list .bot-card").filter(has_text="Lakers")
+                expect(second).to_contain_text("Market / Taker")
+                expect(second.locator('[data-f="title"]')).to_have_text("Lakers · Yes")
+                expect(page.locator("#outcome-bots-list .bot-card")).to_have_count(2)
+                assert starts[-2]["market"] == "#14881" and starts[-1]["market"] == "#14750"
+                assert starts[-2]["outcome_side"] == "no" and starts[-1]["outcome_side"] == "yes"
+                assert starts[-2]["maker_spread_pct"] == 0.007 and "max_spread_pct" not in starts[-2]
+                assert starts[-1]["max_spread_pct"] == 0.02
+                assert starts[-1]["order_size_usd"] == 50 and starts[-1]["max_position_usd"] == 200
+
+                def push():
+                    page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", status())
+
+                bots[0].update(phase="recovering", recovery_error="Insufficient spot balance")
+                first.get_by_role("button").focus()
+                push()
+                expect(first).to_contain_text("reprise auto")
+                expect(first).to_contain_text("Insufficient spot balance")
+                expect(first.get_by_role("button")).to_be_focused()
+                expect(second).to_contain_text("Actif")
+                before = len(starts)
+                bots[0].update(phase="running", recovery_error="")
+                push()
+                assert len(starts) == before
                 fail_stop[0] = True
-                page.locator("#outcome-stop-btn").click()
+                first.get_by_role("button").click()
                 expect(page.locator("#toast-stack")).to_contain_text("Stop not confirmed")
-                expect(page.locator("#outcome-start-btn")).to_be_disabled()
-                before = len(submissions)
-                state.update(running=False, phase="failed", error="ALO rejected", cleanup_error="Account unavailable", cleanup_confirmed=False, can_start=False)
-                page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", state)
-                expect(page.locator("#outcome-form-alert")).to_contain_text("ALO rejected")
-                expect(page.locator("#outcome-run-banner")).to_contain_text("arrêt non confirmé")
-                expect(page.locator("#outcome-start-btn")).to_be_disabled()
+                expect(first.get_by_role("button")).to_be_visible()
+                fail_stop[0] = False
+                first.get_by_role("button").click()
+                expect(first).to_contain_text("Arrêt confirmé")
+                expect(first.get_by_role("button")).to_be_hidden()
+                expect(second.get_by_role("button")).to_be_visible()
+                assert stops[-1]["session_id"] == bots[0]["session_id"]
+                select("Spurs")
+                no.check(force=True)
+                expect(start).to_be_enabled()
+                bots[0].update(phase="failed", cleanup_confirmed=False, error="Stop not confirmed")
+                push()
+                expect(start).to_be_disabled()
                 expect(page.locator("#sessions-reconcile-btn")).to_be_visible()
-                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Error state overflows viewport"
-                page.locator("#toast-stack").evaluate("el => el.replaceChildren()")
-                page.screenshot(path=str(Path(tempfile.gettempdir()) / f"zeus-stop-unconfirmed-{width}.png"), full_page=True)
-                page.locator("#sessions-reconcile-btn").click()
-                expect(page.locator("#outcome-start-btn")).to_be_disabled()
-                state.update(cleanup_confirmed=True, can_start=True, cleanup_error="")
-                page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", state)
-                expect(page.locator("#outcome-start-btn")).to_be_enabled()
-                expect(page.locator("#outcome-form-alert")).to_contain_text("ALO rejected")
-                assert len(submissions) == before, "Automatic restart after recovery"
+                expect(page.locator("#outcome-form-alert")).to_be_hidden()
+                page.reload()
+                page.locator("#tab-outcome").click()
+                expect(page.locator("#outcome-bots-list .bot-card")).to_have_count(2)
+                expect(first).to_contain_text("Limit / Maker")
+                expect(second).to_contain_text("Market / Taker")
+                expect(first.locator('[data-f="title"]')).to_have_text("Spurs · No")
+                expect(second.locator('[data-f="title"]')).to_have_text("Lakers · Yes")
+                assert len(starts) == before
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Horizontal overflow"
+                screenshot = Path(tempfile.gettempdir()) / f"zeus-outcome-processes-{width}.png"
+                page.screenshot(path=str(screenshot), full_page=True)
+                page.locator("#outcome-stop-btn").click()
+                expect(second).to_contain_text("Arrêt confirmé")
+                assert stops[-1] == {}
+                page.locator("#tab-grid").click()
+                grid = {"type": "grid_stats", "running": True, "bots": [{
+                    "token": "IO_ANTH", "symbol": "io:ANTH", "strategy": "bbo", "running": True,
+                    "phase": "running", "error": "", "cleanup_confirmed": False,
+                    "warning": "Post-only : carnet déplacé, recalcul du côté rejeté.",
+                    "duration": "00:00:47", "mid_price": 1738.2, "volume_usd": 201.63,
+                    "net_pnl": 0.01, "fees": 0.01, "fills": 2}]}
+                page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", grid)
+                card = page.locator("#grid-bots-list .bot-card")
+                expect(card).to_contain_text("LIVE")
+                expect(card).to_contain_text("Post-only")
+                expect(card).not_to_have_class(__import__("re").compile(r"\bfailed\b"))
+                expect(card.get_by_role("button", name="Arrêter IO_ANTH")).to_be_visible()
+                grid["bots"][0]["error"] = "Post only order would have immediately matched"
+                page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", grid)
+                expect(card).not_to_have_class(__import__("re").compile(r"\bfailed\b"))
+                grid["bots"][0]["error"] = "bulk_cancel: Order was never placed, already canceled, or filled. asset=200001"
+                page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", grid)
+                expect(card).to_contain_text("LIVE")
+                expect(card).not_to_have_class(__import__("re").compile(r"\bfailed\b"))
+                expect(card.get_by_role("button", name="Arrêter IO_ANTH")).to_be_visible()
+                page.screenshot(path=str(Path(tempfile.gettempdir()) / f"zeus-bbo-post-only-{width}.png"), full_page=True)
                 assert not errors, errors
-                print(f"PASS {width}px: keyboard, conditional fields, failure recovery, payloads, active mode, reload, stop; {screenshot}")
+                print(f"PASS {width}px: independent bots, keyboard, recovery, scoped Stop, Stop all, reload; {screenshot}")
                 context.close()
         finally:
             browser.close()
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()

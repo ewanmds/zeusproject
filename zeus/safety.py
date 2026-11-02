@@ -64,9 +64,28 @@ def atomic_json(path, data):
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
         temporary.write_text(json.dumps(data, allow_nan=False), encoding="utf-8")
-        os.replace(temporary, path)
+        for attempt in range(4):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                # Windows/antivirus can briefly hold the destination while a
+                # supervisor reads it. Never truncate or discard the old file.
+                if attempt == 3:
+                    raise
+                time.sleep(0.01 * 2 ** attempt)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def read_json(path):
+    for attempt in range(4):
+        try:
+            return json.loads(Path(path).read_bytes())
+        except PermissionError:
+            if attempt == 3:
+                raise
+            time.sleep(0.01 * 2 ** attempt)
 
 
 def finite(value):
@@ -104,6 +123,12 @@ def acknowledged_status(status, placing):
     if isinstance(status.get("filled"), dict):
         return finite(status["filled"]["totalSz"]) >= 0 and finite(status["filled"]["avgPx"]) > 0
     return False
+
+
+def post_only_rejection(error):
+    return isinstance(error, str) and re.fullmatch(
+        r"Post only order would have immediately matched(?:, bbo was [0-9.eE+-]+@[0-9.eE+-]+)?\.?(?: asset=\d+)?",
+        error) is not None
 
 
 class SafetyLatch:
@@ -208,8 +233,8 @@ class SafetyLatch:
     def owns(self, order):
         return int(order.get("oid", 0)) in self.owned or str(order.get("cloid", "")) in self.cloids
 
-    def wrap(self, exchange, reconcile_cancel=None, on_error=None):
-        return GuardedExchange(exchange, self, reconcile_cancel, on_error)
+    def wrap(self, exchange, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None):
+        return GuardedExchange(exchange, self, reconcile_cancel, on_error, reconcile_reduce_only, reconcile_post_only)
 
     def cleanup(self, snapshot, cancel, close, timeout=30, sleep=time.sleep):
         """snapshot returns fresh [(symbol, position, orders)] or raises.
@@ -271,11 +296,13 @@ class SafetyLatch:
 class GuardedExchange:
     ACTIONS = {"order", "bulk_orders", "bulk_modify_orders_new", "modify_order", "bulk_cancel", "cancel", "update_leverage"}
 
-    def __init__(self, exchange, safety, reconcile_cancel=None, on_error=None):
+    def __init__(self, exchange, safety, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None):
         self._exchange = exchange
         self._safety = safety
         self._reconcile_cancel = reconcile_cancel
         self._on_error = on_error
+        self._reconcile_reduce_only = reconcile_reduce_only
+        self._reconcile_post_only = reconcile_post_only
 
     def __getattr__(self, name):
         method = getattr(self._exchange, name)
@@ -308,6 +335,9 @@ class GuardedExchange:
                                 request["cloid"] = request.get("cloid") or Cloid.from_str("0x" + uuid.uuid4().hex)
                                 gate.cloids.add(str(request["cloid"]))
                                 operation_cloids.add(str(request["cloid"]))
+                    # Persist uncertainty before submission, including a child
+                    # crash between sending and receiving the acknowledgement.
+                    gate.pending_cloids.update(operation_cloids)
                     if not gate.publish():  # persist intent before the request can reach the exchange
                         raise RuntimeError("Session journal unavailable")
                     if (gate.stopped.is_set() or not gate.is_running()) and not cleanup:
@@ -315,7 +345,14 @@ class GuardedExchange:
                         raise ExecutionStopped("Session halted before submission")
                     result = method(*args, **kwargs)
                     if not isinstance(result, dict) or result.get("status") != "ok":
-                        raise RuntimeError(f"{name}: invalid or rejected response")
+                        if isinstance(result, dict) and result.get("status") == "err":
+                            detail = safe_error(result.get("response") or result.get("error") or "No exchange reason provided")
+                            raise RuntimeError(f"{name}: exchange rejected: {detail}")
+                        raise RuntimeError(f"{name}: invalid or rejected response ({type(result).__name__})")
+                    if name == "update_leverage":
+                        response = result.get("response")
+                        if not isinstance(response, dict) or response.get("type") != "default":
+                            raise RuntimeError("update_leverage: invalid acknowledgement (expected response.type=default)")
                     if name != "update_leverage":
                         statuses = result.get("response", {}).get("data", {}).get("statuses", [])
                         expected = len(args[0]) if name.startswith("bulk_") else 1
@@ -339,10 +376,32 @@ class GuardedExchange:
                         for status in statuses:
                             if isinstance(status, dict) and "resting" in status:
                                 gate.owned.add(int(status["resting"]["oid"]))
+                        if acknowledged:
+                            gate.pending_cloids.difference_update(operation_cloids)
                         gate.publish()
-                        if len(statuses) != expected or any(not (
+                        resolved_rejections = set()
+                        if placing and acknowledged and not cleanup:
+                            requests = [kwargs] if name == "order" else [item["order"] for item in args[0]] if name == "bulk_modify_orders_new" else args[0]
+                            rejected = [i for i, status in enumerate(statuses)
+                                        if self._reconcile_reduce_only and isinstance(status, dict) and requests[i].get("reduce_only") is True
+                                        and isinstance(status.get("error"), str)
+                                        and re.fullmatch(r"Reduce only order would increase position\.(?: asset=\d+)?", status["error"])]
+                            post_only = [i for i, status in enumerate(statuses)
+                                         if self._reconcile_post_only and isinstance(status, dict)
+                                         and post_only_rejection(status.get("error"))
+                                         and requests[i].get("order_type", {}).get("limit", {}).get("tif") == "Alo"]
+                            recoverable = set(rejected + post_only)
+                            if recoverable and all(i in recoverable or isinstance(status, dict)
+                                                   and ("resting" in status or "filled" in status)
+                                                   for i, status in enumerate(statuses)):
+                                if rejected:
+                                    self._reconcile_reduce_only()
+                                if post_only:
+                                    self._reconcile_post_only([requests[i] for i in post_only], name)
+                                resolved_rejections = recoverable
+                        if len(statuses) != expected or any(i not in resolved_rejections and not (
                                 status == "success" or isinstance(status, dict) and
-                                ("resting" in status or "filled" in status)) for status in statuses):
+                                ("resting" in status or "filled" in status)) for i, status in enumerate(statuses)):
                             raise RuntimeError(f"{name}: rejected or incomplete acknowledgement: {safe_error(statuses)}")
                     return result
                 except ExecutionStopped:

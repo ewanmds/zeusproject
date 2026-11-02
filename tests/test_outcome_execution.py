@@ -28,22 +28,21 @@ class OutcomeExecutionTests(unittest.TestCase):
                 for invalid in (-1, None, "nan", "inf", "bad"):
                     self.assertEqual(client.post("/api/outcomes/start", json={"exec_mode": "maker", "maker_spread_pct": invalid}).status_code, 422)
                 start.assert_not_called()
+                self.assertEqual(client.post("/api/outcomes/start", json={"outcome_side": "yes"}).status_code, 200)
+                self.assertEqual(start.call_args.args[0].outcome_side, "yes")
+                self.assertEqual(client.post("/api/outcomes/start", json={"outcome_side": "both"}).status_code, 422)
         finally:
             server.app.dependency_overrides.pop(server._require_api_token, None)
 
     def configured_bot(self, mode, maker_spread_pct=100):
-        config_factory = Mock(wraps=BotConfig)
-        catalog = SimpleNamespace(all_market_keys=lambda: ["#14881"])
-        manager = server.BotManager(state_dir=False)
-        with patch.object(server, "_safe_import", side_effect=[SimpleNamespace(BotConfig=config_factory), catalog]), \
-             patch.object(server.threading, "Thread"), \
-             patch.dict(server.os.environ, {"WALLET_ADDRESS_OUTCOME": "offline-test", "PRIVATE_KEY_OUTCOME": "dummy"}):
-            manager.start_worldcup(server.WorldcupStartRequest(exec_mode=mode, maker_spread_pct=maker_spread_pct))
-        cfg = BotConfig(**config_factory.call_args.kwargs)
+        from zeus.bots.outcome_worker import build_config
+        with patch.dict(server.os.environ, {"WALLET_ADDRESS_OUTCOME": "offline-test", "PRIVATE_KEY_OUTCOME": "dummy"}):
+            cfg = build_config(server.WorldcupStartRequest(market="#14881", exec_mode=mode,
+                               maker_spread_pct=maker_spread_pct).model_dump(), None)
+        cfg.safety_file = None
         self.assertEqual(cfg.exec_mode, mode)
         self.assertEqual(cfg.maker_offset_pct, 0)
         self.assertEqual(cfg.maker_spread_pct, maker_spread_pct)
-        self.assertEqual(manager.get_worldcup_stats()["config"]["exec_mode"], mode)
         bot = HyperliquidSpreadBot.__new__(HyperliquidSpreadBot)
         from zeus.safety import SafetyLatch
         bot.running = True
@@ -63,6 +62,34 @@ class OutcomeExecutionTests(unittest.TestCase):
         state = MarketState(MarketSpec("#14881", 0), position=position)
         state.update_bbo(0.4, 0.401)
         return state
+
+    def test_yes_worker_uses_yes_coin_balance_and_order_side(self):
+        from zeus.bots.outcome_worker import build_config
+        bot = self.configured_bot("maker")
+        public = server.WorldcupStartRequest(market="#14880", outcome_side="yes", exec_mode="maker").model_dump()
+        bot.cfg = build_config(public, None)
+        bot.outcome_meta = {"outcomes": [{"outcome": 1488, "venue": "out"}]}
+        with patch("zeus.outcomes.catalog_snapshot", return_value=[]), patch("zeus.outcomes.resolve_market", return_value={"name": "Spurs"}):
+            spec = bot.discover_worldcup_markets()[0]
+        self.assertEqual(spec.symbol, "#14880")
+        self.assertEqual(spec.balance_coin, "+14880")
+        self.assertEqual(spec.outcome_side, "yes")
+        state = MarketState(spec)
+        state.update_bbo(0.87, 0.871)
+        request, reason = bot.desired_spot_no_order(state)
+        self.assertEqual(request["coin"], "#14880")
+        self.assertIn("BUY YES", reason)
+        state.position = 10
+        request, reason = bot.desired_spot_no_order(state)
+        self.assertFalse(request["is_buy"])
+        self.assertIn("SELL YES", reason)
+
+    def test_worker_rejects_side_coin_mismatch_and_preserves_exact_legacy_side(self):
+        from zeus.bots.outcome_worker import build_config
+        request = server.WorldcupStartRequest(market="#14880").model_dump()
+        self.assertEqual(build_config(request, None).outcome_side, "yes")
+        request["outcome_side"] = "no"
+        with self.assertRaises(ValueError): build_config(request, None)
 
     def test_maker_buy_and_sell_at_touch(self):
         bot = self.configured_bot("maker")
@@ -221,6 +248,13 @@ class OutcomeExecutionTests(unittest.TestCase):
         bot, state = self.sync_fixture()
         bot.on_user_events({"data": {"clearinghouseState": {"assetPositions": []}}})
         self.assertEqual(state.position, 26)
+
+    def test_initial_fill_history_does_not_count_as_new_session_trading(self):
+        bot, state = self.sync_fixture()
+        bot._record_fills([{"coin": state.spec.symbol, "side": "A", "sz": "26", "px": "0.4",
+                            "time": int((bot.stats.start_ts - 10) * 1000), "tid": "previous-session"}])
+        self.assertEqual(state.position, 26)
+        self.assertEqual(bot.stats.fills, 0)
 
     def test_cancel_rejection_keeps_oid_and_backs_off(self):
         bot, state = self.sync_fixture()

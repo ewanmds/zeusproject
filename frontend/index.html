@@ -220,12 +220,12 @@
                   <span id="outcome-market-label">Marché</span>
                   <span class="mini-badge" id="outcome-market-count">Chargement…</span>
                 </div>
-                <input type="hidden" id="outcome-market" value="ALL">
+                <input type="hidden" id="outcome-market" value="">
                 <div class="token-picker" id="outcome-market-picker">
                   <button class="token-trigger" id="outcome-market-trigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="outcome-market-menu" aria-labelledby="outcome-market-label outcome-market-name">
                     <span class="token-logo" id="outcome-market-logo" aria-hidden="true">OU</span>
                     <span class="token-copy">
-                      <strong id="outcome-market-name">Tous les marchés</strong>
+                      <strong id="outcome-market-name">Choisir un marché</strong>
                       <small id="outcome-market-symbol">catalogue HIP-4 · out</small>
                     </span>
                     <span class="token-chevron" aria-hidden="true">&#9662;</span>
@@ -249,6 +249,18 @@
             </fieldset>
             <fieldset class="form-block">
               <legend>Parameters</legend>
+              <fieldset class="outcome-side-picker" aria-describedby="outcome-side-help">
+                <legend>Côté coté</legend>
+                <label class="outcome-side-option" for="outcome-side-yes">
+                  <input id="outcome-side-yes" type="radio" name="outcome-side" value="yes">
+                  <span><strong>Yes</strong><small id="outcome-side-yes-prob">—</small></span>
+                </label>
+                <label class="outcome-side-option" for="outcome-side-no">
+                  <input id="outcome-side-no" type="radio" name="outcome-side" value="no" checked>
+                  <span><strong>No</strong><small id="outcome-side-no-prob">—</small></span>
+                </label>
+              </fieldset>
+              <p class="field-help" id="outcome-side-help">Le bot achète et revend le token sélectionné. Ce choix ne modifie pas les bots déjà lancés.</p>
               <div class="field">
                 <label for="outcome-exec-mode">Exécution</label>
                 <select id="outcome-exec-mode" aria-describedby="outcome-exec-help">
@@ -287,14 +299,15 @@
               </button>
               <button class="btn btn-stop" id="outcome-stop-btn" type="button" disabled>
                 <svg aria-hidden="true"><use href="#icon-stop"></use></svg>
-                Stop
+                Tout arrêter
               </button>
             </div>
-            <p class="field-help">Stop annule les ordres et tente de vendre immédiatement les positions au marché, même en Limit.</p>
+            <p class="field-help" id="outcome-start-help" role="status">Choisis un marché pour lancer son bot.</p>
+            <p class="field-help">Chaque marché a son propre bot. Stop annule ses ordres et tente de vendre immédiatement ses positions, même en Limit. « Tout arrêter » cible tous les bots Outcome.</p>
           </form>
         </aside>
 
-        <section class="dashboard" aria-label="Outcome session stats">
+        <section class="dashboard" aria-label="Statistiques des bots Outcome">
           <div class="run-banner" id="outcome-run-banner" hidden>
             <span class="run-dot" aria-hidden="true"></span>
             <div class="run-copy">
@@ -359,6 +372,8 @@
               <span class="metric-foot">Filled orders count</span>
             </article>
           </div>
+          <div class="sessions-header"><h2 id="outcome-sessions-heading" tabindex="-1">Sessions Outcome</h2><span id="outcome-sessions-count" class="mini-badge">0 actif(s)</span></div>
+          <div class="bots-list" id="outcome-bots-list" aria-labelledby="outcome-sessions-heading"></div>
         </section>
       </div>
     </section>

@@ -38,7 +38,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 from zeus import PROJECT_ROOT
-from zeus.safety import atomic_json, account_snapshot, safe_error
+from zeus.safety import atomic_json, account_snapshot, safe_error, read_json
 
 
 def _pid_alive(pid):
@@ -139,17 +139,21 @@ class GridStopRequest(BaseModel):
 
 
 class WorldcupStartRequest(BaseModel):
+    outcome_side: Optional[Literal["yes", "no"]] = None
     exec_mode: Literal["maker", "taker"] = "taker"
     maker_spread_pct: float = Field(default=0.005, ge=0, allow_inf_nan=False)
-    order_size_usd: float = 50
+    order_size_usd: float = Field(default=50, ge=10, allow_inf_nan=False)
     # En %, même convention que --max-spread-pct (0.02 = 0.02% = 2 bps).
-    max_spread_pct: Optional[float] = None
+    max_spread_pct: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     # Legacy (vieux onglets): interprété en bps si max_spread_pct absent.
-    max_spread_bps: float = 2.0
-    max_position_usd: float = 250
-    # "ALL" = every live ``out`` outcome, otherwise an exact outcome coin
-    # ("#14881") or an outcome id/name resolved through zeus.outcomes.
-    market: str = "ALL"
+    max_spread_bps: float = Field(default=2, ge=0, allow_inf_nan=False)
+    max_position_usd: float = Field(default=250, ge=10, allow_inf_nan=False)
+    # One canonical Outcome coin per process; aliases resolved through the catalog.
+    market: str = ""
+
+
+class OutcomeStopRequest(BaseModel):
+    session_id: Optional[str] = Field(default=None, min_length=1)
 
 
 # ---------------------------------------------------------------------------
@@ -303,14 +307,6 @@ class BotManager:
         self.obi_procs: Dict[str, Dict[str, Any]] = {}
         self.grid_config: Dict[str, Any] = {}   # dernière config (restart)
 
-        # WorldCup Spread bot state
-        self.wc_bot = None            # HyperliquidSpreadBot instance
-        self.wc_thread: Optional[threading.Thread] = None
-        self.wc_running: bool = False
-        self.wc_config: Dict[str, Any] = {}
-        self.wc_stop_event = threading.Event()
-        self.wc_state_file = None
-        self.wc_lifecycle = {"phase": "stopped", "cleanup_confirmed": True, "can_start": True, "error": "", "cleanup_error": ""}
         self.state_dir = None if state_dir is False else Path(state_dir or PROJECT_ROOT / ".zeus-state")
 
         # Connected WebSocket clients
@@ -318,10 +314,11 @@ class BotManager:
 
         # Last good stats payloads (used when bot lock is busy)
         self._grid_stats_cache: Dict[str, Any] = {}
-        self._wc_stats_cache: Dict[str, Any] = {}
 
         # Manager-level lock
         self.lock = threading.Lock()
+        from zeus.outcome_supervisor import OutcomeSupervisor
+        self.outcome = OutcomeSupervisor(self)
 
     def _session_files(self):
         if self.state_dir is None:
@@ -329,7 +326,7 @@ class BotManager:
         result = []
         for path in self.state_dir.glob("*.json"):
             try:
-                result.append((path, json.loads(path.read_text(encoding="utf-8"))))
+                result.append((path, read_json(path)))
             except (OSError, ValueError):
                 raise RuntimeError("Session journal unreadable; manual verification required")
         return result
@@ -341,6 +338,8 @@ class BotManager:
         account = os.getenv("WALLET_ADDRESS_OUTCOME" if kind == "outcome" else "WALLET_ADDRESS", "").strip()
         if not account:
             raise RuntimeError("Account unavailable for stop verification")
+        if record.get("account") and record["account"].lower() != account.lower():
+            raise RuntimeError("Session account changed; manual verification required")
         info = Info("https://api.hyperliquid.xyz", skip_ws=True, timeout=5)
         symbols = record["symbols"]
         for cloid in record.get("pending_cloids", []):
@@ -351,6 +350,9 @@ class BotManager:
                                 balances={s: "+" + s.lstrip("#") for s in symbols})
         if any(position or orders for _, position, orders in rows):
             raise RuntimeError("Residual orders/position; manual reconciliation required")
+        if record.get("funds_root"):
+            from zeus.process_control import OutcomeFunds
+            OutcomeFunds(record["funds_root"], account, record["session_id"]).resolve(record.get("pending_cloids", []))
 
     def _reserve_session(self, key, symbols, kind):
         for _, record in self._session_files():
@@ -367,7 +369,7 @@ class BotManager:
     def _session_status(self, path, fallback=None):
         if path:
             try:
-                return json.loads(Path(path).read_text(encoding="utf-8"))
+                return read_json(path)
             except (OSError, ValueError):
                 return {"phase": "failed", "cleanup_confirmed": False, "can_start": False,
                         "cleanup_error": "Session status unreadable", "stale": True}
@@ -375,12 +377,17 @@ class BotManager:
 
     def reconcile_sessions(self):
         unresolved = []
-        for path, record in self._session_files():
+        with self.lock:
+            perp_processes = self.obi_procs.copy()
+            outcome_processes = self.outcome.procs.copy()
+            records = self._session_files()
+        for path, record in records:
             if record.get("cleanup_confirmed"):
                 continue
             owned = any(str(info.get("safety_file")) == str(path) and info["proc"].poll() is None
-                        for info in self.obi_procs.values())
-            if str(self.wc_state_file) == str(path) and self.wc_thread and self.wc_thread.is_alive():
+                        for info in perp_processes.values())
+            if any(str(i["safety_file"]) == str(path) and i["proc"].poll() is None
+                   for i in outcome_processes.values()):
                 owned = True
             if owned or record.get("pid") != os.getpid() and _pid_alive(record.get("pid")) or _pid_alive(record.get("child_pid")):
                 unresolved.append(record["key"])
@@ -389,10 +396,6 @@ class BotManager:
                 self._verify_session_flat(record)
                 atomic_json(path, {**record, "phase": "failed", "cleanup_confirmed": True,
                                    "can_start": True, "cleanup_error": "", "ts": time.time()})
-                if str(path) == str(self.wc_state_file) and self.wc_bot is not None:
-                    self.wc_bot.safety.cleanup_confirmed = True
-                    self.wc_bot.safety.cleanup_error = ""
-                    self.wc_bot.safety.phase = "failed"
             except Exception as exc:
                 unresolved.append(record["key"])
                 atomic_json(path, {**record, "phase": "failed", "cleanup_confirmed": False,
@@ -400,9 +403,8 @@ class BotManager:
         return {"unresolved": unresolved, "can_start": not unresolved}
 
     def _orphans(self, kind):
-        attached = {str(info.get("safety_file")) for info in self.obi_procs.values()}
-        if self.wc_state_file:
-            attached.add(str(self.wc_state_file))
+        attached = {str(info.get("safety_file")) for info in self.obi_procs.copy().values()}
+        attached.update(str(i["safety_file"]) for i in self.outcome.procs.copy().values())
         return [record for path, record in self._session_files()
                 if str(path) not in attached and record.get("account_kind") == kind and not record.get("cleanup_confirmed")]
 
@@ -622,6 +624,7 @@ class BotManager:
                 entry = {
                     "cleanup_confirmed": confirmed,
                     "cleanup_error": lifecycle.get("cleanup_error", ""),
+                    "warning": str(st.get("warning") or ""),
                     "can_start": not alive and confirmed,
                     "stale": bool(alive and (not st or now - float(st.get("ts", 0)) > 5)),
                     "token": key,
@@ -701,204 +704,14 @@ class BotManager:
     # -----------------------------------------------------------------------
     # Outcome (HIP-4) Spread Bot
     # -----------------------------------------------------------------------
-    def start_worldcup(self, config: WorldcupStartRequest) -> None:
-        with self.lock:
-            if self.wc_running or self.wc_thread is not None and self.wc_thread.is_alive():
-                raise RuntimeError("Outcome bot is already running")
-            if not self.wc_lifecycle.get("can_start", False):
-                raise RuntimeError("Previous Outcome session is not reconciled")
+    def start_worldcup(self, config: WorldcupStartRequest):
+        return self.outcome.start(config)
 
-            wc_mod = _safe_import("zeus.bots.worldcup")
-            if wc_mod is None:
-                raise RuntimeError(
-                    "Cannot import zeus.bots.worldcup — check the Zeus installation"
-                )
+    def stop_worldcup(self, session_id=None):
+        return self.outcome.stop(session_id)
 
-            outcome_mod = _safe_import("zeus.outcomes")
-            if outcome_mod is None:
-                raise RuntimeError(
-                    "Cannot import zeus.outcomes — check the Zeus installation"
-                )
-
-            selected = str(config.market or "").strip()
-            if selected.upper() in ("", "ALL"):
-                symbols = outcome_mod.all_market_keys()
-                if not symbols:
-                    raise RuntimeError(
-                        "Outcome catalog unavailable: no live HIP-4 markets"
-                    )
-            else:
-                resolved = outcome_mod.resolve_market(selected)
-                if resolved is None:
-                    raise RuntimeError(
-                        f"Unknown Outcome market: {selected}. "
-                        "Refresh the Outcome market list and try again."
-                    )
-                symbols = [str(resolved["key"])]
-
-            try:
-                from hyperliquid.utils import constants
-                base_url = constants.MAINNET_API_URL
-            except ImportError:
-                base_url = "https://api.hyperliquid.xyz"
-
-            outcome_account = os.getenv("WALLET_ADDRESS_OUTCOME", "").strip()
-            outcome_key = os.getenv("PRIVATE_KEY_OUTCOME", "").strip()
-            if not outcome_account or not outcome_key:
-                raise RuntimeError(
-                    "Outcome requires WALLET_ADDRESS_OUTCOME and PRIVATE_KEY_OUTCOME in .env"
-                )
-
-            self.wc_state_file = self._reserve_session("outcome", symbols, "outcome")
-            self.wc_stop_event = threading.Event()
-            self.wc_lifecycle = {"phase": "connecting", "cleanup_confirmed": False, "can_start": False, "error": "", "cleanup_error": ""}
-            cfg = wc_mod.BotConfig(
-                base_url=base_url,
-                perp_dex="xyz",
-                live=True,
-                symbols=symbols,
-                keywords=[],
-                max_symbols=max(1, len(symbols)),
-                order_usd=config.order_size_usd,
-                min_order_usd=config.order_size_usd,
-                close_min_order_usd=0,
-                max_spread_pct=(
-                    config.max_spread_pct
-                    if config.max_spread_pct is not None
-                    else config.max_spread_bps / 100.0
-                ),
-                max_position_usd=config.max_position_usd,
-                min_action_interval_sec=0.03,
-                stale_sec=1.2,
-                refresh_hz=12,
-                stop_loss_usd=50,
-                take_profit_usd=0,
-                rest_bbo_hz=4,
-                rest_workers=24,
-                rest_max_per_sweep=2,
-                rest_429_backoff_sec=2.5,
-                market_slippage_bps=5,
-                market_cycle_cooldown_sec=0.12,
-                account_sync_sec=2,
-                account_address=outcome_account,
-                private_key=outcome_key,
-                scan_only=False,
-                worldcup=True,
-                countries=[],
-                outcome_side="no",
-                exec_mode=config.exec_mode,
-                maker_offset_pct=0.0,
-                maker_spread_pct=config.maker_spread_pct,
-                safety_file=str(self.wc_state_file) if self.wc_state_file else None,
-            )
-
-            self.wc_bot = None
-            self.wc_config = config.model_dump()
-
-            def run_wc():
-                bot = None
-                try:
-                    bot = wc_mod.HyperliquidSpreadBot(cfg)
-                    self.wc_bot = bot
-                    if self.wc_stop_event.is_set():
-                        bot.request_stop()
-                    else:
-                        bot.run()
-                except BaseException as exc:
-                    self.wc_lifecycle.update(error=safe_error(exc), phase="failed")
-                    if bot is not None:
-                        bot.safety.fail(exc)
-                finally:
-                    if bot is not None:
-                        bot.shutdown()
-                        self.wc_lifecycle = bot.safety.snapshot()
-                    else:
-                        self.wc_lifecycle.update(phase="failed", cleanup_confirmed=False, can_start=False)
-                        if self.wc_state_file:
-                            record = self._session_status(self.wc_state_file)
-                            atomic_json(self.wc_state_file, {**record, **self.wc_lifecycle})
-                    self.wc_running = False
-
-            self.wc_thread = threading.Thread(target=run_wc, name="worldcup-bot", daemon=True)
-            self.wc_running = True
-            self.wc_thread.start()
-
-    def stop_worldcup(self) -> None:
-        with self.lock:
-            self.wc_stop_event.set()
-            thread, bot = self.wc_thread, self.wc_bot
-            if thread is None:
-                if self._orphans("outcome") or not self.wc_lifecycle.get("cleanup_confirmed"):
-                    raise RuntimeError("Previous stop not confirmed")
-                return
-            if thread.is_alive():
-                self.wc_lifecycle["phase"] = "stopping"
-                if bot is not None:
-                    bot.request_stop()
-        thread.join(timeout=30)
-        if thread.is_alive() or not self.wc_lifecycle.get("cleanup_confirmed"):
-            raise RuntimeError("Outcome stop not confirmed; orders/position require verification")
-        self.wc_running = False
-
-    def get_worldcup_stats(self) -> Dict[str, Any]:
-        if self.wc_bot is None:
-            orphans = self._orphans("outcome")
-            if orphans:
-                self.wc_lifecycle = {**orphans[-1], "phase": "failed", "can_start": False,
-                                     "error": orphans[-1].get("error") or "Interrupted session; stop not confirmed"}
-            elif self.wc_thread is None:
-                self.wc_lifecycle.update(cleanup_confirmed=True, can_start=True)
-        default = {
-            "type": "worldcup_stats",
-            "running": False,
-            "duration": "00:00:00",
-            "volume_usd": 0.0,
-            "net_pnl": 0.0,
-            "fees": 0.0,
-            "cost_per_1m": 0.0,
-            "fills": 0,
-            "mid_price": 0.0,
-            "spread_bps": 0.0,
-            "position_usd": 0.0,
-            "active_markets": 0,
-            "config": self.wc_config,
-        }
-        lifecycle = self.wc_bot.safety.snapshot() if self.wc_bot is not None else self.wc_lifecycle
-        active = bool(self.wc_thread and self.wc_thread.is_alive())
-        default.update(lifecycle, running=active)
-        if self.wc_bot is None:
-            return {**self._wc_stats_cache, **default}
-
-        bot = self.wc_bot
-        try:
-            snap = bot.export_dashboard_stats()
-            if snap is None:
-                if self._wc_stats_cache:
-                    cached = dict(self._wc_stats_cache)
-                    cached.update(lifecycle, running=active, stale=True)
-                    return cached
-                return {**default, "stale": True}
-
-            result = {
-                "type": "worldcup_stats",
-                "running": True,
-                "duration": _fmt_duration(snap["duration_sec"]),
-                "volume_usd": _json_float(snap["volume_usd"], 2),
-                "net_pnl": _json_float(snap["net_pnl"], 4),
-                "fees": _json_float(snap["fees"], 4),
-                "cost_per_1m": _json_float(snap["cost_per_1m"], 2),
-                "fills": int(snap["fills"]),
-                "mid_price": _json_float(snap["mid_price"], 4),
-                "spread_bps": _json_float(snap["spread_bps"], 2),
-                "position_usd": _json_float(snap["position_usd"], 2),
-                "active_markets": int(snap["active_markets"]),
-                "config": self.wc_config,
-            }
-            result.update(lifecycle, running=active, stale=False)
-            self._wc_stats_cache = result
-            return result
-        except Exception:
-            return {**(self._wc_stats_cache or default), **lifecycle, "running": active, "stale": True}
+    def get_worldcup_stats(self):
+        return self.outcome.status()
 
 
 # ---------------------------------------------------------------------------
@@ -1142,8 +955,8 @@ async def grid_status(_: None = Depends(_require_api_token)):
 @app.post("/api/worldcup/start")
 async def start_outcome(req: WorldcupStartRequest, _: None = Depends(_require_api_token)):
     try:
-        await asyncio.to_thread(manager.start_worldcup, req)
-        return {"status": "ok", "message": "Outcome bot started"}
+        session = await asyncio.to_thread(manager.start_worldcup, req)
+        return {"status": "ok", "message": "Outcome process starting", **(session or {})}
     except Exception as e:
         return JSONResponse(
             status_code=400,
@@ -1153,11 +966,14 @@ async def start_outcome(req: WorldcupStartRequest, _: None = Depends(_require_ap
 
 @app.post("/api/outcomes/stop")
 @app.post("/api/worldcup/stop")
-async def stop_outcome(_: None = Depends(_require_api_token)):
+async def stop_outcome(req: Optional[OutcomeStopRequest] = None, _: None = Depends(_require_api_token)):
     try:
-        await asyncio.to_thread(manager.stop_worldcup)
+        session_id = req.session_id if req else None
+        await asyncio.to_thread(manager.stop_worldcup, session_id)
         state = manager.get_worldcup_stats()
-        if state.get("running") or state.get("cleanup_confirmed") is not True:
+        targets = [b for b in state.get("bots", []) if session_id is None or b["session_id"] == session_id]
+        if (any(b["running"] or b["cleanup_confirmed"] is not True for b in targets)
+                or not targets and (state.get("running") or state.get("cleanup_confirmed") is not True)):
             raise RuntimeError("Outcome stop not confirmed")
         return {"status": "ok", "message": "Outcome stop verified", "state": state}
     except Exception as e:
