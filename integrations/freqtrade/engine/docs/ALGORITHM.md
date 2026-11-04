@@ -1592,3 +1592,19 @@ critical at bootstrap. Absolute-reserve and measured time-to-exhaustion guards
 remain active. Standalone percentage semantics are unchanged.
 The dashboard status reports the manager's actual halt or cached live quote
 count; receipt of a fresh book alone does not mean orders are active.
+
+
+### Zeus: post-only modification acknowledgements
+
+An explicit ALO `Post only order would have immediately matched` rejection
+(including `Error placing new order during modify:`) is classified before the
+fatal acknowledgement gate. It is not a fill and is not retried immediately.
+For modifications the action gate remains held while exchange orders and
+positions are queried. The old order is retained only if independently present;
+an absent old order is removed from tracking. Other accepted quotes are retained.
+A two-second per-market cooldown preserves accepted quotes before a later
+refresh; cleanup bypasses this cooldown and Stop remains sticky. Failed reads, malformed replies,
+unknown rejects and ambiguous acknowledgements still block execution. Real
+exchange rejection reasons are preserved in diagnostics. Cleanup remains
+unconfirmed while any real position or order remains; this change never hides a
+residual position or increases the configured close slippage.

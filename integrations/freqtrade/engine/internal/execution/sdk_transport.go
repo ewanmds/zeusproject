@@ -26,6 +26,9 @@ func NewSDKTransport(le *LiveExecutor) *SDKTransport {
 }
 
 func (t *SDKTransport) PlaceOrder(ctx context.Context, req types.OrderRequest) (placeOrderResult, error) {
+	if ctx.Value(cleanupKey{}) != true && t.le.quoteDeferred(req.Coin) {
+		return placeOrderResult{benignReject: true}, nil
+	}
 	// Call SDK Buy/Sell directly with retry (same logic as the old placeOrder
 	// fallback path, but without going through a dispatch wrapper).
 	tif := normalizedTIF(req.TimeInForce, "ALO")
@@ -61,6 +64,9 @@ func (t *SDKTransport) PlaceOrder(ctx context.Context, req types.OrderRequest) (
 		}
 		return t.le.sdk.Sell(capped.Coin, opts...)
 	})
+	if result.benignReject {
+		t.le.deferQuotes(req.Coin)
+	}
 	if err == nil {
 		t.le.rememberOrder(req.Coin, result.oid)
 	}

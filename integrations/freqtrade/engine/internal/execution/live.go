@@ -48,15 +48,16 @@ func (t *RPSTracker) Snapshot() RPSSnapshot {
 
 // LiveExecutor executes real orders on Hyperliquid via the SDK.
 type LiveExecutor struct {
-	safety   executionSafety
-	sdk      *hyperliquid.SDK
-	dexes    map[string]string // coin → dex name ("xyz" or "")
-	hasDex   bool              // true if any asset is HIP-3
-	hasPerps bool              // true if any asset is a standard perp
-	dexName  string            // the HIP-3 dex name (e.g. "xyz"), empty if no HIP-3 assets
-	cfg      *config.Config    // optional; used for per-asset skip thresholds in diffOrders
-	fillCh   <-chan types.FillEvent
-	posCh    chan types.PositionUpdate
+	quoteRetryAfter map[string]time.Time // guarded by mu; preserves resting orders during ALO cooldown
+	safety          executionSafety
+	sdk             *hyperliquid.SDK
+	dexes           map[string]string // coin → dex name ("xyz" or "")
+	hasDex          bool              // true if any asset is HIP-3
+	hasPerps        bool              // true if any asset is a standard perp
+	dexName         string            // the HIP-3 dex name (e.g. "xyz"), empty if no HIP-3 assets
+	cfg             *config.Config    // optional; used for per-asset skip thresholds in diffOrders
+	fillCh          <-chan types.FillEvent
+	posCh           chan types.PositionUpdate
 
 	reconcileCh <-chan struct{} // external trigger for immediate reconciliation (e.g. WS reconnect)
 
@@ -168,6 +169,7 @@ type coinHealthState struct {
 type placeOrderResult struct {
 	size         float64 // actual submitted quantity after a Zeus fill-race cap
 	benignReject bool
+	originalGone bool  // independently confirmed absent after a rejected modification
 	oid          int64 // OID of resting order, 0 if not resting
 }
 
@@ -2015,6 +2017,9 @@ func (le *LiveExecutor) Refresh(ctx context.Context, coin string, orders []types
 					return
 				}
 				if result.benignReject {
+					if result.originalGone {
+						return
+					}
 					slog.Warn("modify rejected benignly (ALO would cross)",
 						"oid", d.tracked.OID, "coin", coin)
 					// Original order is still resting — keep tracking it.
@@ -2304,6 +2309,9 @@ func (le *LiveExecutor) RefreshMulti(ctx context.Context, ordersByCoin map[strin
 			for i, r := range results {
 				coin := allModifies[i].coin
 				if r.benignReject {
+					if r.originalGone {
+						continue
+					}
 					mu.Lock()
 					newTracked[coin] = append(newTracked[coin], *allModifies[i].target.tracked)
 					mu.Unlock()
@@ -2509,6 +2517,9 @@ func (le *LiveExecutor) refreshBatch(ctx context.Context, coin string, epoch uin
 			}
 			for i, r := range results {
 				if r.benignReject {
+					if r.originalGone {
+						continue
+					}
 					// Original order still resting.
 					mu.Lock()
 					newTracked = append(newTracked, *modifies[i].tracked)
@@ -2769,12 +2780,22 @@ func (le *LiveExecutor) modifyOrder(ctx context.Context, coin string, tracked *t
 	return le.transport.ModifyOrder(ctx, tracked, desired)
 }
 
-func (le *LiveExecutor) modifyWithRetry(ctx context.Context, coin string, tracked *trackedOrder, desired *types.OrderRequest) (resultOut placeOrderResult, resultErr error) {
+func (le *LiveExecutor) modifyWithRetry(ctx context.Context, coin string, tracked *trackedOrder, desired *types.OrderRequest) (placeOrderResult, error) {
+	return le.modifyWithCallbacks(ctx, coin, tracked, desired, le.sdk.Modify, le.reconcileALOmodify)
+}
+
+func (le *LiveExecutor) modifyWithCallbacks(ctx context.Context, coin string, tracked *trackedOrder, desired *types.OrderRequest,
+	send func(int64, string, string, string, string, ...hyperliquid.ModifyOption) (*hyperliquid.PlacedOrder, error),
+	reconcile func(string, int64) (placeOrderResult, error),
+) (resultOut placeOrderResult, resultErr error) {
 	defer func() {
 		if ctx.Value(cleanupKey{}) != true {
 			le.failExecution(resultErr)
 		}
 	}()
+	if ctx.Value(cleanupKey{}) != true && le.quoteDeferred(coin) {
+		return placeOrderResult{benignReject: true}, nil
+	}
 	priceStr := strconv.FormatFloat(desired.Price, 'f', -1, 64)
 	sizeStr := strconv.FormatFloat(desired.Size, 'f', -1, 64)
 	side := normalizeSide(desired.Side)
@@ -2800,15 +2821,22 @@ func (le *LiveExecutor) modifyWithRetry(ctx context.Context, coin string, tracke
 		if gateErr != nil {
 			return placeOrderResult{}, gateErr
 		}
-		order, err := le.sdk.Modify(tracked.OID, coin, side, priceStr, sizeStr, opts...)
+		order, err := send(tracked.OID, coin, side, priceStr, sizeStr, opts...)
 		if err == nil && order != nil {
 			le.rememberOrder(coin, order.OID)
+		}
+		if err == nil && isExpectedALOReject(order, "ALO") {
+			// Keep the action gate held while verifying the old order and position.
+			result, reconcileErr := reconcile(coin, tracked.OID)
+			release()
+			le.stats.RecordExchange()
+			return result, reconcileErr
 		}
 		if le.cfg != nil && le.cfg.ZeusMode && ctx.Value(cleanupKey{}) != true {
 			if err != nil {
 				le.failExecution(err)
 			} else if order == nil || !(order.IsFilled() || order.IsResting()) || order.OID <= 0 {
-				le.failExecution(fmt.Errorf("invalid modify acknowledgement"))
+				le.failExecution(orderAckError("modify", order))
 			}
 		}
 		release()
@@ -4081,11 +4109,16 @@ func (le *LiveExecutor) placeWithRetry(ctx context.Context, tif string, fn func(
 			return placeOrderResult{}, gateErr
 		}
 		order, err := fn()
+		if err == nil && isExpectedALOReject(order, tif) {
+			release()
+			le.stats.RecordExchange()
+			return placeOrderResult{benignReject: true}, nil
+		}
 		if le.cfg != nil && le.cfg.ZeusMode && ctx.Value(cleanupKey{}) != true {
 			if err != nil {
 				le.failExecution(err)
 			} else if order == nil || !(order.IsFilled() || order.IsResting()) || order.OID <= 0 {
-				le.failExecution(fmt.Errorf("invalid order acknowledgement"))
+				le.failExecution(orderAckError("order", order))
 			}
 		}
 		release()
