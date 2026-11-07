@@ -29,6 +29,7 @@
 
     let ws = null;
     let reconnectTimer = null;
+    let hasConnectedOnce = false;
     let gridRunning = false;
     let outcomeRunning = false;
     let outcomeSessions = [];
@@ -36,21 +37,76 @@
     let gridSessions = [];
     let gridTokens = [];
     let selectedGridToken = normalizeToken({ key: "SP500", symbol: "xyz:SP500" });
+    const dashboardState = window.ZeusState.createStore();
+    const pendingRenders = new Map();
+    let renderFrame = 0;
+
+    function receiveDashboard(kind, data) {
+        if (!dashboardState.accept(kind, data)) return;
+        const view = dashboardState.view(kind);
+        if (kind === "outcome") {
+            outcomeState = view;
+            outcomeSessions = Array.isArray(view.bots) ? view.bots : [];
+            outcomeRunning = Boolean(view.running);
+        } else {
+            gridSessions = Array.isArray(view.bots) ? view.bots : [];
+            gridRunning = Boolean(view.running);
+        }
+        scheduleDashboardRender(kind, view);
+        updateFreshness();
+    }
+
+    function flushDashboardRenders() {
+        if (renderFrame) return;
+        renderFrame = requestAnimationFrame(() => {
+            renderFrame = 0;
+            const renders = Array.from(pendingRenders);
+            pendingRenders.clear();
+            for (const [name, state] of renders) {
+                if (name === "outcome") renderOutcomeDashboard(state);
+                else renderGridDashboard(state);
+            }
+        });
+    }
+
+    function scheduleDashboardRender(kind, view) {
+        pendingRenders.set(kind, view);
+        // A hidden tab keeps the latest snapshot but does not rebuild its DOM.
+        if (!document.hidden) flushDashboardRenders();
+    }
 
     const $ = (sel) => document.querySelector(sel);
     const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+    function debounce(fn, ms = 120) {
+        let timer = 0;
+        return (...args) => {
+            clearTimeout(timer);
+            timer = window.setTimeout(() => fn(...args), ms);
+        };
+    }
+
+    // Public catalogs change slowly but cost 38-152 KB: paint the last copy
+    // immediately, then replace it with the fresh one in the background.
+    const CATALOG_CACHE_KEY = "zeus_catalog_v1_";
+    function readCatalogCache(name) {
+        try {
+            const raw = localStorage.getItem(CATALOG_CACHE_KEY + name);
+            return raw ? JSON.parse(raw) : null;
+        } catch {
+            return null;
+        }
+    }
+    function writeCatalogCache(name, data) {
+        try {
+            localStorage.setItem(CATALOG_CACHE_KEY + name, JSON.stringify(data));
+        } catch {
+            /* private mode or quota: caching stays optional */
+        }
+    }
+
     function formatUSD(val, showSign = false) {
-        if (val == null || val === "") return "—";
-        const num = Number(val);
-        if (!Number.isFinite(num)) return "—";
-        const formatted = Math.abs(num).toLocaleString("en-US", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-        });
-        if (showSign && num > 0) return `+$${formatted}`;
-        if (num < 0) return `-$${formatted}`;
-        return `$${formatted}`;
+        return window.ZeusState.currency(val, showSign);
     }
 
     function formatPrice(val) {
@@ -72,9 +128,24 @@
         return `${num.toFixed(1)} BPS`;
     }
 
+    function formatMIDNumber(val) {
+        if (val == null || val === "") return "—";
+        const num = Number(val);
+        return Number.isFinite(num) ? String(num) : "—";
+    }
+
+    function formatMIDBPS(val) {
+        const value = formatMIDNumber(val);
+        return value === "—" ? value : `${value} BPS`;
+    }
+
+    function formatMIDPair(bid, ask, formatter = formatPrice) {
+        return bid == null && ask == null ? "—" : `${formatter(bid)} / ${formatter(ask)}`;
+    }
+
     function setText(id, value) {
         const el = $(`#${id}`);
-        if (el) el.textContent = value;
+        if (el && el.textContent !== String(value)) el.textContent = value;
     }
 
     function showToast(type, title, message = "") {
@@ -105,7 +176,7 @@
         const close = document.createElement("button");
         close.type = "button";
         close.className = "toast-close";
-        close.setAttribute("aria-label", "Fermer la notification");
+        close.setAttribute("aria-label", "Dismiss notification");
         close.innerHTML = '<svg aria-hidden="true"><use href="#icon-close"></use></svg>';
         toast.append(icon, copy, close);
         stack.prepend(toast);
@@ -187,10 +258,8 @@
     }
 
     function setConnectionStatus(connected) {
-        const shell = $("#connection-status");
-        const label = shell?.querySelector(".status-text");
-        shell?.classList.toggle("connected", connected);
-        if (label) label.textContent = connected ? "Connecté" : "Déconnecté";
+        wsConnected = connected;
+        updateFreshness();
     }
 
     function setRunState(prefix, running) {
@@ -239,33 +308,114 @@
         const amountInput = $("#grid-order-size");
         if (amountInput) amountInput.min = strategy === "freqtrade" ? "40" : "10";
         if (offsetField) offsetField.hidden = strategy !== "mid";
+        const exitField = $("#grid-exit-protection-field");
+        const exitToggle = $("#grid-protect-exits");
+        if (exitField) exitField.hidden = strategy !== "mid";
+        if (exitToggle) exitToggle.disabled = strategy !== "mid";
+        const executionHelp = $("#grid-execution-help");
+        if (executionHelp) executionHelp.hidden = strategy === "freqtrade";
+        ["grid-offset-help", "grid-exit-protection-help"].forEach((id) => {
+            const help = $(`#${id}`);
+            if (help) help.hidden = strategy !== "mid";
+        });
         if (strategy === "freqtrade") {
             setText("grid-heading", "Freqtrade");
-            setText("grid-description", "Market making au VWAP avec spread indexé sur le coût réel. 100 % du montant coté dans un ordre par côté (40 USD minimum). Ordres réels sur démarrage explicite.");
             return;
         }
         if (strategy === "mid") {
-            setText("grid-heading", "MID Order Book");
-            setText("grid-description", "Market making classique : achat et vente à une distance fixe du mid, réglable en bps.");
+            setText("grid-heading", "MID");
             return;
         }
-        setText("grid-heading", "BBO Order Book");
-        setText("grid-description", "Quotes au meilleur bid et ask du carnet, avec contrôles de risque et d'inventaire.");
+        setText("grid-heading", "BBO");
+    }
+
+    let outcomeAutoSnapshot = null;
+    let outcomeAutoBusy = false;
+    let outcomeAutoEpoch = 0;
+    let outcomeAutoPending = null;
+    const outcomeIsAuto = () => $("#outcome-selection-mode")?.value === "auto";
+
+    async function refreshOutcomeAuto() {
+        if (!outcomeIsAuto() || outcomeAutoBusy || document.hidden) return;
+        outcomeAutoBusy = true;
+        const epoch = outcomeAutoEpoch;
+        const side = selectedOutcomeSide();
+        try {
+            const query = new URLSearchParams({ side: outcomeAutoPending?.outcome_side || side,
+                order_usd: outcomeAutoPending?.order_size_usd ?? $("#outcome-order-size").value,
+                max_spread_bps: outcomeAutoPending?.auto_max_spread_bps ?? $("#outcome-auto-spread").value });
+            const snapshot = await fetchJson(`${API_BASE}/api/outcomes/auto?${query}`);
+            if (!outcomeIsAuto() || epoch !== outcomeAutoEpoch || side !== selectedOutcomeSide()) return;
+            outcomeAutoSnapshot = snapshot;
+            const candidates = snapshot.candidates || [];
+            const list = $("#outcome-auto-candidates");
+            list.replaceChildren(...candidates.slice(0, 3).map((candidate) => {
+                const item = document.createElement("li");
+                const name = document.createElement("strong");
+                name.textContent = candidate.name;
+                const coin = document.createElement("small");
+                coin.textContent = candidate.market;
+                const metrics = document.createElement("span");
+                metrics.textContent = `${formatUSD(candidate.volume_usd_1m)}/min · ${candidate.spread_bps.toFixed(2)} bps`;
+                item.title = `${candidate.events_5m} trade events · estimated queue ${Math.round(candidate.queue_proxy_sec)}s`;
+                item.append(name, coin, metrics);
+                return item;
+            }));
+            setText("outcome-auto-status", !snapshot.connected ? "Connecting…"
+                : snapshot.warming_up ? `Observing · ${Math.floor(snapshot.observed_sec)} / 60s · ${snapshot.markets_observed}${snapshot.markets_total ? ` / ${snapshot.markets_total}` : ""} markets`
+                : candidates.length ? "Top $/min · updated live"
+                : "Waiting for eligible flow…");
+        } catch (error) {
+            if (epoch === outcomeAutoEpoch) {
+                outcomeAutoSnapshot = null;
+                $("#outcome-auto-candidates").replaceChildren();
+                setText("outcome-auto-status", `Scanner unavailable: ${error.message}`);
+            }
+        } finally {
+            outcomeAutoBusy = false;
+            updateOutcomeButtons();
+            await launchPendingOutcome();
+        }
+    }
+
+    function changeOutcomeSelection() {
+        outcomeAutoEpoch++;
+        outcomeAutoSnapshot = null;
+        const auto = outcomeIsAuto();
+        $("#outcome-auto-panel").hidden = !auto;
+        $("#outcome-manual-market").hidden = auto;
+        $("#outcome-market-picker").hidden = auto;
+        if (auto) {
+            closeOutcomeMarketPicker();
+            $("#outcome-exec-mode").value = "maker";
+            $("#outcome-auto-candidates").replaceChildren();
+            setText("outcome-auto-status", "Scanning…");
+            refreshOutcomeAuto();
+        }
+        updateOutcomeButtons();
     }
 
     function updateOutcomeButtons() {
         const startBtn = $("#outcome-start-btn");
         const stopBtn = $("#outcome-stop-btn");
-        const selected = outcomeSessions.find((bot) => bot.market === selectedOutcomeCoin());
+        const auto = outcomeIsAuto();
+        const autoFresh = outcomeAutoSnapshot?.ready && Date.now()/1000 - outcomeAutoSnapshot.updated_at < 20;
+        const market = auto ? outcomeAutoSnapshot?.candidates?.[0]?.market : selectedOutcomeCoin();
+        const selected = outcomeSessions.find((bot) => bot.market === market);
         const blocked = selected && (selected.running || selected.cleanup_confirmed !== true);
-        if (startBtn) startBtn.disabled = !selectedOutcomeMarket.key || blocked || outcomeState.stale || outcomeState.can_start === false || startBtn.getAttribute("aria-busy") === "true";
-        setText("outcome-start-help", !selectedOutcomeMarket.key ? "Choisis un marché pour lancer son bot." : blocked ? "Ce marché possède déjà un bot actif ou un arrêt à vérifier. Tu peux choisir un autre marché." : "Un processus indépendant sera lancé pour ce marché.");
-        if (stopBtn) stopBtn.disabled = !outcomeRunning || stopBtn.getAttribute("aria-busy") === "true";
+        const pending = Boolean(outcomeAutoPending);
+        if (startBtn) startBtn.disabled = startBtn.getAttribute("aria-busy") === "true" || !pending && (!auto && blocked || outcomeState.stale || outcomeState.can_start === false);
+        setText("outcome-start-label", pending ? "Cancel Auto" : auto ? "Start Auto" : !selectedOutcomeMarket.key ? "Choose market" : "Start");
+        setText("outcome-start-help", pending ? "Auto armed · waiting for eligible flow." : auto ? (autoFresh ? "" : "Start Auto to wait for a market.") : !selectedOutcomeMarket.key ? "Select a market." : blocked ? "Market busy · verify its session." : "");
+        if (stopBtn) stopBtn.disabled = (!outcomeRunning && !pending) || stopBtn.getAttribute("aria-busy") === "true";
         const modeSelect = $("#outcome-exec-mode");
-        if (modeSelect) modeSelect.disabled = startBtn?.getAttribute("aria-busy") === "true";
-        const busy = startBtn?.getAttribute("aria-busy") === "true";
+        const busy = pending || startBtn?.getAttribute("aria-busy") === "true";
+        if (modeSelect) modeSelect.disabled = auto || busy;
+        ["outcome-selection-mode", "outcome-auto-spread", "outcome-order-size", "outcome-max-pos"].forEach((id) => {
+            if ($(`#${id}`)) $(`#${id}`).disabled = busy;
+        });
         $$("input[name='outcome-side']").forEach((input) => {
-            input.disabled = busy || input.value === "no" && selectedOutcomeMarket.sides?.length === 1;
+            input.disabled = busy || !auto && input.value === "no" && selectedOutcomeMarket.sides?.length === 1;
         });
         updateOutcomeExecutionMode();
         setRunState("outcome", outcomeRunning);
@@ -274,14 +424,15 @@
 
     function updateOutcomeExecutionMode() {
         const maker = $("#outcome-exec-mode")?.value === "maker";
+        const auto = outcomeIsAuto();
         const spreadField = $("#outcome-spread-field");
         const spreadInput = $("#outcome-spread");
         const makerField = $("#outcome-maker-spread-field");
         const makerInput = $("#outcome-maker-spread");
-        if (makerField) makerField.hidden = !maker;
+        if (makerField) makerField.hidden = !maker || auto;
         if (makerInput) {
-            makerInput.required = maker;
-            makerInput.disabled = !maker || $("#outcome-start-btn")?.getAttribute("aria-busy") === "true";
+            makerInput.required = maker && !auto;
+            makerInput.disabled = !maker || auto || $("#outcome-start-btn")?.getAttribute("aria-busy") === "true";
             if (!maker) makerInput.classList.remove("invalid");
         }
         if (spreadField) spreadField.hidden = maker;
@@ -290,9 +441,9 @@
             spreadInput.required = !maker;
             if (maker) spreadInput.classList.remove("invalid");
         }
-        setText("outcome-exec-help", maker
-            ? "Post-only : règle le Spread Limit pour rapprocher les prix d’achat et de vente à l’intérieur du carnet. La protection anti-spam reste active."
-            : "Exécution immédiate avec limite de slippage. Max spread filtre les entrées Taker.");
+        setText("outcome-exec-help", auto ? "Post-only bid / ask. Auto switches only after the old market is flat." : maker
+            ? "Post-only. Quote spread sets the distance between bid and ask."
+            : "Immediate execution, within the slippage limit.");
     }
 
     function switchPage(pageName) {
@@ -307,22 +458,103 @@
             page.classList.toggle("active", active);
             page.hidden = !active;
         });
+        updateTabIndicator();
         window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function updateTabIndicator() {
+        const nav = $(".strategy-tabs");
+        const active = $(".nav-tab.active");
+        if (!nav || !active) return;
+        const navRect = nav.getBoundingClientRect();
+        const tabRect = active.getBoundingClientRect();
+        nav.style.setProperty("--tab-x", `${tabRect.left - navRect.left}px`);
+        nav.style.setProperty("--tab-w", `${tabRect.width}px`);
+    }
+
+    let wsConnected = false;
+    function updateFreshness() {
+        const el = $("#data-freshness");
+        if (!el) return;
+        const kind = $(".nav-tab.active")?.dataset.page === "outcome" ? "outcome" : "grid";
+        const age = dashboardState.age(kind);
+        const view = dashboardState.view(kind);
+        const fresh = age < 6000 && !view?.stale;
+        const reachable = wsConnected || Math.min(dashboardState.age("grid"), dashboardState.age("outcome")) < 6000;
+        const shell = $("#connection-status");
+        shell?.classList.toggle("connected", reachable);
+        const label = shell?.querySelector(".status-text");
+        if (label) label.textContent = wsConnected ? "Connected" : reachable ? "Polling" : "Disconnected";
+        const text = !Number.isFinite(age) ? "Waiting for data" : fresh ? "Updated just now" : `Delayed · ${Math.round(age/1000)}s`;
+        if (el.textContent !== text) el.textContent = text;
+        el.classList.toggle("offline", !reachable);
+        el.classList.toggle("stale", !fresh && Number.isFinite(age));
+        for (const name of ["grid", "outcome"]) {
+            const current = dashboardState.view(name);
+            if (!current) continue;
+            if (name === "outcome" && current.stale !== outcomeState.stale) {
+                outcomeState = current;
+                scheduleDashboardRender(name, current);
+            }
+        }
+        updateDashboardClocks();
+    }
+
+    function updateDashboardClocks() {
+        const outcome = dashboardState.view("outcome");
+        if (outcome) {
+            const text = dashboardState.elapsed("outcome", outcome);
+            setText("outcome-duration", text);
+            setText("outcome-run-duration", text);
+            for (const card of $$("#outcome-bots-list .bot-card")) {
+                const row = outcomeSessions.find((item) => item.session_id === card.dataset.sessionId);
+                const value = row && dashboardState.elapsed("outcome", row);
+                const label = card.querySelector('[data-f="duration"]');
+                if (label && value && label.textContent !== value) label.textContent = value;
+            }
+        }
+        const grid = dashboardState.view("grid");
+        if (grid) setText("grid-run-duration", dashboardState.elapsed("grid", grid));
+    }
+
+    function clearSkeleton(...ids) {
+        ids.forEach((id) => $(`#${id}`)?.removeAttribute("data-skeleton"));
+    }
+
+    function flashButtonSuccess(id) {
+        const button = $(`#${id}`);
+        if (!button) return;
+        const use = button.querySelector("use");
+        const previous = use?.getAttribute("href");
+        button.classList.add("is-success");
+        if (use) use.setAttribute("href", "#icon-check");
+        window.setTimeout(() => {
+            button.classList.remove("is-success");
+            if (use && previous) use.setAttribute("href", previous);
+        }, 1200);
     }
 
     async function fetchJson(url, options = {}) {
         const headers = new Headers(options.headers || {});
         if (apiToken) headers.set("X-API-Token", apiToken);
-        const resp = await fetch(url, { ...options, headers });
+        const apiRead = url.includes("/api/") && !options.method;
+        const controller = apiRead ? new AbortController() : null;
+        const timeout = controller ? setTimeout(() => controller.abort(), 10000) : null;
+        let resp;
         let data = {};
         try {
-            data = await resp.json();
-        } catch {
-            data = {};
+            resp = await fetch(url, { cache: "no-store", ...options, headers, ...(controller ? { signal: controller.signal } : {}) });
+            try { data = await resp.json(); }
+            catch (error) {
+                if (error.name === "AbortError") throw error;
+                throw new Error("Invalid server response");
+            }
+        } finally {
+            if (timeout) clearTimeout(timeout);
         }
         if (resp.status === 401) {
-            lockApp("Code d'accès invalide — entre-le à nouveau.");
-            throw new Error("Code d'accès invalide");
+            lockApp("Invalid access code — please enter it again.");
+            throw new Error("Invalid access code");
         }
         if (!resp.ok) {
             throw new Error(data.message || data.detail || `HTTP ${resp.status}`);
@@ -449,7 +681,7 @@
         if (!container) return;
         const { counts, ordered } = gridDexCounts();
         if (activeGridDex !== "all" && !counts.has(activeGridDex)) activeGridDex = "all";
-        const entries = [["all", "Tous", gridTokens.length],
+        const entries = [["all", "All", gridTokens.length],
             ...ordered.map((dex) => [dex, dex, counts.get(dex)])];
         container.replaceChildren(...entries.map(([dex, label, count]) => {
             const button = document.createElement("button");
@@ -469,42 +701,31 @@
         }));
     }
 
+    let gridTokenOptionsSignature = "";
     function renderTokenOptions(filter = "") {
         const container = $("#grid-token-options");
         if (!container) return;
-        const terms = stripAccents(filter).toLowerCase().split(/\s+/).filter(Boolean);
-        const shown = gridTokens.filter((token) => {
-            if (activeGridDex !== "all" && token.dex !== activeGridDex) return false;
-            if (terms.length === 0) return true;
-            const haystack = stripAccents(
-                `${token.ticker} ${token.name} ${token.symbol} ${token.dex} ${token.key}`
-            ).toLowerCase();
-            return terms.every((term) => haystack.includes(term));
-        });
+        // Rebuilding a closed menu on every selection was pure DOM work; the
+        // picker renders itself when it opens.
+        if (!$("#grid-token-picker")?.classList.contains("open")) return;
 
-        const filtering = terms.length > 0 || activeGridDex !== "all";
-        setText("grid-token-results", filtering
-            ? `${shown.length} résultat${shown.length > 1 ? "s" : ""}`
-            : `${shown.length} marché${shown.length > 1 ? "s" : ""}`);
-
-        if (shown.length === 0) {
-            const empty = document.createElement("div");
-            empty.className = "empty-option";
-            empty.textContent = "Aucun marché trouvé";
-            container.replaceChildren(empty);
-            return;
-        }
-
-        container.replaceChildren(
-            ...shown.map((token, index) => {
+        // Build each catalog once, then filter by toggling visibility. The old
+        // code rebuilt ~1,600 nodes on every open and every keystroke.
+        const signature = gridTokens.map((token) => token.key).join("|");
+        if (signature !== gridTokenOptionsSignature) {
+            gridTokenOptionsSignature = signature;
+            container.replaceChildren(...gridTokens.map((token) => {
                 const button = document.createElement("button");
                 button.type = "button";
                 button.className = "token-option";
                 button.setAttribute("role", "option");
-                button.tabIndex = index === 0 ? 0 : -1;
-                button.setAttribute("aria-selected", token.key === selectedGridToken.key ? "true" : "false");
+                button.tabIndex = -1;
                 button.dataset.token = token.key;
                 button.dataset.dex = token.dex;
+                // Normalised once so typing only scans precomputed text.
+                button.dataset.search = stripAccents(
+                    `${token.ticker} ${token.name} ${token.symbol} ${token.dex} ${token.key}`
+                ).toLowerCase();
 
                 const logo = tokenLogoNode(token);
 
@@ -532,12 +753,37 @@
                 button.append(logo, meta, volume);
                 button.addEventListener("click", (event) => {
                     event.stopPropagation();
-                    setSelectedGridToken(token);
+                    // Close first so selecting does not rebuild the whole list.
                     closeTokenPicker(true);
+                    setSelectedGridToken(token);
                 });
                 return button;
-            })
-        );
+            }));
+        }
+
+        const terms = stripAccents(filter).toLowerCase().split(/\s+/).filter(Boolean);
+        let shown = 0;
+        for (const button of container.querySelectorAll(".token-option")) {
+            const match = (activeGridDex === "all" || button.dataset.dex === activeGridDex)
+                && terms.every((term) => button.dataset.search.includes(term));
+            button.style.display = match ? "" : "none";
+            button.setAttribute("aria-selected", button.dataset.token === selectedGridToken.key ? "true" : "false");
+            button.tabIndex = match && shown === 0 ? 0 : -1;
+            if (match) shown++;
+        }
+        let empty = container.querySelector(".empty-option");
+        if (!empty) {
+            empty = document.createElement("div");
+            empty.className = "empty-option";
+            empty.textContent = "No markets found";
+            container.append(empty);
+        }
+        empty.style.display = shown ? "none" : "";
+
+        const filtering = terms.length > 0 || activeGridDex !== "all";
+        setText("grid-token-results", filtering
+            ? `${shown} result${shown === 1 ? "" : "s"}`
+            : `${shown} market${shown === 1 ? "" : "s"}`);
     }
 
     function openTokenPicker() {
@@ -565,7 +811,7 @@
     /* --------- Outcome market picker (catalogue HIP-4 dynamique) --------- */
     const OUTCOME_EMPTY_MARKET = {
         key: "",
-        name: "Choisir un marché",
+        name: "Select a market",
         logo: "OU",
         logoUrl: "",
         category: "all",
@@ -608,7 +854,7 @@
             name: String(raw?.name || (id ? `Outcome ${id}` : "Outcome")),
             questionTitle: String(raw?.question_title || ""),
             category: String(raw?.category || "other").toLowerCase(),
-            categoryLabel: String(raw?.category_label || raw?.category || "Autres"),
+            categoryLabel: String(raw?.category_label || raw?.category || "Other"),
             subcategory: String(raw?.subcategory || ""),
             sides,
             sideIndex: Number(raw?.side_index ?? 1),
@@ -634,8 +880,8 @@
     function outcomeTriggerSubtitle(market) {
         if (!market || !market.key) {
             return outcomeMarkets.length > 0
-                ? `${outcomeMarkets.length} marchés · deployer out`
-                : "catalogue HIP-4 · out";
+                ? `${outcomeMarkets.length} markets · deployer out`
+                : "HIP-4 catalog · out";
         }
         const parts = [];
         if (market.questionTitle) parts.push(market.questionTitle);
@@ -643,11 +889,11 @@
         const sideIndex = selectedOutcomeSide() === "yes" ? 0 : 1;
         const prob = outcomeProbability(market, sideIndex);
         parts.push(`${sideIndex === 0 ? "Yes" : "No"}${prob !== "—" ? ` ${prob}` : ""}`);
-        return parts.join(" · ") || "marché HIP-4";
+        return parts.join(" · ") || "HIP-4 market";
     }
 
     function outcomeOptionSubtitle(market) {
-        if (!market.key) return "Choisir un marché précis";
+        if (!market.key) return "Select a specific market";
         if (market.questionTitle) return market.questionTitle;
         const parts = [];
         if (market.underlying) parts.push(market.underlying);
@@ -688,7 +934,7 @@
         });
         const entries = keys.map((key) => [
             key,
-            key === "all" ? "Tous" : outcomeCategoryLabel(key),
+            key === "all" ? "All" : outcomeCategoryLabel(key),
             key === "all" ? outcomeMarkets.length : counts.get(key) || 0,
         ]);
         container.replaceChildren(...entries.map(([key, label, count]) => {
@@ -723,43 +969,31 @@
         updateOutcomeButtons();
     }
 
+    let outcomeMarketOptionsSignature = "";
     function renderOutcomeMarketOptions(filter = "") {
         const container = $("#outcome-market-options");
         if (!container) return;
-        const terms = stripAccents(filter).toLowerCase().split(/\s+/).filter(Boolean);
-        const shown = outcomeMarkets.filter((market) => {
-            if (activeOutcomeCategory !== "all" && market.category !== activeOutcomeCategory) return false;
-            if (terms.length === 0) return true;
-            const haystack = stripAccents(
-                `${market.name} ${market.questionTitle} ${market.categoryLabel} `
-                + `${market.subcategory} ${market.sides.join(" ")} ${market.key} `
-                + `${market.id || ""} ${market.underlying}`
-            ).toLowerCase();
-            return terms.every((term) => haystack.includes(term));
-        });
-        const options = shown;
-        const filtering = terms.length > 0 || activeOutcomeCategory !== "all";
-        setText("outcome-market-results", filtering
-            ? `${shown.length} résultat${shown.length > 1 ? "s" : ""}`
-            : `${shown.length} marché${shown.length > 1 ? "s" : ""}`);
+        if (!$("#outcome-market-picker")?.classList.contains("open")) return;
 
-        if (options.length === 0) {
-            const empty = document.createElement("div");
-            empty.className = "empty-option";
-            empty.textContent = "Aucun marché trouvé";
-            container.replaceChildren(empty);
-            return;
-        }
-
-        container.replaceChildren(
-            ...options.map((market, index) => {
+        // Build the catalog rows once; side changes rebuild because the price
+        // column depends on the selected side.
+        const yes = selectedOutcomeSide() === "yes";
+        const signature = (yes ? "y" : "n") + ":" + outcomeMarkets.map((market) => market.key).join("|");
+        if (signature !== outcomeMarketOptionsSignature) {
+            outcomeMarketOptionsSignature = signature;
+            container.replaceChildren(...outcomeMarkets.map((market) => {
                 const button = document.createElement("button");
                 button.type = "button";
                 button.className = "token-option";
                 button.setAttribute("role", "option");
-                button.tabIndex = index === 0 ? 0 : -1;
-                button.setAttribute("aria-selected", market.key === selectedOutcomeMarket.key ? "true" : "false");
+                button.tabIndex = -1;
                 button.dataset.market = market.key;
+                button.dataset.category = market.category || "other";
+                button.dataset.search = stripAccents(
+                    `${market.name} ${market.questionTitle} ${market.categoryLabel} `
+                    + `${market.subcategory} ${market.sides.join(" ")} ${market.key} `
+                    + `${market.id || ""} ${market.underlying}`
+                ).toLowerCase();
 
                 const logo = tokenLogoNode({ logo: market.logo, logoUrl: market.logoUrl });
 
@@ -781,43 +1015,78 @@
 
                 const price = document.createElement("span");
                 price.className = "token-vol";
-                const yes = selectedOutcomeSide() === "yes";
                 price.textContent = `${yes ? "Yes" : "No"} ${outcomeProbability(market, yes ? 0 : 1)}`;
 
                 meta.append(title, subtitle);
                 button.append(logo, meta, price);
                 button.addEventListener("click", (event) => {
                     event.stopPropagation();
-                    setSelectedOutcomeMarket(market);
                     closeOutcomeMarketPicker(true);
+                    setSelectedOutcomeMarket(market);
                 });
                 return button;
-            })
-        );
+            }));
+        }
+
+        const terms = stripAccents(filter).toLowerCase().split(/\s+/).filter(Boolean);
+        let shown = 0;
+        for (const button of container.querySelectorAll(".token-option")) {
+            const match = (activeOutcomeCategory === "all" || button.dataset.category === activeOutcomeCategory)
+                && terms.every((term) => button.dataset.search.includes(term));
+            button.style.display = match ? "" : "none";
+            button.setAttribute("aria-selected", button.dataset.market === selectedOutcomeMarket.key ? "true" : "false");
+            button.tabIndex = match && shown === 0 ? 0 : -1;
+            if (match) shown++;
+        }
+        let empty = container.querySelector(".empty-option");
+        if (!empty) {
+            empty = document.createElement("div");
+            empty.className = "empty-option";
+            empty.textContent = "No markets found";
+            container.append(empty);
+        }
+        empty.style.display = shown ? "none" : "";
+
+        const filtering = terms.length > 0 || activeOutcomeCategory !== "all";
+        setText("outcome-market-results", filtering
+            ? `${shown} result${shown === 1 ? "" : "s"}`
+            : `${shown} market${shown === 1 ? "" : "s"}`);
+    }
+
+    function applyOutcomeCatalog(data) {
+        const markets = Array.isArray(data?.outcomes) ? data.outcomes.map(normalizeOutcome) : [];
+        if (markets.length === 0) return false;
+        outcomeMarkets = markets;
+        // Fresh probabilities must repaint the open picker's price column.
+        outcomeMarketOptionsSignature = "";
+        outcomeCategories = Array.isArray(data.categories)
+            ? data.categories.filter((category) => category && category.key)
+            : [];
+        outcomeCatalogLoaded = true;
+        activeOutcomeCategory = "all";
+        renderOutcomeCategoryChips();
+        const current = outcomeMarkets.find((market) => market.key === selectedOutcomeMarket.key);
+        setSelectedOutcomeMarket(current || OUTCOME_EMPTY_MARKET);
+        setText("outcome-market-count", `${markets.length} markets`);
+        return true;
     }
 
     async function loadOutcomeMarkets() {
-        setText("outcome-market-count", "Chargement…");
+        const cached = readCatalogCache("outcome");
+        const painted = applyOutcomeCatalog(cached);
+        if (!painted) setText("outcome-market-count", "Loading…");
         try {
             const data = await fetchJson(`${API_BASE}/api/outcomes/markets`);
-            const markets = Array.isArray(data.outcomes) ? data.outcomes.map(normalizeOutcome) : [];
-            if (markets.length === 0) {
-                throw new Error(data.error || "Aucun marché HIP-4 disponible");
+            if (!Array.isArray(data.outcomes) || data.outcomes.length === 0) {
+                throw new Error(data.error || "No HIP-4 markets available");
             }
-            outcomeMarkets = markets;
-            outcomeCategories = Array.isArray(data.categories)
-                ? data.categories.filter((category) => category && category.key)
-                : [];
-            outcomeCatalogLoaded = true;
-            activeOutcomeCategory = "all";
-            renderOutcomeCategoryChips();
-            const current = outcomeMarkets.find((market) => market.key === selectedOutcomeMarket.key);
-            setSelectedOutcomeMarket(current || OUTCOME_EMPTY_MARKET);
-            setText("outcome-market-count", `${markets.length} marchés`);
+            applyOutcomeCatalog(data);
+            writeCatalogCache("outcome", data);
             return true;
         } catch (error) {
+            if (painted) return true;   // keep the cached list until the next refresh
             outcomeCatalogLoaded = false;
-            setText("outcome-market-count", "Indisponible");
+            setText("outcome-market-count", "Unavailable");
             renderOutcomeCategoryChips();
             setSelectedOutcomeMarket(selectedOutcomeMarket);
             showToast("error", "Outcome catalog unavailable", error.message);
@@ -864,7 +1133,8 @@
                 close(true);
                 return;
             }
-            const options = Array.from(menu.querySelectorAll(".token-option"));
+            const options = Array.from(menu.querySelectorAll(".token-option"))
+                .filter((option) => option.style.display !== "none");
             const index = options.indexOf(document.activeElement);
             if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
@@ -887,26 +1157,37 @@
         });
     }
 
+    function applyGridTokenCatalog(data) {
+        const tokens = Array.isArray(data?.tokens) ? data.tokens.map(normalizeToken) : [];
+        if (tokens.length === 0) return false;
+        // Markets sorted by 24h volume descending (then ticker/dex).
+        gridTokens = tokens.sort((a, b) =>
+            (b.dayVolume - a.dayVolume)
+            || a.ticker.localeCompare(b.ticker)
+            || a.dex.localeCompare(b.dex));
+        // Fresh mids/volumes must repaint option subtitles on the next open.
+        gridTokenOptionsSignature = "";
+        const preferred = gridTokens.find((token) => token.key === selectedGridToken.key)
+            || gridTokens.find((token) => token.key === "SP500")
+            || gridTokens[0];
+        activeGridDex = "all";
+        renderDexChips();
+        setSelectedGridToken(preferred);
+        const dexCount = new Set(gridTokens.map((token) => token.dex)).size;
+        setText("grid-token-count", `${gridTokens.length} markets · ${dexCount} dex`);
+        return true;
+    }
+
     async function loadGridTokens() {
-        setText("grid-token-count", "Loading");
+        const cached = readCatalogCache("grid");
+        const painted = applyGridTokenCatalog(cached);
+        if (!painted) setText("grid-token-count", "Loading");
         try {
             const data = await fetchJson(`${API_BASE}/api/grid/tokens`);
-            const tokens = Array.isArray(data.tokens) ? data.tokens.map(normalizeToken) : [];
-            if (tokens.length === 0) return;
-            // Marchés classés par volume 24 h décroissant (puis ticker/dex).
-            gridTokens = tokens.sort((a, b) =>
-                (b.dayVolume - a.dayVolume)
-                || a.ticker.localeCompare(b.ticker)
-                || a.dex.localeCompare(b.dex));
-            const preferred = gridTokens.find((token) => token.key === selectedGridToken.key)
-                || gridTokens.find((token) => token.key === "SP500")
-                || gridTokens[0];
-            activeGridDex = "all";
-            renderDexChips();
-            setSelectedGridToken(preferred);
-            const dexCount = new Set(gridTokens.map((token) => token.dex)).size;
-            setText("grid-token-count", `${gridTokens.length} marchés · ${dexCount} dex`);
+            if (!applyGridTokenCatalog(data)) return;
+            writeCatalogCache("grid", data);
         } catch (error) {
+            if (painted) return;        // keep the cached list until the next refresh
             gridTokens = [selectedGridToken];
             renderDexChips();
             setSelectedGridToken(selectedGridToken);
@@ -915,17 +1196,18 @@
         }
     }
 
-    async function loadInitialStatus() {
-        try {
-            const [grid, outcome] = await Promise.all([
-                fetchJson(`${API_BASE}/api/grid/status`),
-                fetchJson(`${API_BASE}/api/outcomes/status`),
-            ]);
-            updateGridDashboard(grid);
-            updateOutcomeDashboard(outcome);
-        } catch (error) {
-            showToast("error", "Status unavailable", error.message);
-        }
+    let statusRefreshPromise = null;
+    function loadInitialStatus({ silent = false } = {}) {
+        if (statusRefreshPromise) return statusRefreshPromise;
+        statusRefreshPromise = Promise.allSettled([
+            fetchJson(`${API_BASE}/api/grid/status`).then(updateGridDashboard),
+            fetchJson(`${API_BASE}/api/outcomes/status`).then(updateOutcomeDashboard),
+        ]).then((results) => {
+            if (!silent && results.every((result) => result.status === "rejected")) {
+                showToast("error", "Status unavailable", results[0].reason.message);
+            }
+        }).finally(() => { statusRefreshPromise = null; });
+        return statusRefreshPromise;
     }
 
     function connectWebSocket() {
@@ -938,27 +1220,37 @@
             return;
         }
 
-        ws.onopen = () => {
+        const socket = ws;
+        socket.onopen = () => {
+            if (ws !== socket) return;
             setConnectionStatus(true);
-            showToast("success", "WebSocket connected", "Live stats are streaming.");
+            if (hasConnectedOnce) {
+                showToast("success", "Back online", "Live stats are streaming again.");
+            }
+            hasConnectedOnce = true;
             if (reconnectTimer) {
                 clearTimeout(reconnectTimer);
                 reconnectTimer = null;
             }
         };
 
-        ws.onclose = () => {
+        socket.onclose = () => {
+            if (ws !== socket) return;
             setConnectionStatus(false);
-            updateOutcomeDashboard({ ...outcomeState, type: "worldcup_stats", stale: true });
-            showToast("error", "WebSocket disconnected", "Reconnecting automatically.");
+            loadInitialStatus({ silent: true });
+            if (hasConnectedOnce) {
+                showToast("error", "Connection lost", "Reconnecting automatically.");
+            }
             scheduleReconnect();
         };
 
-        ws.onerror = () => {
+        socket.onerror = () => {
+            if (ws !== socket) return;
             setConnectionStatus(false);
         };
 
-        ws.onmessage = (event) => {
+        socket.onmessage = (event) => {
+            if (ws !== socket) return;
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === "grid_stats") updateGridDashboard(data);
@@ -977,6 +1269,10 @@
     }
 
     function updateGridDashboard(data) {
+        if (data?.type === "grid_stats") receiveDashboard("grid", data);
+    }
+
+    function renderGridDashboard(data) {
         setText("grid-run-duration", data.duration || "00:00:00");
 
         const bots = Array.isArray(data.bots) ? data.bots : [];
@@ -992,7 +1288,8 @@
         setText("overview-pnl", formatUSD(net, true));
         setPnLColor($("#overview-pnl"), net);
         setText("overview-cost", volume > 0 && net != null && active.every((bot) => bot.accounting_complete !== false) ? formatUSD(-net / volume * 1e6) : "—");
-        setText("session-count", `${active.length} active${active.length === 1 ? "" : "s"} · ${bots.length} au total`);
+        clearSkeleton("overview-volume", "overview-pnl", "overview-cost");
+        setText("session-count", `${active.length} active · ${bots.length} total`);
         $("#grid-empty-state").hidden = bots.length > 0;
         const runningTokens = bots.filter((b) => b.running).map((b) => b.token);
         const token = runningTokens.length
@@ -1030,8 +1327,8 @@
                   <span class="bot-dot" aria-hidden="true"></span>
                   <strong class="bot-card-token" data-f="title"></strong>
                   <span class="bot-card-duration" data-f="duration">00:00:00</span>
-                  <button class="btn btn-stop bot-card-stop" type="button" data-token="${escapeHtml(b.token)}" aria-label="Arrêter ${escapeHtml(b.token)}">
-                    Arrêter
+                  <button class="btn btn-stop bot-card-stop" type="button" data-token="${escapeHtml(b.token)}" aria-label="Stop ${escapeHtml(b.token)}">
+                    Stop
                   </button>
                 </header>
                 <div class="bot-card-grid">
@@ -1047,8 +1344,12 @@
                   <div class="bot-stat"><span>Actions/h</span><strong data-f="actions-rate">—</strong></div>
                   <div class="bot-stat"><span>Position</span><strong data-f="pos">—</strong></div>
                   <div class="bot-stat"><span>Spread</span><strong data-f="spread">—</strong></div>
+                  <div class="bot-stat" data-mid-quote hidden><span>Opening target bid / ask</span><strong data-f="mid-target">—</strong></div>
+                  <div class="bot-stat" data-mid-quote hidden><span>Live quote bid / ask</span><strong data-f="mid-resting">—</strong></div>
+                  <div class="bot-stat" data-mid-quote hidden><span>Effective distance bid / ask</span><strong data-f="mid-distance">—</strong></div>
+                  <div class="bot-stat" data-mid-quote hidden><span>MID opening reprice step</span><strong data-f="mid-reprice">—</strong></div>
                   <div class="bot-stat"><span>Markout B/A</span><strong data-f="markout">—</strong></div>
-                  <div class="bot-stat"><span>Edge requis / coté</span><strong data-f="edge">—</strong></div>
+                  <div class="bot-stat"><span>Required edge / side</span><strong data-f="edge">—</strong></div>
                 </div>
                 <footer class="bot-card-action" data-f="action"></footer>
               </article>`).join("");
@@ -1057,8 +1358,9 @@
             });
         }
 
+        const cards = new Map(Array.from(container.children).map((card) => [card.dataset.token, card]));
         bots.forEach((b) => {
-            const card = Array.from(container.children).find((item) => item.dataset.token === String(b.token));
+            const card = cards.get(String(b.token));
             if (!card) return;
             const riskNotice = /^(?:max drawdown exceeded|session stop-loss triggered)\b/i.test(String(b.error || "").trim());
             card.classList.toggle("stopped", !b.running);
@@ -1067,11 +1369,12 @@
                 const el = card.querySelector(`[data-f="${f}"]`);
                 if (el && el.textContent !== v) el.textContent = v;
             };
-            const modeLabel = b.strategy === "mid" ? `MID · ${Number(b.offset_bps || 0).toFixed(1)} BPS`
+            const modeLabel = b.strategy === "mid" ? `MID · ${formatMIDBPS(b.offset_bps)}${b.mid_exit_policy === "hold_to_profit" ? " · HOLD PROFIT" : b.mid_protect_exits ? ` · EXIT GUARD ${Number(b.mid_exit_protect_sec || 30)}S` : ""}`
                 : b.strategy === "freqtrade" ? "FREQTRADE"
                 : b.strategy === "bbo" ? "BBO" : "ANCIEN MODE";
-            const stateLabel = b.stale ? "ÉTAT PÉRIMÉ" : b.phase === "failed" ? (b.cleanup_confirmed ? "ÉCHEC · À PLAT" : "ÉCHEC · ARRÊT NON CONFIRMÉ") : b.phase === "stopping" ? "ARRÊT EN COURS" : !b.running ? "ARRÊTÉ" : b.phase === "connecting" ? "CONNEXION" : "LIVE";
-            set("title", `${b.token} · ${modeLabel} · ${stateLabel}`);
+            const stateLabel = b.stale ? "STALE STATE" : b.phase === "failed" ? (b.cleanup_confirmed ? "FAILED · FLAT" : "FAILED · STOP UNCONFIRMED") : b.phase === "stopping" ? "STOPPING" : !b.running ? "STOPPED" : b.phase === "connecting" ? "CONNECTING" : "LIVE";
+            const executionLabel = b.execution_policy === "maker_only_auto" ? ` · MAKER${b.execution_transport === "websocket" ? " / WS" : ""}` : "";
+            set("title", `${b.token} · ${modeLabel}${executionLabel} · ${stateLabel}`);
             set("duration", b.duration || "00:00:00");
             set("mid", formatPrice(b.mid_price));
             set("vol", formatUSD(b.volume_usd));
@@ -1087,9 +1390,21 @@
             set("actions-rate", b.order_actions_per_hour == null ? "—" : Number(b.order_actions_per_hour).toFixed(1));
             set("pos", formatUSD(b.position_usd));
             set("spread", formatBPS(b.spread_bps));
+            card.querySelectorAll("[data-mid-quote]").forEach((el) => { el.hidden = b.strategy !== "mid"; });
+            if (b.strategy === "mid") {
+                const quote = b.mid_quote || {};
+                set("mid-target", formatMIDPair(quote.target_bid, quote.target_ask));
+                set("mid-resting", formatMIDPair(quote.resting_bid, quote.resting_ask));
+                set("mid-distance", formatMIDPair(quote.target_bid_distance_bps, quote.target_ask_distance_bps, formatMIDBPS));
+                const step = formatMIDBPS(quote.reprice_threshold_bps);
+                const ticks = formatMIDNumber(quote.reprice_threshold_ticks);
+                set("mid-reprice", step === "—" && ticks === "—" ? "—"
+                    : `${step} / ${ticks}${ticks === "—" ? "" : Number(quote.reprice_threshold_ticks) === 1 ? " tick" : " ticks"}`);
+            }
             set("markout", `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
             set("edge", b.edge_required_bps ? `${formatBPS(b.edge_required_bps)} / ${formatBPS(b.quote_half_spread_bps)}` : "—");
-            set("action", [b.error, b.cleanup_error].filter(Boolean).join(" · ") || b.warning || b.action || "");
+            const passiveRisk = b.risk_exit_reason ? `Maker exit: ${b.risk_exit_reason}` : "";
+            set("action", [b.error, b.cleanup_error, b.accounting_error].filter(Boolean).join(" · ") || [passiveRisk, b.warning].filter(Boolean).join(" · ") || b.action || "");
             const stopBtn = card.querySelector(".bot-card-stop");
             if (stopBtn) {
                 if (!b.running && document.activeElement === stopBtn) {
@@ -1104,40 +1419,58 @@
     function renderOutcomeSessions(bots) {
         const container = $("#outcome-bots-list");
         if (!container) return;
-        setText("outcome-sessions-count", `${bots.filter((bot) => bot.running).length} actif(s)`);
+        bots = bots.filter((bot) => bot.running || bot.cleanup_confirmed !== true || bot.needs_attention);
+        if ($("#outcome-idle")) $("#outcome-idle").hidden = bots.length > 0;
+        setText("outcome-sessions-count", `${bots.filter((bot) => bot.running).length} active`);
         const keep = new Set(bots.map((bot) => bot.session_id));
-        Array.from(container.children).forEach((card) => {
-            if (!keep.has(card.dataset.sessionId)) {
+        const cards = new Map(Array.from(container.querySelectorAll(".bot-card"))
+            .map((card) => [card.dataset.sessionId, card]));
+        for (const [sessionId, card] of cards) {
+            if (!keep.has(sessionId)) {
                 if (card.contains(document.activeElement)) $("#outcome-sessions-heading")?.focus();
                 card.remove();
+                cards.delete(sessionId);
             }
+        }
+        const marketNameById = new Map();
+        outcomeMarkets.forEach((market) => {
+            const id = Math.floor(Number(String(market.key || "").slice(1)) / 10);
+            if (!Number.isNaN(id)) marketNameById.set(id, market.name);
         });
         bots.forEach((bot) => {
-            let card = Array.from(container.children).find((el) => el.dataset.sessionId === bot.session_id);
+            let card = cards.get(bot.session_id);
             if (!card) {
                 card = document.createElement("article");
                 card.className = "bot-card";
                 card.dataset.sessionId = bot.session_id;
-                card.innerHTML = `<header class="bot-card-head"><span class="bot-dot" aria-hidden="true"></span><strong class="bot-card-token" data-f="title"></strong><span class="bot-card-duration" data-f="duration"></span><button class="btn btn-stop bot-card-stop" type="button">Arrêter</button></header><p class="bot-card-action" data-f="settings"></p><div class="bot-card-grid"><div class="bot-stat"><span>État</span><strong data-f="state"></strong></div><div class="bot-stat"><span>Volume</span><strong data-f="volume_usd"></strong></div><div class="bot-stat"><span>Net PnL</span><strong data-f="net_pnl"></strong></div><div class="bot-stat"><span>Frais</span><strong data-f="fees"></strong></div><div class="bot-stat"><span>Coût / 1M</span><strong data-f="cost_per_1m"></strong></div><div class="bot-stat"><span>Fills</span><strong data-f="fills"></strong></div><div class="bot-stat"><span>Position</span><strong data-f="position_usd"></strong></div></div><footer class="bot-card-action" data-f="error"></footer>`;
+                card.innerHTML = `<header class="bot-card-head"><span class="bot-dot" aria-hidden="true"></span><strong class="bot-card-token" data-f="title"></strong><span class="bot-card-duration" data-f="duration"></span><button class="btn btn-stop bot-card-stop" type="button">Stop</button></header><p class="bot-card-action" data-f="settings"></p><div class="bot-card-grid"><div class="bot-stat"><span>State</span><strong data-f="state"></strong></div><div class="bot-stat"><span>Volume</span><strong data-f="volume_usd"></strong></div><div class="bot-stat"><span>Net PnL</span><strong data-f="net_pnl"></strong></div><div class="bot-stat"><span>Fees</span><strong data-f="fees"></strong></div><div class="bot-stat"><span>Cost / 1M</span><strong data-f="cost_per_1m"></strong></div><div class="bot-stat"><span>Fills</span><strong data-f="fills"></strong></div><div class="bot-stat"><span>Position</span><strong data-f="position_usd"></strong></div></div><footer class="bot-card-action" data-f="error"></footer>`;
                 card.querySelector("button").addEventListener("click", () => stopOutcomeBot(card.dataset.sessionId));
                 container.append(card);
+                cards.set(bot.session_id, card);
             }
-            const set = (key, value) => { card.querySelector(`[data-f="${key}"]`).textContent = value; };
+            const set = (key, value) => {
+                const element = card.querySelector(`[data-f="${key}"]`);
+                if (element.textContent !== String(value)) element.textContent = value;
+            };
             const config = bot.config || {};
-            const name = bot.market_name || outcomeMarkets.find((market) => Math.floor(Number(market.key.slice(1)) / 10) === Math.floor(Number(bot.market?.slice(1)) / 10))?.name || bot.market;
+            const name = bot.market_name || marketNameById.get(Math.floor(Number(String(bot.market || "").slice(1)) / 10)) || bot.market;
             const side = config.outcome_side || (Number(bot.market?.slice(1)) % 10 === 0 ? "yes" : "no");
             set("title", `${name} · ${side === "yes" ? "Yes" : "No"}`);
             set("duration", bot.duration || "00:00:00");
-            set("settings", `${config.exec_mode === "maker" ? "Limit / Maker" : "Market / Taker"} · ordre ${formatUSD(config.order_size_usd)} · plafond ${formatUSD(config.max_position_usd)} · ${config.exec_mode === "maker" ? `spread cible ${config.maker_spread_pct}%` : `spread max ${config.max_spread_pct ?? config.max_spread_bps / 100}%`}`);
-            set("state", bot.stale || outcomeState.stale ? "Données périmées" : ({ connecting: "Démarrage", running: "Actif", recovering: "Vérification · reprise auto", stopping: "Arrêt en cours", stopped: "Arrêt confirmé", failed: bot.cleanup_confirmed ? "Erreur · à plat" : "Arrêt non confirmé" }[bot.phase] || bot.phase));
+            const autoMode = config.selection_mode === "auto";
+            set("settings", `${autoMode ? "Auto flow · " : ""}${config.exec_mode === "maker" ? "Limit / Maker" : "Market / Taker"}${config.two_sided ? " · Bid + Ask" : ""} · order ${formatUSD(config.order_size_usd)} · cap ${formatUSD(config.max_position_usd)} · ${autoMode ? `best bid / ask · rotate on low fills${bot.auto_rotations ? ` · ${bot.auto_rotations} switches` : ""}` : config.exec_mode === "maker" ? `target spread ${config.maker_spread_pct}%` : `max spread ${config.max_spread_pct ?? config.max_spread_bps / 100}%`}`);
+            set("state", bot.stale || outcomeState.stale ? "Stale data" : ({ connecting: "Starting", running: "Active", rotating: "Switching market", blocked: "Verification required", recovering: "Verifying · auto-recovery", stopping: "Stopping", stopped: "Stop confirmed", failed: bot.cleanup_confirmed ? "Error · flat" : "Stop unconfirmed" }[bot.phase] || bot.phase));
             for (const key of ["volume_usd", "net_pnl", "fees", "cost_per_1m", "position_usd"]) set(key, bot.accounting_complete === false ? "—" : formatUSD(bot[key]));
             set("fills", bot.accounting_complete === false ? "—" : String(bot.fills || 0));
-            set("error", [bot.error, bot.recovery_error, bot.cleanup_error].filter(Boolean).join(" · "));
+            const errors = [bot.error, bot.recovery_error, bot.cleanup_error].filter(Boolean);
+            set("error", [...new Set(errors.map(window.ZeusState.errorText)), bot.auto_rotation_reason,
+                !bot.error && !bot.recovery_error ? bot.last_action || bot.status : ""].filter(Boolean).join(" · "));
+            card.querySelector('[data-f="error"]').title = errors.join(" · ");
             card.classList.toggle("stopped", !bot.running);
             card.classList.toggle("failed", bot.phase === "failed");
             setPnLColor(card.querySelector('[data-f="net_pnl"]'), bot.net_pnl);
             const button = card.querySelector("button");
-            button.setAttribute("aria-label", `Arrêter ${name} ${side === "yes" ? "Yes" : "No"}`);
+            button.setAttribute("aria-label", `Stop ${name} ${side === "yes" ? "Yes" : "No"}`);
             if (!bot.running && document.activeElement === button) { card.tabIndex = -1; card.focus({ preventScroll: true }); }
             button.hidden = !bot.running;
             button.disabled = bot.phase === "stopping" || button.getAttribute("aria-busy") === "true";
@@ -1146,6 +1479,10 @@
 
     function updateOutcomeDashboard(data) {
         if (!data || data.type !== "worldcup_stats") return;
+        receiveDashboard("outcome", data);
+    }
+
+    function renderOutcomeDashboard(data) {
         outcomeState = data;
 
         outcomeSessions = Array.isArray(data.bots) ? data.bots : [];
@@ -1156,9 +1493,7 @@
         setText("outcome-fees", data.accounting_complete === false ? "—" : formatUSD(data.fees));
         setText("outcome-cost-1m", data.accounting_complete !== false && data.volume_usd > 0 ? formatUSD(data.cost_per_1m) : "—");
         setText("outcome-fills", data.accounting_complete === false ? "—" : String(data.fills || 0));
-        setText("outcome-mid-price", formatPrice(data.mid_price));
-        setText("outcome-spread-display", formatBPS(data.spread_bps));
-        setText("outcome-position", formatUSD(data.position_usd));
+        clearSkeleton("outcome-pnl", "outcome-duration", "outcome-volume", "outcome-fees", "outcome-cost-1m", "outcome-fills");
 
         const pnl = $("#outcome-pnl");
         if (pnl) {
@@ -1170,10 +1505,10 @@
             outcomeRunning = data.running;
             updateOutcomeButtons();
         }
-        const incident = [data.error, data.recovery_error, data.cleanup_error, data.stale ? "État périmé : arrêt non vérifié." : ""].filter(Boolean).join(" · ");
+        const incident = [...new Set([data.error, data.recovery_error, data.cleanup_error].filter(Boolean).map(window.ZeusState.errorText)), data.stale ? "Live data delayed." : ""].filter(Boolean).join(" · ");
         setFormError("outcome", incident);
         const banner = $("#outcome-run-banner");
-        const stateLabel = data.stale ? "État périmé" : `${data.active_markets || 0} bot(s) Outcome actif(s)`;
+        const stateLabel = data.stale ? "Stale data" : `${data.active_markets || 0} active Outcome bot(s)`;
         if (banner) {
             banner.hidden = !data.running && data.phase !== "failed";
             const title = banner.querySelector("strong");
@@ -1199,7 +1534,7 @@
         offsetInput?.removeAttribute("aria-invalid");
         if (strategy === "mid" && (!Number.isFinite(offset_bps) || offset_bps < 0 || offset_bps >= 10000)) {
             if (offsetError) {
-                offsetError.textContent = "Saisis une distance entre 0 inclus et 10 000 bps exclus.";
+                offsetError.textContent = "Enter a distance from 0 up to (but not including) 10,000 bps.";
                 offsetError.hidden = false;
             }
             offsetInput?.setAttribute("aria-invalid", "true");
@@ -1212,16 +1547,21 @@
 
         try {
             const body = { token, strategy, mode: "live", order_size_usd };
-            if (strategy === "mid") body.offset_bps = offset_bps;
-            await fetchJson(`${API_BASE}/api/grid/start`, {
+            if (strategy === "mid") {
+                body.offset_bps = offset_bps;
+                body.mid_protect_exits = $("#grid-protect-exits")?.checked === true;
+                body.mid_exit_protect_sec = 30;
+            }
+            const response = await fetchJson(`${API_BASE}/api/grid/start`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
             });
-            gridRunning = true;
-            setText("grid-run-token", token);
+            if (response.state) updateGridDashboard(response.state);
+            else await loadInitialStatus({ silent: true });
             updateGridButtons();
-            showToast("info", "Connexion à Hyperliquid", `${token} · le démarrage est en cours. L'état et les erreurs restent visibles dans la carte.`);
+            flashButtonSuccess("grid-start-btn");
+            showToast("info", "Connecting to Hyperliquid", `${token} · starting now. State and errors stay visible in the card.`);
         } catch (error) {
             setFormError("grid", error.message);
             showToast("error", "Market maker start failed", error.message);
@@ -1235,13 +1575,15 @@
         // token précis → stoppe ce bot; sans token → stoppe TOUS les bots.
         setBusy("grid-stop-btn", true);
         try {
-            await fetchJson(`${API_BASE}/api/grid/stop`, {
+            const response = await fetchJson(`${API_BASE}/api/grid/stop`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(token ? { token } : {}),
             });
+            if (response.state) updateGridDashboard(response.state);
+            else await loadInitialStatus({ silent: true });
             showToast("info", token ? `Bot ${token} stopped` : "All bots stopped",
-                "Cancel all + flatten market exécutés par le bot avant l'arrêt.");
+                "Manual stop: the bot cancels every open order and closes the position reduce-only before exiting.");
         } catch (error) {
             showToast("error", "Stop failed", error.message);
         } finally {
@@ -1251,26 +1593,68 @@
     }
 
     async function startOutcomeBot() {
+        if (outcomeAutoPending) { cancelPendingOutcome(); return; }
+        const auto = outcomeIsAuto();
+        const selection_mode = auto ? "auto" : "manual";
+        const auto_max_spread_bps = Number($("#outcome-auto-spread")?.value || 10);
         const exec_mode = $("#outcome-exec-mode")?.value || "taker";
         const maker_spread_pct = Number.parseFloat($("#outcome-maker-spread")?.value);
         const order_size_usd = Number.parseFloat($("#outcome-order-size")?.value) || 50;
         // En %, même convention que --max-spread-pct (0.02 = 0.02% = 2 bps)
         const max_spread_pct = Number.parseFloat($("#outcome-spread")?.value);
         const max_position_usd = Number.parseFloat($("#outcome-max-pos")?.value) || 250;
-        const market = $("#outcome-market")?.value || "";
+        let market = auto ? outcomeAutoSnapshot?.candidates?.[0]?.market : $("#outcome-market")?.value || "";
         const outcome_side = selectedOutcomeSide();
-        if (!market) { setFormError("outcome", "Choisis un marché précis."); return; }
+        if (!auto && !market) { openOutcomeMarketPicker(); return; }
 
         if (!validateMin("outcome", [
             { selector: "#outcome-order-size", min: 10, fallback: order_size_usd, message: "Order USD must be at least 10." },
             { selector: "#outcome-max-pos", min: 10, fallback: max_position_usd, message: "Max Pos USD must be at least 10." },
-            ...(exec_mode === "taker" ? [{ selector: "#outcome-spread", min: 0, message: "Le spread doit être un nombre positif ou nul." }] : []),
-            ...(exec_mode === "maker" ? [{ selector: "#outcome-maker-spread", min: 0, message: "Le Spread Limit doit être un nombre positif ou nul." }] : []),
+            ...(exec_mode === "taker" ? [{ selector: "#outcome-spread", min: 0, message: "Spread must be a positive number or zero." }] : []),
+            ...(exec_mode === "maker" && !auto ? [{ selector: "#outcome-maker-spread", min: 0, message: "Spread limit must be a positive number or zero." }] : []),
+            ...(auto ? [{ selector: "#outcome-auto-spread", min: .01, message: "Auto spread must be between 0.01 and 100 bps." }] : []),
         ])) {
             showToast("error", "Check Outcome settings", "Correct the highlighted field before starting.");
             return;
         }
 
+        if (auto && auto_max_spread_bps > 100) { setFormError("outcome", "Auto spread must be between 0.01 and 100 bps."); return; }
+        const payload = { selection_mode, auto_max_spread_bps, two_sided: exec_mode === "maker", auto_rotate: auto,
+            ...(auto ? { auto_rotation_after_sec: 60 } : {}),
+            order_size_usd, ...(exec_mode === "taker" ? { max_spread_pct } : { maker_spread_pct }), max_position_usd, market, exec_mode, outcome_side };
+        if (auto) {
+            outcomeAutoPending = Object.freeze(payload);
+            updateOutcomeButtons();
+            await launchPendingOutcome();
+            if (outcomeAutoPending) refreshOutcomeAuto();
+            return;
+        }
+        await submitOutcomeStart(payload);
+    }
+
+    function cancelPendingOutcome() {
+        outcomeAutoPending = null;
+        outcomeAutoEpoch++; // Discard a preview already in flight.
+        updateOutcomeButtons();
+    }
+
+    async function launchPendingOutcome() {
+        const payload = outcomeAutoPending;
+        const snap = outcomeAutoSnapshot;
+        if (!payload || !snap?.ready || Date.now()/1000-snap.updated_at >= 20
+                || outcomeState.stale || outcomeState.can_start === false
+                || snap.side && snap.side !== payload.outcome_side) return;
+        const candidate = snap.candidates?.find((item) => !outcomeSessions.some((bot) =>
+            bot.market === item.market && (bot.running || bot.cleanup_confirmed !== true)));
+        if (!candidate) return;
+        outcomeAutoPending = null; // Exactly one launch per explicit Start Auto.
+        await submitOutcomeStart({ ...payload, market: candidate.market });
+    }
+
+    async function submitOutcomeStart(payload) {
+        let { market } = payload;
+        const { selection_mode, auto_max_spread_bps, order_size_usd, max_position_usd,
+            exec_mode, outcome_side, maker_spread_pct, max_spread_pct } = payload;
         setBusy("outcome-start-btn", true);
         updateOutcomeButtons();
 
@@ -1278,14 +1662,14 @@
             const started = await fetchJson(`${API_BASE}/api/outcomes/start`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ order_size_usd, ...(exec_mode === "taker" ? { max_spread_pct } : { maker_spread_pct }), max_position_usd, market, exec_mode, outcome_side }),
+                body: JSON.stringify(payload),
             });
+            market = started.market || market;
             const marketName = outcomeMarkets.find((item) => Math.floor(Number(item.key.slice(1)) / 10) === Math.floor(Number(market.slice(1)) / 10))?.name || market;
-            const placeholder = { ...started, config: { market, exec_mode, outcome_side, maker_spread_pct, max_spread_pct, order_size_usd, max_position_usd }, running: true, phase: "connecting", cleanup_confirmed: false, can_start: false, market_name: marketName };
-            updateOutcomeDashboard({ ...outcomeState, type: "worldcup_stats", running: true, active_markets: outcomeSessions.filter((bot) => bot.running).length + 1, bots: [...outcomeSessions.filter((bot) => bot.market !== market), placeholder] });
-            updateOutcomeDashboard(await fetchJson(`${API_BASE}/api/outcomes/status`));
+            updateOutcomeDashboard(started.state || await fetchJson(`${API_BASE}/api/outcomes/status`));
             const marketTxt = `${marketName} · ${outcome_side === "yes" ? "Yes" : "No"}`;
-            showToast("success", "Démarrage du bot Outcome", `${marketTxt} · ${exec_mode === "maker" ? `Limit / Maker · spread cible ${maker_spread_pct}%` : `Market / Taker · spread < ${max_spread_pct}%`}`);
+            flashButtonSuccess("outcome-start-btn");
+            showToast("success", "Starting bot", `${marketTxt} · ${exec_mode === "maker" ? "Maker" : "Taker"}`);
         } catch (error) {
             setFormError("outcome", error.message);
             showToast("error", "Outcome start failed", error.message);
@@ -1296,15 +1680,20 @@
     }
 
     async function stopOutcomeBot(sessionId = null) {
+        if (!sessionId && outcomeAutoPending) {
+            cancelPendingOutcome();
+            if (!outcomeRunning) { showToast("info", "Auto canceled", ""); return; }
+        }
         const button = sessionId ? Array.from($("#outcome-bots-list")?.children || []).find((card) => card.dataset.sessionId === sessionId)?.querySelector("button") : $("#outcome-stop-btn");
         if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
         try {
             const response = await fetchJson(`${API_BASE}/api/outcomes/stop`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sessionId ? { session_id: sessionId } : {}) });
             const state = response.state || await fetchJson(`${API_BASE}/api/outcomes/status`);
             updateOutcomeDashboard(state);
-            const targets = (state.bots || []).filter((bot) => !sessionId || bot.session_id === sessionId);
-            if (!targets.length || targets.some((bot) => bot.running || bot.cleanup_confirmed !== true)) throw new Error("Arrêt non confirmé : vérifier les ordres et la position.");
-            showToast("info", "Arrêt confirmé", sessionId ? "Le bot sélectionné est arrêté." : "Tous les bots Outcome sont arrêtés.");
+            const verified = response.stopped_session_ids;
+            const targets = (state.bots || []).filter((bot) => !sessionId || (verified ? verified.includes(bot.session_id) : bot.session_id === sessionId));
+            if ((!targets.length && !verified) || targets.some((bot) => bot.running || bot.cleanup_confirmed !== true)) throw new Error("Stop not confirmed: verify orders and position.");
+            showToast("info", "Stop confirmed", sessionId ? "The selected bot is stopped." : "All Outcome bots are stopped.");
         } catch (error) {
             showToast("error", "Outcome stop failed", error.message);
         } finally {
@@ -1312,6 +1701,40 @@
             updateOutcomeButtons();
             renderOutcomeSessions(outcomeSessions);
         }
+    }
+
+    // ------------------------------------------------------- stop confirmation
+    let pendingStopScope = null;
+
+    function openStopConfirm(scope) {
+        const dialog = $("#confirm-stop");
+        if (!dialog) return;
+        pendingStopScope = scope;
+        const isOutcome = scope === "outcome";
+        const count = isOutcome
+            ? outcomeSessions.filter((bot) => bot.running).length
+            : gridSessions.filter((bot) => bot.running).length;
+        const armed = isOutcome && Boolean(outcomeAutoPending);
+        const noun = isOutcome ? "Outcome" : "market-making";
+        setText("confirm-stop-title", armed && count === 0 ? "Cancel Auto?" : `Stop all ${noun} sessions?`);
+        setText("confirm-stop-message", armed ? "Cancel the pending launch and stop any active Outcome sessions." : count > 0
+            ? `${count} active ${noun} session${count === 1 ? "" : "s"} will be stopped. This cancels every open order and closes each position reduce-only.`
+            : `No active ${noun} sessions right now.`);
+        const accept = $("#confirm-stop-accept");
+        if (accept) accept.textContent = armed && count === 0 ? "Cancel Auto" : count > 0 ? `Stop ${count}` : "Stop all";
+        dialog.showModal();
+        requestAnimationFrame(() => $("#confirm-stop-cancel")?.focus());
+    }
+
+    function closeStopConfirm() {
+        const dialog = $("#confirm-stop");
+        if (dialog?.open) dialog.close();
+        pendingStopScope = null;
+    }
+
+    function openMetricsGuide() {
+        const dialog = $("#metrics-guide");
+        if (dialog && !dialog.open) dialog.showModal();
     }
 
     // ------------------------------------------------------------ access gate
@@ -1361,7 +1784,7 @@
         const input = $("#access-code-input");
         const code = (input?.value || "").trim();
         if (!code) {
-            showAccessGate("Entre le code d'accès.");
+            showAccessGate("Enter the access code.");
             return;
         }
         setBusy("access-code-submit", true);
@@ -1370,7 +1793,7 @@
             await fetchJson(`${API_BASE}/api/health`);
             try { localStorage.setItem(TOKEN_STORAGE_KEY, code); } catch { /* private mode */ }
             hideAccessGate();
-            showToast("success", "Accès autorisé", "Code mémorisé sur ce navigateur.");
+            showToast("success", "Access granted", "Code saved in this browser.");
             bootApp();
             if (ws) {
                 try { ws.close(); } catch { /* reconnexion avec token */ }
@@ -1378,15 +1801,15 @@
             }
             connectWebSocket();
         } catch (error) {
-            if (String(error.message).includes("invalide")) {
+            if (String(error.message).includes("Invalid access code")) {
                 // 401: lockApp a déjà réaffiché la porte avec le message.
             } else {
                 // Backend injoignable: on mémorise quand même — un 401 plus
                 // tard re-verrouillera si le code est faux.
                 try { localStorage.setItem(TOKEN_STORAGE_KEY, code); } catch { /* private mode */ }
                 hideAccessGate();
-                showToast("error", "Backend injoignable",
-                    "Code mémorisé. Utilise le bouton Backend pour retester la connexion.");
+                showToast("error", "Backend unreachable",
+                    "Code saved. Use the Reconnect button to test the connection again.");
                 bootApp();
             }
         } finally {
@@ -1398,14 +1821,14 @@
         setBusy("backend-connect-btn", true);
         try {
             await fetchJson(`${API_BASE}/api/health`);
-            showToast("success", "Backend en ligne", API_BASE);
+            showToast("success", "Backend online", API_BASE);
             if (!appBooted) bootApp();
             if (!ws || (ws.readyState !== WebSocket.OPEN && ws.readyState !== WebSocket.CONNECTING)) {
                 connectWebSocket();
             }
             loadInitialStatus();
         } catch (error) {
-            showToast("error", "Backend injoignable", `${API_BASE} — ${error.message}`);
+            showToast("error", "Backend unreachable", `${API_BASE} — ${error.message}`);
         } finally {
             setBusy("backend-connect-btn", false);
         }
@@ -1474,10 +1897,12 @@
             else openTokenPicker();
         });
 
+        const renderTokenOptionsSoon = debounce((value) => renderTokenOptions(value));
+        const renderOutcomeMarketOptionsSoon = debounce((value) => renderOutcomeMarketOptions(value));
         $("#grid-token-search")?.addEventListener("input", (event) => {
             const clear = $("#grid-token-search-clear");
             if (clear) clear.hidden = !event.target.value;
-            renderTokenOptions(event.target.value);
+            renderTokenOptionsSoon(event.target.value);
         });
 
         $("#grid-token-search-clear")?.addEventListener("click", () => {
@@ -1507,7 +1932,7 @@
         $("#outcome-market-search")?.addEventListener("input", (event) => {
             const clear = $("#outcome-market-search-clear");
             if (clear) clear.hidden = !event.target.value;
-            renderOutcomeMarketOptions(event.target.value);
+            renderOutcomeMarketOptionsSoon(event.target.value);
         });
 
         $("#outcome-market-search-clear")?.addEventListener("click", () => {
@@ -1525,9 +1950,53 @@
         setSelectedOutcomeMarket(selectedOutcomeMarket);
 
         $("#grid-start-btn")?.addEventListener("click", startGridBot);
-        $("#grid-stop-btn")?.addEventListener("click", () => stopGridBot());
-        $("#outcome-start-btn")?.addEventListener("click", startOutcomeBot);
-        $("#outcome-stop-btn")?.addEventListener("click", () => stopOutcomeBot());
+        $("#grid-stop-btn")?.addEventListener("click", () => openStopConfirm("grid"));
+        $("#outcome-selection-mode")?.addEventListener("change", changeOutcomeSelection);
+        ["outcome-auto-spread", "outcome-order-size"].forEach((id) => $(`#${id}`)?.addEventListener("input", () => {
+            if (outcomeIsAuto()) changeOutcomeSelection();
+        }));
+        $$("input[name='outcome-side']").forEach((input) => input.addEventListener("change", () => {
+            if (outcomeIsAuto()) changeOutcomeSelection();
+        }));
+        window.setInterval(() => { if (appBooted && outcomeIsAuto()) refreshOutcomeAuto(); }, 10000);
+        $("#outcome-start-btn")?.addEventListener("click", (event) => {
+            if (!outcomeIsAuto() && !selectedOutcomeMarket.key) event.stopPropagation();
+            startOutcomeBot();
+        });
+        $("#outcome-stop-btn")?.addEventListener("click", () => openStopConfirm("outcome"));
+
+        $("#confirm-stop-cancel")?.addEventListener("click", closeStopConfirm);
+        $("#confirm-stop-accept")?.addEventListener("click", async () => {
+            const scope = pendingStopScope;
+            closeStopConfirm();
+            if (scope === "grid") await stopGridBot();
+            else if (scope === "outcome") await stopOutcomeBot();
+        });
+        $("#confirm-stop")?.addEventListener("cancel", () => { pendingStopScope = null; });
+        $("#confirm-stop")?.addEventListener("click", (event) => {
+            if (event.target === event.currentTarget) closeStopConfirm();
+        });
+
+        $$(".metrics-guide-btn").forEach((button) => button.addEventListener("click", openMetricsGuide));
+        $("#metrics-guide-close")?.addEventListener("click", () => $("#metrics-guide")?.close());
+        $("#metrics-guide")?.addEventListener("click", (event) => {
+            if (event.target === event.currentTarget) event.currentTarget.close();
+        });
+        $("#grid-empty-cta")?.addEventListener("click", () => openTokenPicker());
+
+        window.addEventListener("resize", updateTabIndicator);
+        document.fonts?.ready.then(updateTabIndicator);
+        window.setInterval(updateFreshness, 1000);
+        window.setInterval(() => {
+            if (appBooted && !document.hidden && (dashboardState.age("grid") > 2000 || dashboardState.age("outcome") > 2000)) {
+                loadInitialStatus({ silent: true });
+            }
+        }, 3000);
+        document.addEventListener("visibilitychange", () => {
+            if (document.hidden) return;
+            flushDashboardRenders();
+            if (appBooted) { loadInitialStatus({ silent: true }); connectWebSocket(); }
+        });
         $("#outcome-exec-mode")?.addEventListener("change", updateOutcomeExecutionMode);
         $$("input[name='outcome-side']").forEach((input) => input.addEventListener("change", () => setSelectedOutcomeMarket(selectedOutcomeMarket)));
         $("#sessions-reconcile-btn")?.addEventListener("click", async () => {
@@ -1535,8 +2004,8 @@
             try {
                 const state = await fetchJson(`${API_BASE}/api/sessions/reconcile`, { method: "POST" });
                 await loadInitialStatus();
-                showToast(state.can_start ? "success" : "error", "Vérification de l’arrêt", state.can_start ? "Ordres et positions vérifiés. Relance manuelle possible." : "Arrêt non confirmé : " + state.unresolved.join(", "));
-            } catch (error) { showToast("error", "Vérification impossible", error.message); }
+                showToast(state.can_start ? "success" : "error", "Stop verification", state.can_start ? "Orders and positions verified. Manual restart is possible." : "Stop not confirmed: " + state.unresolved.join(", "));
+            } catch (error) { showToast("error", "Verification failed", error.message); }
             finally { setBusy("sessions-reconcile-btn", false); }
         });
 
@@ -1545,6 +2014,8 @@
         setSelectedGridToken(selectedGridToken);
         updateGridButtons();
         updateOutcomeButtons();
+        requestAnimationFrame(updateTabIndicator);
+        updateFreshness();
 
         $("#access-code-submit")?.addEventListener("click", submitAccessCode);
         $("#access-code-input")?.addEventListener("keydown", (event) => {

@@ -1608,3 +1608,11 @@ unknown rejects and ambiguous acknowledgements still block execution. Real
 exchange rejection reasons are preserved in diagnostics. Cleanup remains
 unconfirmed while any real position or order remains; this change never hides a
 residual position or increases the configured close slippage.
+
+
+A `Cannot modify canceled or filled order` rejection uses the same gated
+read-only reconciliation and two-second cooldown. The old OID must be confirmed
+absent; otherwise execution remains blocked. Only that obsolete quote is removed
+from tracking; other resting quotes survive. No cancel, liquidation or immediate
+replacement is sent for a verified terminal-order race. The running session does
+not enter FAILED for this case. Previously stopped sessions require manual Start.

@@ -11,6 +11,28 @@ from zeus.bots.worldcup import BotConfig, HyperliquidSpreadBot, MarketSpec, Mark
 
 
 class OutcomeExecutionTests(unittest.TestCase):
+    def test_headless_worker_never_prompts_even_with_inherited_terminal(self):
+        bot = self.configured_bot("maker")
+        with patch.dict("os.environ", {"OUTCOME_HEADLESS": "1"}), \
+             patch("sys.stdin.isatty", return_value=True), patch("builtins.input") as prompt:
+            bot._launch_prompt()
+            prompt.assert_not_called()
+
+    def test_headless_run_reaches_order_loop_without_prompting(self):
+        bot = self.configured_bot("maker")
+        bot._launch_prompt = Mock(side_effect=AssertionError("Invisible console prompt"))
+        bot._cleanup_snapshot = Mock(return_value=[])
+        bot.sync_account = Mock(return_value=True)
+        bot.start_ws = Mock()
+        bot.refresh_rest_bbos = Mock()
+        bot._trading_loop = Mock()
+        bot.shutdown = Mock()
+        with patch.dict("os.environ", {"OUTCOME_HEADLESS": "1"}):
+            bot.run()
+        bot._launch_prompt.assert_not_called()
+        bot._trading_loop.assert_called_once()
+        self.assertEqual(bot.safety.phase, "running")
+
     def test_api_modes_and_legacy_default(self):
         server.app.dependency_overrides[server._require_api_token] = lambda: None
         try:
@@ -110,6 +132,25 @@ class OutcomeExecutionTests(unittest.TestCase):
             else:
                 self.assertGreater(req["limit_px"], 0.401)
 
+    def test_auto_spread_guard_blocks_new_entries_but_allows_inventory_exit(self):
+        bot = self.configured_bot("maker")
+        bot.cfg.auto_max_spread_bps = 10
+        state = self.state()
+        self.assertIn("auto spread", bot.risk_block_reason(state))
+        self.assertIsNone(bot.risk_block_reason(state, closing_inventory=True))
+        bot.cfg.auto_max_spread_bps = None
+        self.assertIsNone(bot.risk_block_reason(state))
+
+    def test_five_decimal_touch_reaches_maker_order_unchanged(self):
+        bot = self.configured_bot("maker")
+        state = self.state()
+        state.update_bbo(0.34833, 0.34834)
+        buy, _ = bot.desired_spot_no_order(state)
+        state.position = 100
+        sell, _ = bot.desired_spot_no_order(state)
+        self.assertEqual(buy["limit_px"], .34833)
+        self.assertEqual(sell["limit_px"], .34834)
+
     def test_manual_percent_spread_tightens_both_prices(self):
         bot = self.configured_bot("maker", maker_spread_pct=0.05)
         state = self.state()
@@ -127,8 +168,8 @@ class OutcomeExecutionTests(unittest.TestCase):
         bot = self.configured_bot("maker", maker_spread_pct=0.005)
         state = self.state()
         state.update_bbo(0.4999, 0.5)
-        self.assertEqual(bot.maker_quote_px(state, True), state.bid)
-        self.assertEqual(bot.maker_quote_px(state, False), state.ask)
+        self.assertEqual(bot.maker_quote_px(state, True), 0.49993)
+        self.assertEqual(bot.maker_quote_px(state, False), 0.49997)
         bot.cfg.maker_spread_pct = 0
         self.assertLess(bot.maker_quote_px(state, True), state.ask)
         self.assertGreater(bot.maker_quote_px(state, False), state.bid)

@@ -2822,12 +2822,13 @@ func (le *LiveExecutor) modifyWithCallbacks(ctx context.Context, coin string, tr
 			return placeOrderResult{}, gateErr
 		}
 		order, err := send(tracked.OID, coin, side, priceStr, sizeStr, opts...)
-		if err == nil && order != nil {
+		confirmed := err == nil && modifyAckConfirmed(order, tracked.OID)
+		if err == nil && order != nil && order.OID > 0 {
 			le.rememberOrder(coin, order.OID)
 		}
-		if err == nil && isExpectedALOReject(order, "ALO") {
+		if err == nil && (isExpectedALOReject(order, "ALO") || isMissingModifyReject(order)) {
 			// Keep the action gate held while verifying the old order and position.
-			result, reconcileErr := reconcile(coin, tracked.OID)
+			result, reconcileErr := recoverModifyReject(order, coin, tracked.OID, reconcile)
 			release()
 			le.stats.RecordExchange()
 			return result, reconcileErr
@@ -2835,14 +2836,14 @@ func (le *LiveExecutor) modifyWithCallbacks(ctx context.Context, coin string, tr
 		if le.cfg != nil && le.cfg.ZeusMode && ctx.Value(cleanupKey{}) != true {
 			if err != nil {
 				le.failExecution(err)
-			} else if order == nil || !(order.IsFilled() || order.IsResting()) || order.OID <= 0 {
+			} else if !confirmed {
 				le.failExecution(orderAckError("modify", order))
 			}
 		}
 		release()
 		le.stats.RecordExchange()
 		if err == nil {
-			if le.cfg != nil && le.cfg.ZeusMode && (order == nil || !(order.IsFilled() || order.IsResting()) || order.OID <= 0) {
+			if le.cfg != nil && le.cfg.ZeusMode && !confirmed {
 				return placeOrderResult{}, fmt.Errorf("order rejected or invalid acknowledgement")
 			}
 			le.recordUpstreamSuccess()
@@ -2854,10 +2855,16 @@ func (le *LiveExecutor) modifyWithCallbacks(ctx context.Context, coin string, tr
 				}
 				return placeOrderResult{}, fmt.Errorf("modify rejected: status=%s", order.Status)
 			}
-			result := placeOrderResult{}
+			// A bare modify acknowledgement carries no OID: the exchange keeps
+			// the original order ID, so report the tracked one.
+			oid := tracked.OID
 			if order != nil && order.OID > 0 {
-				result.oid = order.OID
-				le.rememberOrder(coin, order.OID)
+				oid = order.OID
+			}
+			result := placeOrderResult{}
+			if oid > 0 {
+				result.oid = oid
+				le.rememberOrder(coin, oid)
 			}
 			return result, nil
 		}

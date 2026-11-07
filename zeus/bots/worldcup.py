@@ -19,10 +19,12 @@ from __future__ import annotations
 
 from zeus import PROJECT_ROOT
 from zeus.safety import SafetyLatch, account_snapshot, finite, confirmed_client_order, safe_error, supervisor_alive
+from zeus.network import retry_read, StartupReadCancelled
 from contextlib import nullcontext
 
 import argparse
 import math
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 import os
 import signal
 import sys
@@ -186,11 +188,27 @@ def round_px_wire(px: float) -> float:
 
 
 def round_outcome_buy_px(px: float) -> float:
-    return min(0.999, max(0.001, math.ceil(px * 10_000.0 - 1e-9) / 10_000.0))
+    return round_outcome_px(px, ROUND_CEILING)
 
 
 def round_outcome_sell_px(px: float) -> float:
-    return min(0.999, max(0.001, math.floor(px * 10_000.0 + 1e-9) / 10_000.0))
+    return round_outcome_px(px, ROUND_FLOOR)
+
+
+def round_outcome_px(px: float, direction) -> float:
+    """Spot precision: five significant figures, at most eight decimals.
+
+    The caller chooses rounding direction (passive buys use FLOOR). Preserve
+    five-decimal touches such as 0.34833 and finer ticks at lower prices.
+    """
+    if not math.isfinite(px) or px <= 0:
+        raise ValueError("Outcome price must be finite and positive")
+    value = min(Decimal("0.99999"), max(Decimal("0.00000001"), Decimal(str(px))))
+    tick = Decimal(1).scaleb(max(-8, value.adjusted() - 4))
+    # Remove arithmetic noise below a billionth of a tick, not a price step.
+    noise = tick * Decimal("0.000000001")
+    value += -noise if direction == ROUND_CEILING else noise
+    return float(value.quantize(tick, rounding=direction))
 
 
 @dataclass
@@ -228,6 +246,11 @@ class BotConfig:
     maker_offset_pct: float = 0.0  # % derrière le touch, même convention que max_spread_pct (0.02 = 0.02%)
     maker_opening_rest_sec: float = 2.0  # Preserve opening queue; risk pulls/exits bypass.
     maker_spread_pct: Optional[float] = None  # Total quote spread in percent; None keeps CLI offset pricing.
+    auto_max_spread_bps: Optional[float] = None
+    two_sided: bool = False
+    full_size_quotes: bool = False
+    rotation_file: Optional[str] = None
+    risk_pnl_carry: float = 0.0
     safety_file: Optional[str] = None
     stop_file: Optional[str] = None
     funds_root: Optional[str] = None
@@ -264,6 +287,10 @@ class MarketState:
     ask_oid: Optional[int] = None
     quoted_bid: float = 0.0
     quoted_ask: float = 0.0
+    bid_quantity: float = 0.0
+    ask_quantity: float = 0.0
+    bid_order_ts: float = 0.0
+    ask_order_ts: float = 0.0
     position: float = 0.0
     available_position: float = 0.0
     unrealized_pnl: float = 0.0
@@ -357,11 +384,13 @@ class HyperliquidSpreadBot:
         self.recovery_next = 0.0
         self.recovery_delay = 2.0
 
-        perp_dexs = [cfg.perp_dex] if cfg.perp_dex else None
-        self.info = Info(cfg.base_url, skip_ws=True, perp_dexs=perp_dexs, timeout=10)
+        perp_dexs = [cfg.perp_dex] if cfg.perp_dex and not cfg.worldcup else None
+        self.info = self._startup_read("SDK metadata", lambda: Info(
+            cfg.base_url, skip_ws=True, perp_dexs=perp_dexs, timeout=10))
         self.outcome_meta: Optional[Dict[str, Any]] = None
         if cfg.worldcup:
-            self.outcome_meta = self.info.post("/info", {"type": "outcomeMeta"})
+            self.outcome_meta = self._startup_read("Outcome metadata", lambda: self.info.post(
+                "/info", {"type": "outcomeMeta"}))
             self.patch_outcome_assets(self.info, self.outcome_meta)
         self.exchange: Optional[Exchange] = None
         self.wallet = None
@@ -383,6 +412,22 @@ class HyperliquidSpreadBot:
         except ValueError:
             pass
 
+    def _startup_cancelled(self):
+        return (not self.running or self.safety.stopped.is_set()
+                or bool(self.cfg.stop_file and os.path.exists(self.cfg.stop_file)) or not supervisor_alive())
+
+    def _startup_retry_wait(self, delay):
+        deadline = time.monotonic()+delay
+        while time.monotonic() < deadline:
+            if self._startup_cancelled():
+                raise StartupReadCancelled("Startup cancelled before trading")
+            self.wake.wait(min(.1, max(0, deadline-time.monotonic())))
+
+    def _startup_read(self, label, operation):
+        # Only constructors/metadata GET-equivalent reads use this helper.
+        # A trading acknowledgement is never resent through this path.
+        return retry_read(label, operation, cancelled=self._startup_cancelled, sleep=self._startup_retry_wait)
+
     def _init_exchange(self, perp_dexs: Optional[List[str]]) -> None:
         if not self.cfg.private_key or not self.cfg.account_address:
             raise SystemExit(
@@ -394,13 +439,13 @@ class HyperliquidSpreadBot:
             import eth_account
 
             self.wallet = eth_account.Account.from_key(self.cfg.private_key)
-            self.exchange = Exchange(
+            self.exchange = self._startup_read("Exchange SDK metadata", lambda: Exchange(
                 self.wallet,
                 base_url=self.cfg.base_url,
                 account_address=self.cfg.account_address,
                 perp_dexs=perp_dexs,
                 timeout=10,
-            )
+            ))
             if self.cfg.worldcup and self.outcome_meta:
                 self.patch_outcome_assets(self.exchange.info, self.outcome_meta)
         except Exception as exc:
@@ -436,7 +481,7 @@ class HyperliquidSpreadBot:
                 continue
             ref = st.bid if st.bid > 0 else (st.mid if st.mid > 0 else 0.0)
             if ref <= 0:
-                st.last_action = "liquidate: pas de bid, position conservée"
+                st.last_action = "liquidate: no bid, position kept"
                 continue
             px = round_outcome_sell_px(ref * (1.0 - max(slip, 0.002)))
             try:
@@ -564,6 +609,8 @@ class HyperliquidSpreadBot:
                                                time.time() + self.cfg.maker_opening_rest_sec)
 
     def _cleanup_close(self, symbol, position):
+        if self.rotation_requested() and not (self.cfg.stop_file and os.path.exists(self.cfg.stop_file)):
+            raise RuntimeError("Rotation requires flat inventory; automatic taker liquidation is disabled")
         bid, ask = self.fetch_rest_bbo(symbol)
         if bid <= 0 or ask < bid:
             raise RuntimeError("Cannot close: no fresh book")
@@ -1133,6 +1180,8 @@ class HyperliquidSpreadBot:
         with self.lock:
             if revision != getattr(self, "account_revision", 0):
                 return False  # A websocket update overtook this REST snapshot.
+            previous = {(s.spec.symbol, side): (getattr(s, f"{side}_oid"), getattr(s, f"{side}_order_ts"))
+                        for s in self.states.values() for side in ("bid", "ask")}
             if balances is not None:
                 self.available_usdc = available.get("USDC", 0.0)
             for state in self.states.values():
@@ -1146,6 +1195,7 @@ class HyperliquidSpreadBot:
                 state.ask_oid = None
                 state.quoted_bid = 0.0
                 state.quoted_ask = 0.0
+                state.bid_quantity = state.ask_quantity = 0.0
                 state.reconcile_required = False
             self.safety.account_known = True
             for order in orders or []:
@@ -1157,20 +1207,30 @@ class HyperliquidSpreadBot:
                         if side == "B":
                             state.bid_oid = oid
                             state.quoted_bid = safe_float(order.get("limitPx"))
+                            state.bid_quantity = safe_float(order.get("sz"))
+                            old_oid, old_ts = previous[(state.spec.symbol, "bid")]
+                            state.bid_order_ts = old_ts if old_oid == oid else time.time()
                         else:
                             state.ask_oid = oid
                             state.quoted_ask = safe_float(order.get("limitPx"))
+                            state.ask_quantity = safe_float(order.get("sz"))
+                            old_oid, old_ts = previous[(state.spec.symbol, "ask")]
+                            state.ask_order_ts = old_ts if old_oid == oid else time.time()
         return True
 
     def risk_block_reason(self, st: MarketState, closing_inventory: bool = False) -> Optional[str]:
-        if self.stats.net_pnl <= -abs(self.cfg.stop_loss_usd):
-            return f"session stop loss {fmt_usd(self.stats.net_pnl)}"
+        net_risk_pnl = self.stats.net_pnl + self.cfg.risk_pnl_carry
+        if net_risk_pnl <= -abs(self.cfg.stop_loss_usd):
+            return f"session stop loss {fmt_usd(net_risk_pnl)}"
         if self.cfg.take_profit_usd > 0 and self.stats.net_pnl >= self.cfg.take_profit_usd:
             return f"session take profit {fmt_usd(self.stats.net_pnl)}"
         if not st.has_bbo:
             return "waiting bbo"
         if time.time() - st.last_book_ts > self.cfg.stale_sec:
             return f"stale feed {fmt_age(st.last_book_ts)}"
+        if (self.cfg.auto_max_spread_bps is not None and not closing_inventory
+                and st.spread_bps > self.cfg.auto_max_spread_bps):
+            return f"auto spread {st.spread_bps:.3f}bps > {self.cfg.auto_max_spread_bps:.3f}bps"
         # Le gate de spread protège le TAKER (croiser un spread large coûte cher).
         # En maker on ne croise jamais: un spread large est au contraire le
         # moment où la quote passive capture le plus.
@@ -1270,6 +1330,169 @@ class HyperliquidSpreadBot:
         )
 
     # ------------------------------------------------------------ order logic
+    def rotation_requested(self) -> bool:
+        return bool(self.cfg.rotation_file and os.path.exists(self.cfg.rotation_file))
+
+    def bilateral_requests(self, st: MarketState) -> Dict[bool, Dict[str, Any]]:
+        """One funded bid and one inventory-backed ask. Existing holds count once."""
+        requests_out = {}
+        bid = self.maker_quote_px(st, True)
+        ask = self.maker_quote_px(st, False)
+        if not 0 < bid < ask < 1:
+            return requests_out
+        held_ask = st.ask_quantity if st.ask_oid else 0.0
+        sell_qty = min(math.floor(st.available_position + held_ask), math.floor(st.position),
+                       max(1, math.ceil(self.cfg.min_order_usd / ask), math.floor(self.cfg.order_usd / ask)))
+        draining = self.rotation_requested()
+        risk_exit = self.risk_block_reason(st, closing_inventory=False)
+        full_size = self.cfg.full_size_quotes
+        partial_ask = (full_size and st.ask_oid and 0 < st.ask_quantity*st.quoted_ask < self.cfg.min_order_usd
+                       and st.ask_quantity <= min(st.position, st.available_position+held_ask)
+                       and st.quoted_ask > st.bid and not draining and not risk_exit)
+        if partial_ask:
+            requests_out[False] = {"coin": st.spec.symbol, "is_buy": False, "sz": float(st.ask_quantity),
+                "limit_px": st.quoted_ask, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
+        elif sell_qty >= 1 and (not full_size or draining or risk_exit or sell_qty*ask >= self.cfg.min_order_usd):
+            requests_out[False] = {"coin": st.spec.symbol, "is_buy": False, "sz": float(sell_qty),
+                "limit_px": ask, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
+        if draining or risk_exit:
+            return requests_out
+        reserved = self.funds.reserved_usdc() if getattr(self, "funds", None) else 0.0
+        free = max(0, getattr(self, "available_usdc", 0)-reserved)
+        if st.bid_oid:
+            free += st.bid_quantity * st.quoted_bid
+        # A sell cannot offset a buy until it has actually filled.
+        remaining = max(0, self.cfg.max_position_usd-st.position*max(st.mid, bid))
+        # The residual of an accepted order is allowed below the minimum for a
+        # NEW order. Keep its queue and funding; do not cancel it because a
+        # partial fill leaves less than one new order of capacity.
+        partial_bid = (full_size and st.bid_oid and 0 < st.bid_quantity*st.quoted_bid < self.cfg.min_order_usd
+                       and st.quoted_bid < st.ask and st.bid_quantity*st.quoted_bid <= min(free, remaining)+1e-9)
+        if partial_bid:
+            requests_out[True] = {"coin": st.spec.symbol, "is_buy": True, "sz": float(st.bid_quantity),
+                "limit_px": st.quoted_bid, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
+            return requests_out
+        minimum = max(1, math.ceil(self.cfg.min_order_usd / bid))
+        target = max(minimum, math.floor(self.cfg.order_usd / bid))
+        buy_qty = min(target, math.floor(min(free, remaining)/bid))
+        if buy_qty >= minimum:
+            requests_out[True] = {"coin": st.spec.symbol, "is_buy": True, "sz": float(buy_qty),
+                "limit_px": bid, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
+        return requests_out
+
+    def cancel_bilateral_side(self, st: MarketState, buy: bool, reason: str) -> None:
+        """Cancel only the affected quote; do not discard the opposite queue."""
+        side = "bid" if buy else "ask"
+        oid = getattr(st, f"{side}_oid")
+        if not oid or time.time() < st.cancel_retry_until or not self.can_send_action():
+            return
+        try:
+            st.cancel_retry_until = time.time()+2
+            result = self.exchange.bulk_cancel([{"coin": st.spec.symbol, "oid": int(oid)}])
+            self.stats.cancels_sent += 1
+            statuses = result.get("response", {}).get("data", {}).get("statuses", []) if isinstance(result, dict) and result.get("status") == "ok" else []
+            with self.lock:
+                if statuses == ["success"]:
+                    if getattr(st, f"{side}_oid") == oid:
+                        setattr(st, f"{side}_oid", None)
+                        setattr(st, f"{side}_quantity", 0.0)
+                    st.cancel_retry_until = 0
+                    st.pending_until = time.time()+.35
+                    if buy:
+                        st.opening_rearm_until = time.time()+self.cfg.maker_opening_rest_sec
+                st.reconcile_required = True
+                self.account_revision += 1
+                st.last_action = f"{side} cancel: {reason}"
+        except Exception as exc:
+            st.last_error = safe_error(exc)
+            st.reconcile_required = True
+
+    def place_bilateral(self, st: MarketState) -> None:
+        if not self.running or self.safety.stopped.is_set() or self.safety.phase == "recovering":
+            return
+        hard_block = self.risk_block_reason(st, closing_inventory=True)
+        if hard_block:
+            if st.bid_oid or st.ask_oid:
+                self.cancel_all(hard_block, [st.spec.symbol])
+            st.last_action = hard_block
+            return
+        if st.reconcile_required or time.time() < st.pending_until:
+            st.last_action = "await account reconciliation"
+            return
+        plan = self.bilateral_requests(st)
+        # Prioritize selling existing inventory; never sell shares not owned.
+        for buy in (False, True):
+            side = "bid" if buy else "ask"
+            oid = getattr(st, f"{side}_oid")
+            req = plan.get(buy)
+            quoted = getattr(st, f"quoted_{side}")
+            quantity = getattr(st, f"{side}_quantity")
+            if oid:
+                if req and quoted == req["limit_px"] and 0 < quantity <= req["sz"]:
+                    continue
+                # Normal repricing preserves queue age. Budget/risk/drain pulls
+                # bypass this hold, as do quotes which are no longer passive.
+                passive = quoted < st.ask if buy else quoted > st.bid
+                if req and passive and time.time()-getattr(st, f"{side}_order_ts") < self.cfg.maker_opening_rest_sec:
+                    continue
+                if self.cfg.live:
+                    self.cancel_bilateral_side(st, buy, "drain" if self.rotation_requested() else "requote / limit")
+                return
+            if not req or buy and time.time() < st.opening_rearm_until:
+                continue
+            if not self.cfg.live:
+                st.last_action = "dry bilateral quotes (no simulated fills)"
+                return
+            if self.exchange is None or not self.can_send_action():
+                return
+            try:
+                with self.safety.lock, (self.funds.transaction() if getattr(self, "funds", None) else nullcontext()):
+                    if not self.sync_account():
+                        return
+                    with self.lock:
+                        # Rebuild from fresh balances and open orders, retaining
+                        # the other side. Unknown/partial outcomes never retry.
+                        if (not self.running or self.safety.stopped.is_set() or st.reconcile_required
+                                or getattr(st, f"{side}_oid")):
+                            return
+                        if self.risk_block_reason(st, closing_inventory=not buy):
+                            return
+                        req = self.bilateral_requests(st).get(buy)
+                        if req is None or buy and self.rotation_requested():
+                            return
+                        result = self.exchange.order(name=req["coin"], is_buy=buy, sz=req["sz"],
+                            limit_px=req["limit_px"], order_type=req["order_type"], reduce_only=False)
+                        self.stats.orders_sent += 1
+                        st.pending_until = time.time()+.35
+                        st.pending_side = side
+                        self._parse_order_response(st, [req], result)
+                return
+            except Exception as exc:
+                st.last_error = safe_error(exc)
+                st.reconcile_required = True
+                st.pending_until = time.time()+2
+                return
+        st.last_action = ("rotation: draining inventory" if self.rotation_requested()
+                          else "maker BID + ASK" if st.bid_oid and st.ask_oid
+                          else "bootstrap inventory: BID" if st.bid_oid else "await funds / inventory")
+
+    def finish_rotation_if_flat(self) -> None:
+        if not self.rotation_requested() or not self.running or self.safety.phase != "running":
+            return
+        with self.safety.lock:
+            if not self.sync_account():
+                return
+            with self.lock:
+                if any(s.position > 0 or s.bid_oid or s.ask_oid or s.reconcile_required for s in self.states.values()):
+                    return
+            # Independent exchange confirmation after cancellations. Shutdown
+            # sees a flat account, so rotation requires no taker liquidation.
+            rows = self._cleanup_snapshot()
+            if any(position or orders for _, position, orders in rows):
+                return
+            self.status = "rotation: flat, stop verified"
+            self.request_stop()
+
     def _prepare_spot_request(self, st, previous):
         """Fresh funds and inventory, under the execution gate, before a new order."""
         if not self.sync_account() or not self.running or self.safety.stopped.is_set():
@@ -1366,6 +1589,9 @@ class HyperliquidSpreadBot:
                         self.states[symbol].reconcile_required = True
 
     def place_or_requote(self, st: MarketState) -> None:
+        if self.cfg.worldcup and self.cfg.is_maker and self.cfg.two_sided:
+            self.place_bilateral(st)
+            return
         side_label = (st.spec.outcome_side or self.cfg.outcome_side).upper()
         if not self.running or self.safety.stopped.is_set() or self.safety.phase == "recovering":
             return
@@ -1497,9 +1723,13 @@ class HyperliquidSpreadBot:
                 if req["is_buy"]:
                     st.bid_oid = oid
                     st.quoted_bid = req["limit_px"]
+                    st.bid_quantity = float(req["sz"])
+                    st.bid_order_ts = time.time()
                 else:
                     st.ask_oid = oid
                     st.quoted_ask = req["limit_px"]
+                    st.ask_quantity = float(req["sz"])
+                    st.ask_order_ts = time.time()
                 ok_count += 1
             elif isinstance(status, dict) and "filled" in status:
                 st.reconcile_required = True
@@ -1553,7 +1783,7 @@ class HyperliquidSpreadBot:
         # JAMAIS en mode embarqué (dashboard): le bot tourne alors dans un
         # thread de bot_server et input() bloquerait le thread indéfiniment
         # (statut RUNNING mais aucun ordre). Menu = console directe uniquement.
-        if threading.current_thread() is not threading.main_thread():
+        if os.getenv("OUTCOME_HEADLESS") == "1" or threading.current_thread() is not threading.main_thread():
             return
         try:
             if not sys.stdin.isatty():
@@ -1561,11 +1791,11 @@ class HyperliquidSpreadBot:
         except Exception:
             return
         mode_txt = "MAKER post-only" if self.cfg.is_maker else "TAKER IOC"
-        print(f"\n--- Mode {mode_txt}: marché, spread, taille ---")
+        print(f"\n--- {mode_txt} mode: market, spread, size ---")
         for i, spec in enumerate(self.specs, 1):
             print(f"  [{i}] {spec.display_name or spec.symbol}")
         while True:
-            choice = input(f"Marché ? [1-{len(self.specs)} / nom (ex: france) / Enter=tous] : ").strip().lower()
+            choice = input(f"Market? [1-{len(self.specs)} / name (e.g. france) / Enter=all]: ").strip().lower()
             if not choice:
                 break
             picked = None
@@ -1579,27 +1809,27 @@ class HyperliquidSpreadBot:
                 if len(matches) == 1:
                     picked = matches[0]
                 elif len(matches) > 1:
-                    print(f"  Ambigu ({len(matches)} marchés) — précise.")
+                    print(f"  Ambiguous ({len(matches)} markets) — be more specific.")
                     continue
             if picked is None:
-                print("  Introuvable — numéro, nom partiel, ou Enter pour tous.")
+                print("  Not found — number, partial name, or Enter for all.")
                 continue
             self.specs = [picked]
             with self.lock:
                 self.states = {picked.symbol: MarketState(picked)}
-            print(f"  -> {picked.display_name or picked.symbol} uniquement")
+            print(f"  -> {picked.display_name or picked.symbol} only")
             break
 
         if self.cfg.is_maker:
             self.cfg.maker_offset_pct = self._ask_float(
-                "Spread maker en % derrière le touch (ex 0.02 = 0.02%)",
+                "Maker spread in % behind the touch (e.g. 0.02 = 0.02%)",
                 self.cfg.maker_offset_pct, minimum=0.0)
         else:
             self.cfg.max_spread_pct = self._ask_float(
-                "Spread max en % pour entrer (gate taker, ex 0.02 = 0.02%)",
+                "Max spread in % to enter (taker gate, e.g. 0.02 = 0.02%)",
                 self.cfg.max_spread_pct, minimum=0.0)
 
-        value = self._ask_float("Taille d'ordre en $ (minimum exchange 10)",
+        value = self._ask_float("Order size in $ (exchange minimum 10)",
                                 self.cfg.order_usd, minimum=10.0)
         self.cfg.order_usd = value
         # le sizing exige buy_value >= min_order_usd: l'aligner sur la taille
@@ -1608,8 +1838,8 @@ class HyperliquidSpreadBot:
 
         pct_txt = (f"offset {self.cfg.maker_offset_pct:g}%" if self.cfg.is_maker
                    else f"spread< {self.cfg.max_spread_pct:g}%")
-        print(f"{mode_txt} | {pct_txt} | ordre ${self.cfg.order_usd:g} | "
-              f"{len(self.specs)} marché(s)\n")
+        print(f"{mode_txt} | {pct_txt} | order ${self.cfg.order_usd:g} | "
+              f"{len(self.specs)} market(s)\n")
 
     def _trading_loop(self, refresh: float, live=None) -> None:
         """Boucle de trading. `live` = dashboard Rich (console directe) ou
@@ -1633,6 +1863,7 @@ class HyperliquidSpreadBot:
                         if not self.running:
                             break
                         self.place_or_requote(st)
+                    self.finish_rotation_if_flat()
                 if live is not None:
                     live.update(self.render())
             except Exception as exc:
@@ -1653,7 +1884,8 @@ class HyperliquidSpreadBot:
             self.console.print(self.scan_table())
         if self.cfg.scan_only:
             return
-        self._launch_prompt()
+        if not headless:
+            self._launch_prompt()
 
         try:
             initial = self._cleanup_snapshot() if self.cfg.live else []
@@ -1702,6 +1934,13 @@ class HyperliquidSpreadBot:
             avg_spread = sum(spreads) / len(spreads) if spreads else 0.0
 
             return {
+                "status": self.status,
+                "two_sided": self.cfg.two_sided,
+                "full_size_quotes": self.cfg.full_size_quotes,
+                "rotation_draining": self.rotation_requested(),
+                "bid_open": any(s.bid_oid for s in self.states.values()),
+                "ask_open": any(s.ask_oid for s in self.states.values()),
+                "last_action": "; ".join(state.last_action for state in self.states.values() if state.last_action),
                 "duration_sec": stats.elapsed_min * 60,
                 "volume_usd": stats.volume_usd,
                 "net_pnl": stats.net_pnl,
@@ -1849,11 +2088,11 @@ def build_config(argv: Optional[List[str]] = None) -> BotConfig:
     parser.add_argument("--rest-429-backoff-sec", type=float, default=float(os.getenv("HL_REST_429_BACKOFF_SEC", "2.5")))
     parser.add_argument("--exec", dest="exec_mode", choices=("taker", "maker"),
                         default=os.getenv("HL_EXEC_MODE", "taker"),
-                        help="taker = IOC qui croise le spread (défaut) | maker = limit post-only (0 slippage, frais maker)")
+                        help="taker = IOC crossing the spread (default) | maker = post-only limit (0 slippage, maker fees)")
     parser.add_argument("--maker-offset-pct", type=float,
                         default=float(os.getenv("HL_MAKER_OFFSET_PCT", "0")),
-                        help="mode maker: %% derrière le touch, même convention que --max-spread-pct "
-                             "(ex 0.02 = 0.02%% = 2 bps; 0 = colle au BBO). Aussi choisissable au lancement.")
+                        help="maker mode: %% behind the touch, same convention as --max-spread-pct "
+                             "(e.g. 0.02 = 0.02%% = 2 bps; 0 = peg to BBO). Also selectable at launch.")
     parser.add_argument("--market-slippage-bps", type=float, default=float(os.getenv("HL_MARKET_SLIPPAGE_BPS", "5")))
     parser.add_argument("--market-cycle-cooldown", type=float, default=float(os.getenv("HL_MARKET_CYCLE_COOLDOWN", "0.12")))
     parser.add_argument("--account-sync-sec", type=float, default=float(os.getenv("HL_ACCOUNT_SYNC_SEC", "2")))

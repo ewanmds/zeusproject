@@ -30,20 +30,20 @@ def main():
                 elif url.path == '/api/grid/status':
                     result = dict(type='grid_stats', running=False, bots=[dict(token='SP500', strategy='freqtrade',
                         phase='failed', running=False, position_known=False, position_usd=None,
-                        error='Arrêt non confirmé', fills=0, volume_usd=0)])
+                        error='Stop not confirmed', fills=0, volume_usd=0)])
                 else:
                     result = dict(running=False, bots=[])
                 call.fulfill(json=result)
                 return
             name = 'index.html' if url.path == '/' else url.path.lstrip('/')
-            if name not in {'index.html', 'index.css', 'app.js', 'config.js'}:
+            if name not in {'index.html', 'index.css', 'state.js', 'app.js', 'config.js'}:
                 call.abort()
                 return
             mime = {'html': 'text/html', 'js': 'application/javascript', 'css': 'text/css'}[name.rsplit('.', 1)[1]]
             call.fulfill(body=(ROOT / 'frontend' / name).read_bytes(), content_type=mime)
         page.route('**/*', route)
         page.goto('https://zeus.test/')
-        page.get_by_label('Mode de cotation').select_option('freqtrade')
+        page.get_by_label('Mode', exact=True).select_option('freqtrade')
         assert page.locator('#grid-heading').inner_text() == 'Freqtrade'
         assert page.locator('#grid-offset-field').is_hidden()
         page.wait_for_selector('[data-f="title"]')
@@ -56,11 +56,11 @@ def main():
         folder = ROOT / 'integrations' / 'freqtrade' / '.build'
         folder.mkdir(exist_ok=True)
         page.screenshot(path=str(folder / 'ui-desktop.png'), full_page=True)
-        page.get_by_label('Mode de cotation').select_option('mid')
+        page.get_by_label('Mode', exact=True).select_option('mid')
         assert page.locator('#grid-offset-field').is_visible()
-        page.get_by_label('Mode de cotation').select_option('bbo')
+        page.get_by_label('Mode', exact=True).select_option('bbo')
         assert page.locator('#grid-offset-field').is_hidden()
-        page.get_by_label('Mode de cotation').select_option('freqtrade')
+        page.get_by_label('Mode', exact=True).select_option('freqtrade')
         page.set_viewport_size({'width': 390, 'height': 844})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         page.screenshot(path=str(folder / 'ui-mobile.png'), full_page=True)

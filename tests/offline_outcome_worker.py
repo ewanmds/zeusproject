@@ -45,6 +45,10 @@ class FakeBot:
         self.safety.publish()
         self.log("run")
         while self.running:
+            if (self.runtime / "drain.json").exists():
+                self.log("drain")
+                self.request_stop()
+                continue
             if (self.runtime / "recover").exists() and self.safety.phase == "running":
                 self.safety.pause("offline test recovery")
             if (self.runtime / "resume").exists() and self.safety.phase == "recovering":

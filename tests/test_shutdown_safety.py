@@ -205,10 +205,12 @@ class SafetyTests(unittest.TestCase):
         bot._run_session = Mock(side_effect=RuntimeError("unexpected loop error"))
         bot.ws_info = None
         bot.write_stats = Mock()
+        bot._final_accounting = Mock()  # isolated finalization; accounting has dedicated tests
         bot.run()
         self.assertTrue(bot.safety.cleanup_confirmed)
         self.assertEqual(bot.safety.phase, "failed")
         bot.write_stats.assert_called_with(running=False)
+        bot._final_accounting.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -26,6 +26,9 @@ import signal
 import secrets
 import uuid
 from contextlib import asynccontextmanager
+from zeus.catalog_service import PublicCatalogService
+
+public_catalogs = PublicCatalogService()
 import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, Literal
@@ -35,9 +38,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSock
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 from zeus import PROJECT_ROOT
+from zeus.localize import localize_state
 from zeus.safety import atomic_json, account_snapshot, safe_error, read_json
 
 
@@ -117,7 +122,7 @@ def _require_api_token(request: Request) -> None:
 # Pydantic request models
 # ---------------------------------------------------------------------------
 class GridStartRequest(BaseModel):
-    """Formulaire minimal: le marché, le notional, et pour MID l'offset au mid."""
+    """Minimal form: market, notional, and for MID the offset from mid."""
     token: str = "SP500"
     strategy: str = "bbo"
     mode: str = "live"
@@ -129,16 +134,26 @@ class GridStartRequest(BaseModel):
     offset_ticks: Optional[float] = None
     spread_bps: Optional[float] = None
     offset_bps: Optional[float] = None  # utilisé par strategy=mid (distance au mid)
+    mid_protect_exits: bool = True
+    mid_exit_protect_sec: float = 30.0
     grid_reset_bps: Optional[float] = None
     num_levels: int = 1
 
 
 class GridStopRequest(BaseModel):
-    """Stop ciblé: token précis, ou tous les bots si omis."""
+    """Targeted stop: a specific token, or every bot when omitted."""
     token: Optional[str] = None
 
 
 class WorldcupStartRequest(BaseModel):
+    selection_mode: Literal["manual", "auto"] = "manual"
+    auto_max_spread_bps: float = Field(default=10, gt=0, le=100, allow_inf_nan=False)
+    two_sided: bool = False
+    full_size_quotes: bool = True
+    auto_rotate: bool = True
+    auto_rotation_after_sec: float = Field(default=60, ge=30, le=3600, allow_inf_nan=False)
+    auto_market_cooldown_sec: float = Field(default=600, ge=60, le=86400, allow_inf_nan=False)
+    auto_min_fill_usd_per_min: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     outcome_side: Optional[Literal["yes", "no"]] = None
     exec_mode: Literal["maker", "taker"] = "taker"
     maker_spread_pct: float = Field(default=0.005, ge=0, allow_inf_nan=False)
@@ -317,23 +332,50 @@ class BotManager:
 
         # Manager-level lock
         self.lock = threading.Lock()
+        # Parsed session journals keyed by path. One dashboard collection reads
+        # the same journals from grid and outcome aggregates several times, so
+        # re-parse only when the file changes (atomic_json replaces the file).
+        self._journal_cache: Dict[Path, tuple] = {}
+        self._journal_lock = threading.Lock()
         from zeus.outcome_supervisor import OutcomeSupervisor
         self.outcome = OutcomeSupervisor(self)
+
+    def _read_journal(self, path):
+        path = Path(path)
+        try:
+            stat = path.stat()
+        except OSError:
+            return read_json(path)
+        key = (stat.st_mtime_ns, stat.st_size)
+        with self._journal_lock:
+            cached = self._journal_cache.get(path)
+            if cached is not None and cached[0] == key:
+                return cached[1]
+        record = read_json(path)
+        with self._journal_lock:
+            self._journal_cache[path] = (key, record)
+        return record
 
     def _session_files(self):
         if self.state_dir is None:
             return []
         result = []
+        seen = set()
         for path in self.state_dir.glob("*.json"):
+            seen.add(path)
             try:
-                result.append((path, read_json(path)))
+                result.append((path, self._read_journal(path)))
             except (OSError, ValueError):
                 raise RuntimeError("Session journal unreadable; manual verification required")
+        with self._journal_lock:
+            for stale_path in list(self._journal_cache):
+                if stale_path not in seen:
+                    self._journal_cache.pop(stale_path, None)
         return result
 
     def _verify_session_flat(self, record):
         from hyperliquid.info import Info
-        from zeus.safety import confirmed_client_order
+        from zeus.safety import confirmed_client_order, legacy_nonce_rejection
         kind = record["account_kind"]
         account = os.getenv("WALLET_ADDRESS_OUTCOME" if kind == "outcome" else "WALLET_ADDRESS", "").strip()
         if not account:
@@ -343,6 +385,12 @@ class BotManager:
         info = Info("https://api.hyperliquid.xyz", skip_ws=True, timeout=5)
         symbols = record["symbols"]
         for cloid in record.get("pending_cloids", []):
+            if legacy_nonce_rejection(record):
+                result = info.post("/info", {"type": "orderStatus", "user": account, "oid": cloid})
+                if isinstance(result, dict) and result.get("status") == "unknownOid":
+                    # A legacy explicit nonce rejection created no order. The
+                    # independent account/order snapshot below must ALSO be flat.
+                    continue
             _, status = confirmed_client_order(info, account, cloid, symbols)
             if status == "open":
                 raise RuntimeError("Placement still open; stop not confirmed")
@@ -395,7 +443,7 @@ class BotManager:
             try:
                 self._verify_session_flat(record)
                 atomic_json(path, {**record, "phase": "failed", "cleanup_confirmed": True,
-                                   "can_start": True, "cleanup_error": "", "ts": time.time()})
+                                   "can_start": True, "cleanup_error": "", "pending_cloids": [], "ts": time.time()})
             except Exception as exc:
                 unresolved.append(record["key"])
                 atomic_json(path, {**record, "phase": "failed", "cleanup_confirmed": False,
@@ -424,6 +472,8 @@ class BotManager:
             raise ValueError(f"Unknown market making strategy: {config.strategy}")
         offset_bps = None
         if strategy == "mid":
+            if not math.isfinite(config.mid_exit_protect_sec) or not 1<=config.mid_exit_protect_sec<=120:
+                raise ValueError("mid_exit_protect_sec must be from 1 to 120 seconds")
             offset_bps = float(config.offset_bps if config.offset_bps is not None else 1.0)
             if not math.isfinite(offset_bps) or not 0 <= offset_bps < 10000:
                 raise ValueError("offset_bps must be finite, at least 0 and less than 10000")
@@ -442,7 +492,7 @@ class BotManager:
         if strategy == "freqtrade":
             order_usd = float(config.order_size_usd)
             if not math.isfinite(order_usd) or order_usd < 40:
-                raise ValueError("Montant Freqtrade minimal : 40 USD (100 % par côté, un ordre par côté), valeur finie requise")
+                raise ValueError("Freqtrade requires at least 40 USD (100% per side, one order per side) and a finite amount")
             obi_mod.require_binary()
 
         with self.lock:
@@ -454,12 +504,12 @@ class BotManager:
 
         with self.lock:
             if any(info["symbol"] == symbol and info["proc"].poll() is None for info in self.obi_procs.values()):
-                raise RuntimeError(f"Un bot tourne déjà sur {symbol}")
+                raise RuntimeError(f"A bot is already running on {symbol}")
             if not confirmed_flat and any(info["symbol"] == symbol and info.get("stop_unconfirmed") for info in self.obi_procs.values()):
-                raise RuntimeError("La mise à plat précédente n'est pas confirmée ; aucun nouveau bot lancé")
+                raise RuntimeError("The previous flatten is not confirmed; no new bot was started")
             existing = self.obi_procs.get(token_key)
             if existing is not None and existing["proc"].poll() is None:
-                raise RuntimeError(f"Un bot tourne déjà sur {token_key}")
+                raise RuntimeError(f"A bot is already running on {token_key}")
 
             # Stopfile périmé d'un run précédent: le supprimer avant de lancer.
             stop_file = obi_mod.stop_file_path(symbol)
@@ -481,6 +531,8 @@ class BotManager:
             ]
             if offset_bps is not None:
                 cmd.extend(["--offset-bps", str(offset_bps)])
+                cmd.extend(["--protect-mid-exits" if config.mid_protect_exits else "--strict-mid-exits",
+                            "--mid-exit-protect-sec",str(config.mid_exit_protect_sec)])
             proc = subprocess.Popen(
                 cmd, cwd=str(BASE_DIR), env=env,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -500,6 +552,8 @@ class BotManager:
             }
             if offset_bps is not None:
                 self.obi_procs[token_key]["config"]["offset_bps"] = offset_bps
+                self.obi_procs[token_key]["config"].update(mid_protect_exits=config.mid_protect_exits,
+                                                         mid_exit_protect_sec=config.mid_exit_protect_sec)
             self.grid_config = config.model_dump()
 
         # Détection de crash immédiat (verrou d'instance déjà pris, etc.)
@@ -513,12 +567,12 @@ class BotManager:
             except (OSError, ValueError):
                 pass
             if not tail:
-                tail = f"Code de sortie {proc.returncode}"
-            raise RuntimeError(f"Le bot {token_key} s'est arrêté immédiatement: {tail}")
+                tail = f"Exit code {proc.returncode}"
+            raise RuntimeError(f"Bot {token_key} stopped immediately: {tail}")
 
-    def stop_grid(self, token: Optional[str] = None) -> None:
-        """Arrêt PROPRE via stopfile (le bot fait cancel all + flatten avant
-        de sortir). token=None → stoppe tous les bots."""
+    def stop_grid(self, token: Optional[str] = None, manual: bool = True) -> None:
+        """Session-scoped stop; only an explicit manual origin authorizes
+        marketable cleanup for the passive Python bots. None targets all bots."""
         with self.lock:
             if token:
                 keys = [token.strip().upper()]
@@ -534,7 +588,14 @@ class BotManager:
         stop_started = time.monotonic()
         for key, info in targets:
             try:
-                Path(info["stop_file"]).write_text("stop", encoding="utf-8")
+                # Explicit dashboard Stop authorizes the bot's reduce-only
+                # marketable cleanup; the session id prevents an old sentinel
+                # from authorizing a different session.
+                record = self._session_status(info.get("safety_file"))
+                payload = {"manual": manual is True}
+                if record.get("session_id"):
+                    payload["session_id"] = record["session_id"]
+                atomic_json(Path(info["stop_file"]), payload)
             except Exception as exc:
                 info["stop_unconfirmed"] = True
                 failures.append(key)
@@ -585,6 +646,7 @@ class BotManager:
             tot_vol = tot_fees = tot_rpnl = tot_pos = 0.0
             tot_fills = 0
             earliest = None
+            latest_end = 0.0
             for key, info in items:
                 alive = info["proc"].poll() is None
                 st: Dict[str, Any] = {}
@@ -601,7 +663,9 @@ class BotManager:
                 fees_v = float(st.get("fees", 0) or 0)
                 rpnl = float(st.get("rpnl", 0) or 0)
                 start = float(st.get("start_time", info["started"]) or info["started"])
-                elapsed_hours = max((now - start) / 3600.0, 1.0 / 3600.0)
+                end = now if alive else min(now,float(st.get("end_time") or st.get("ts") or now))
+                latest_end = max(latest_end,end)
+                elapsed_hours = max((end - start) / 3600.0, 1.0 / 3600.0)
                 has_action_metrics = all(k in st for k in (
                     "order_placements", "order_modifications", "order_cancellations"))
                 placements = int(st.get("order_placements", 0) or 0)
@@ -614,11 +678,11 @@ class BotManager:
                 error = str(lifecycle.get("error") or error)
                 if info.get("stop_unconfirmed"):
                     phase = "failed"
-                    error = error or "Arrêt non confirmé ; ordres ou position à vérifier"
+                    error = error or "Stop not confirmed; check orders and position"
                 if not alive and phase != "stopped":
                     phase = "failed"
                     if not error:
-                        error = f"Le processus s'est arrêté (code {info['proc'].returncode})."
+                        error = f"The process exited (code {info['proc'].returncode})."
                 confirmed = lifecycle.get("cleanup_confirmed") is True and not alive
                 position_known = bool(st.get("position_known")) if alive else confirmed
                 entry = {
@@ -629,20 +693,31 @@ class BotManager:
                     "stale": bool(alive and (not st or now - float(st.get("ts", 0)) > 5)),
                     "token": key,
                     "strategy": info["config"].get("strategy", "bbo"),
-                    "offset_bps": _json_float(info["config"].get("offset_bps", 0.0), 2),
+                    "execution_policy": st.get("execution_policy"),
+                    "execution_transport": st.get("execution_transport"),
+                    "risk_exit_reason": st.get("risk_exit_reason",""),
+                    "inventory_mark_known": st.get("inventory_mark_known"),
+                    "offset_bps": _json_float(info["config"].get("offset_bps", 0.0)),
+                    "mid_protect_exits": bool(st.get("mid_protect_exits",info["config"].get("mid_protect_exits",False))),
+                    "mid_exit_protect_sec": st.get("mid_exit_protect_sec",info["config"].get("mid_exit_protect_sec",30)),
+                    "mid_exit_policy": st.get("mid_exit_policy"),
                     "mode": info["config"].get("mode", "live"),
                     "symbol": info["symbol"],
                     "running": alive,
                     "phase": phase,
-                    "duration": _fmt_duration(max(0.0, now - start)),
+                    "duration": _fmt_duration(max(0.0, end - start)),
                     "volume_usd": _json_float(vol, 2),
-                    "net_pnl": _json_float(rpnl - fees_v, 4),
+                    "net_pnl": _json_float(rpnl - fees_v, 4) if st.get("accounting_complete") is not False else None,
                     "fees": _json_float(fees_v, 4),
                     "realized_pnl": _json_float(rpnl, 4),
                     "accounting_complete": st.get("accounting_complete") is not False,
                     "cost_per_1m": (_json_float((fees_v - rpnl) / (vol / 1_000_000), 2)
                                     if vol > 0 and st.get("accounting_complete") is not False else None),
                     "fills": int(st.get("fills", 0) or 0),
+                    "maker_fills": st.get("maker_fills"),
+                    "taker_fills": st.get("taker_fills"),
+                    "unknown_role_fills": st.get("unknown_role_fills"),
+                    "latency": st.get("latency") if isinstance(st.get("latency"), dict) else None,
                     "order_placements": placements if has_action_metrics else None,
                     "order_modifications": modifications if has_action_metrics else None,
                     "order_cancellations": cancellations if has_action_metrics else None,
@@ -658,19 +733,21 @@ class BotManager:
                     "edge_margin_bps": _json_float(st.get("edge_margin_bps", 0), 2),
                     "fee_bps": (_json_float(st.get("fee_bps"), 2)
                                 if st.get("fee_bps") is not None else None),
-                    "mid_offset_bps": _json_float(st.get("mid_offset_bps", 0), 2),
+                    "mid_offset_bps": _json_float(st.get("mid_offset_bps", 0)),
+                    "mid_quote": st.get("mid_quote") if isinstance(st.get("mid_quote"),dict) else None,
                     "position_known": position_known,
-                    "position_usd": _json_float(st.get("position_usd", 0), 2) if position_known else None,
-                    "upnl": _json_float(st.get("upnl", 0), 4),
+                    "position_usd": (0.0 if confirmed else _json_float(st.get("position_usd", 0), 2)) if position_known else None,
+                    "upnl": (0.0 if confirmed else _json_float(st.get("upnl", 0), 4)) if st.get("inventory_mark_known") is not False or confirmed else None,
+                    "accounting_error": str(st.get("accounting_error") or ""),
                     "action": str(st.get("action", "")),
                     "error": error,
                 }
-                bots.append(entry)
+                bots.append(localize_state(entry))
                 if entry['mode'] == 'live':
                     tot_vol += vol
                     tot_fees += fees_v
                     tot_rpnl += rpnl
-                    tot_pos += float(st.get("position_usd", 0) or 0)
+                    tot_pos += float(entry.get("position_usd") or 0)
                     tot_fills += entry["fills"]
                     earliest = start if earliest is None else min(earliest, start)
 
@@ -679,12 +756,12 @@ class BotManager:
             result = {
                 "type": "grid_stats",
                 "running": bool(alive_bots),
-                "duration": _fmt_duration(max(0.0, now - earliest)) if earliest else "00:00:00",
+                "duration": _fmt_duration(max(0.0, latest_end - earliest)) if earliest else "00:00:00",
                 "volume_usd": _json_float(tot_vol, 2),
-                "net_pnl": _json_float(tot_rpnl - tot_fees, 4),
+                "net_pnl": (_json_float(tot_rpnl - tot_fees, 4) if all(b.get("accounting_complete",False) for b in bots) else None),
                 "fees": _json_float(tot_fees, 4),
                 "cost_per_1m": (_json_float((tot_fees - tot_rpnl) / (tot_vol / 1_000_000), 2)
-                                if tot_vol > 0 and all(b["accounting_complete"] for b in alive_bots) else None),
+                                if tot_vol > 0 and all(b.get("accounting_complete",False) for b in bots) else None),
                 "fills": tot_fills,
                 "mid_price": single["mid_price"] if single else 0.0,
                 "spread_bps": single["spread_bps"] if single else 0.0,
@@ -717,12 +794,49 @@ class BotManager:
 # ---------------------------------------------------------------------------
 # FastAPI Application
 # ---------------------------------------------------------------------------
+async def _warm_public_catalogs():
+    """Load both public catalogs at startup so the first page load is warm.
+
+    Catalog workers are isolated subprocesses with a bounded deadline: a failed
+    or slow warm-up only leaves the normal on-demand path in place.
+    """
+    # Both catalogs are independent subprocesses; warm them together instead
+    # of paying two spawn+fetch sequences back to back.
+    hip3, hip4 = await asyncio.gather(
+        public_catalogs.snapshot("hip3"),
+        public_catalogs.snapshot("hip4"),
+        return_exceptions=True,
+    )
+    for kind, result in (("hip3", hip3), ("hip4", hip4)):
+        if isinstance(result, BaseException):
+            logger.warning("Public %s catalog warm-up failed: %s", kind, safe_error(result))
+            continue
+        if kind == "hip4":
+            rows = result.get("outcomes") or []
+            # Seed the server-side resolver so the first Start Auto is instant,
+            # and start observing flow now instead of on the first Auto click.
+            from zeus import outcomes
+            from zeus.outcome_flow import scanner
+            await asyncio.to_thread(outcomes.prime_catalog, rows)
+            await asyncio.to_thread(scanner.configure, rows)
+
+
 @asynccontextmanager
 async def _server_lifespan(_app):
+    global public_catalogs
+    if public_catalogs.closed:
+        public_catalogs = PublicCatalogService()
+    warm = asyncio.create_task(_warm_public_catalogs())
     await reconcile_on_startup()
     try:
         yield
     finally:
+        warm.cancel()
+        await asyncio.gather(warm, return_exceptions=True)
+        manager.outcome.rotation.close()
+        from zeus.outcome_flow import scanner
+        await asyncio.to_thread(scanner.close)
+        await public_catalogs.close()
         await stop_on_server_shutdown()
 
 
@@ -738,7 +852,7 @@ async def reconcile_on_startup():
 
 async def stop_on_server_shutdown():
     results = await asyncio.gather(asyncio.to_thread(manager.stop_worldcup),
-                                   asyncio.to_thread(manager.stop_grid), return_exceptions=True)
+                                   asyncio.to_thread(manager.stop_grid, None, False), return_exceptions=True)
     for result in results:
         if isinstance(result, BaseException):
             logger.error("Shutdown not confirmed: %s", safe_error(result))
@@ -750,8 +864,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Catalogs and dashboard snapshots are 38-152 KB of JSON. Compressing them is
+# the single largest win for remote/mobile first load and live updates.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 manager = BotManager()
+from zeus.dashboard_broker import DashboardBroker
+dashboard = DashboardBroker({"grid": lambda: manager.get_grid_stats(),
+                             "outcome": lambda: manager.get_worldcup_stats()},
+                            ttl=0.9)
+
+
+@app.middleware("http")
+async def dashboard_cache_policy(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 # ---------------------------------------------------------------------------
 # Frontend serving
@@ -759,9 +888,10 @@ manager = BotManager()
 frontend_dir = BASE_DIR / "frontend"
 
 
-# no-store: le navigateur gardait d'anciennes versions de app.js/index.html en
-# cache, ce qui rendait les nouveaux composants (picker marché...) invisibles.
-_NO_CACHE = {"Cache-Control": "no-store, must-revalidate"}
+# no-cache (not no-store): the browser may store the file but must revalidate
+# its ETag on every use, so a new app.js is never hidden by a stale cache while
+# an unchanged asset costs a 304 instead of a full re-download.
+_NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
 
 
 @app.get("/")
@@ -789,6 +919,11 @@ async def serve_js():
     if js_file.exists():
         return FileResponse(str(js_file), media_type="application/javascript", headers=_NO_CACHE)
     return JSONResponse(status_code=404, content={"detail": "app.js not found"})
+
+
+@app.get("/state.js")
+async def serve_state_js():
+    return FileResponse(str(frontend_dir / "state.js"), media_type="application/javascript", headers=_NO_CACHE)
 
 
 @app.get("/config.js")
@@ -819,8 +954,8 @@ async def health():
 async def get_grid_tokens(_: None = Depends(_require_api_token)):
     """Return available HIP-3 token metadata for the Grid bot picker."""
     try:
-        from zeus import markets as grid_mod
-        token_map = _refresh_grid_token_catalog(grid_mod)
+        catalog = await public_catalogs.snapshot("hip3")
+        token_map = catalog["token_map"]
         tokens = []
         seen_symbols = set()
         for key, cfg in sorted(token_map.items()):
@@ -834,7 +969,8 @@ async def get_grid_tokens(_: None = Depends(_require_api_token)):
             tokens.append(_grid_token_payload(key, cfg))
         return {
             "dex": "multi",
-            "dexes": list(getattr(grid_mod, "PERP_DEXS", [])),
+            "dexes": catalog["dexes"],
+            **{k: v for k, v in catalog.items() if k.startswith("catalog_")},
             "count": len(tokens),
             "tokens": tokens,
         }
@@ -877,9 +1013,7 @@ async def get_grid_tokens(_: None = Depends(_require_api_token)):
 async def get_outcome_markets(_: None = Depends(_require_api_token)):
     """Return every live HIP-4 outcome from Hyperliquid's ``out`` deployer."""
     try:
-        from zeus import outcomes as outcome_mod
-        rows = outcome_mod.catalog_snapshot()
-        return outcome_mod.market_payload(rows)
+        return await public_catalogs.snapshot("hip4")
     except Exception as exc:
         logger.exception("HIP-4 outcome catalog unavailable: %s", exc)
         return {
@@ -903,7 +1037,9 @@ async def start_grid(req: GridStartRequest, _: None = Depends(_require_api_token
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, manager.start_grid, req)
-        return {"status": "starting", "message": f"Connexion Hyperliquid sur {req.token}", "mode": req.mode}
+        dashboard.invalidate("grid")
+        state = await asyncio.to_thread(dashboard.read, "grid", fresh=True)
+        return {"status": "starting", "message": f"Connecting to Hyperliquid on {req.token}", "mode": req.mode, "state": state}
     except Exception as e:
         return JSONResponse(
             status_code=400,
@@ -917,7 +1053,9 @@ async def stop_grid(req: Optional[GridStopRequest] = None, _: None = Depends(_re
         token = req.token if req else None
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, manager.stop_grid, token)
-        return {"status": "ok", "message": f"Bot stopped ({token or 'all'})"}
+        dashboard.invalidate("grid")
+        state = await asyncio.to_thread(dashboard.read, "grid", fresh=True)
+        return {"status": "ok", "message": f"Bot stopped ({token or 'all'})", "state": state}
     except Exception as e:
         return JSONResponse(
             status_code=400,
@@ -935,6 +1073,7 @@ async def restart_grid(_: None = Depends(_require_api_token)):
         req = GridStartRequest(**manager.grid_config)
         await asyncio.to_thread(manager.stop_grid)
         await asyncio.to_thread(manager.start_grid, req)
+        dashboard.invalidate("grid")
         return {"status": "ok", "message": "Grid bot restarted"}
     except Exception as e:
         return JSONResponse(
@@ -945,18 +1084,43 @@ async def restart_grid(_: None = Depends(_require_api_token)):
 
 @app.get("/api/grid/status")
 async def grid_status(_: None = Depends(_require_api_token)):
-    return manager.get_grid_stats()
+    return await asyncio.to_thread(dashboard.read, "grid")
 
 
 # ---------------------------------------------------------------------------
 # REST API — Outcome (HIP-4) Bot
 # ---------------------------------------------------------------------------
+@app.get("/api/outcomes/auto")
+async def outcome_auto(side: Literal["yes", "no"] = "no", order_usd: float = 50,
+                       max_spread_bps: float = 10, _: None = Depends(_require_api_token)):
+    from zeus.outcome_flow import scanner
+    if (not math.isfinite(order_usd) or order_usd < 10 or not math.isfinite(max_spread_bps)
+            or not 0 < max_spread_bps <= 100):
+        raise HTTPException(status_code=422, detail="Invalid auto-selection limits")
+    # Serve the warm snapshot immediately; an expired TTL starts a background
+    # refresh without blocking this poll. configure() re-filters start/expiry
+    # times against the current clock, so a <=60 s-old catalog stays safe.
+    catalog = await public_catalogs.snapshot("hip4")
+    await asyncio.to_thread(scanner.configure, catalog["outcomes"])
+    result = await asyncio.to_thread(scanner.snapshot, side, order_usd, max_spread_bps)
+    # Collecting session state reads every journal; keep it off the event loop
+    # so the 10 s auto poll cannot delay market loads or WebSocket pushes.
+    worldcup = await asyncio.to_thread(manager.get_worldcup_stats)
+    busy = {b["market"] for b in worldcup.get("bots", [])
+            if b.get("running") or not b.get("cleanup_confirmed")}
+    result["candidates"] = [r for r in result["candidates"] if r["market"] not in busy]
+    result["ready"] = bool(result["candidates"])
+    return result
+
+
 @app.post("/api/outcomes/start")
 @app.post("/api/worldcup/start")
 async def start_outcome(req: WorldcupStartRequest, _: None = Depends(_require_api_token)):
     try:
         session = await asyncio.to_thread(manager.start_worldcup, req)
-        return {"status": "ok", "message": "Outcome process starting", **(session or {})}
+        dashboard.invalidate("outcome")
+        state = await asyncio.to_thread(dashboard.read, "outcome", fresh=True)
+        return {"status": "ok", "message": "Outcome process starting", **(session or {}), "state": state}
     except Exception as e:
         return JSONResponse(
             status_code=400,
@@ -969,13 +1133,15 @@ async def start_outcome(req: WorldcupStartRequest, _: None = Depends(_require_ap
 async def stop_outcome(req: Optional[OutcomeStopRequest] = None, _: None = Depends(_require_api_token)):
     try:
         session_id = req.session_id if req else None
-        await asyncio.to_thread(manager.stop_worldcup, session_id)
-        state = manager.get_worldcup_stats()
-        targets = [b for b in state.get("bots", []) if session_id is None or b["session_id"] == session_id]
+        stopped_ids = await asyncio.to_thread(manager.stop_worldcup, session_id)
+        state = await asyncio.to_thread(dashboard.read, "outcome", fresh=True)
+        targets = [b for b in state.get("bots", []) if session_id is None or b["session_id"] in (stopped_ids or [session_id])]
         if (any(b["running"] or b["cleanup_confirmed"] is not True for b in targets)
-                or not targets and (state.get("running") or state.get("cleanup_confirmed") is not True)):
+                or not targets and not (session_id and stopped_ids)
+                and (state.get("running") or state.get("cleanup_confirmed") is not True)):
             raise RuntimeError("Outcome stop not confirmed")
-        return {"status": "ok", "message": "Outcome stop verified", "state": state}
+        return {"status": "ok", "message": "Outcome stop verified", "state": state,
+                "stopped_session_ids": stopped_ids or [b["session_id"] for b in targets]}
     except Exception as e:
         return JSONResponse(
             status_code=400,
@@ -986,7 +1152,7 @@ async def stop_outcome(req: Optional[OutcomeStopRequest] = None, _: None = Depen
 @app.get("/api/outcomes/status")
 @app.get("/api/worldcup/status")
 async def outcome_status(_: None = Depends(_require_api_token)):
-    return manager.get_worldcup_stats()
+    return await asyncio.to_thread(dashboard.read, "outcome")
 
 
 # ---------------------------------------------------------------------------
@@ -1001,17 +1167,18 @@ async def websocket_endpoint(websocket: WebSocket):
             return
     await websocket.accept()
     manager.ws_clients.add(websocket)
-    loop = asyncio.get_running_loop()
     try:
         while True:
             grid_stats, wc_stats = await asyncio.gather(
-                loop.run_in_executor(None, manager.get_grid_stats),
-                loop.run_in_executor(None, manager.get_worldcup_stats),
+                asyncio.to_thread(dashboard.read, "grid"),
+                asyncio.to_thread(dashboard.read, "outcome"),
             )
             await websocket.send_json(grid_stats)
             await websocket.send_json(wc_stats)
-            # 1 s: le chrono du dashboard doit avancer seconde par seconde
-            await asyncio.sleep(1)
+            # Local clocks animate independently; all tabs share cached snapshots.
+            # One push per second halves payload bandwidth and collection work
+            # while staying far inside the frontend's 6 s freshness window.
+            await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -1023,6 +1190,14 @@ async def websocket_endpoint(websocket: WebSocket):
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
+@app.post("/api/sessions/reconcile")
+async def reconcile_sessions(_: None = Depends(_require_api_token)):
+    state = await asyncio.to_thread(manager.reconcile_sessions)
+    dashboard.invalidate("grid")
+    dashboard.invalidate("outcome")
+    return state
+
+
 def main():
     """Serve the dashboard without starting a trading session."""
     uvicorn.run(
@@ -1036,6 +1211,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-@app.post("/api/sessions/reconcile")
-async def reconcile_sessions(_: None = Depends(_require_api_token)):
-    return await asyncio.to_thread(manager.reconcile_sessions)

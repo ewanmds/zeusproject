@@ -19,6 +19,7 @@ from zeus import PROJECT_ROOT
 from zeus.safety import SafetyLatch, safe_error, supervisor_alive
 from zeus.markets import resolve_symbol
 from zeus.network import post_info
+from zeus.localize import localize_state
 
 ROOT = PROJECT_ROOT / 'integrations' / 'freqtrade'
 _lock_handle = None
@@ -45,7 +46,7 @@ def resolve_token(token):
     try:
         return resolve_symbol(token)
     except ValueError as exc:
-        raise ValueError(f'Marché inconnu : {token} ({exc})') from exc
+        raise ValueError(f'Unknown market: {token} ({exc})') from exc
 
 
 def _safe(symbol):
@@ -62,7 +63,7 @@ def stop_file_path(symbol):
 
 def binary_path():
     if platform.machine().lower() not in {'amd64', 'x86_64'}:
-        raise ValueError('Architecture Freqtrade non prise en charge : un binaire amd64 est requis')
+        raise ValueError('Unsupported Freqtrade architecture: an amd64 binary is required')
     return ROOT / 'bin' / ('freqtrade-windows-amd64.exe' if os.name == 'nt' else 'freqtrade-linux-amd64')
 
 
@@ -79,7 +80,7 @@ def engine_digest():
 def require_binary():
     path = binary_path()
     if not path.is_file() or (os.name != 'nt' and not os.access(path, os.X_OK)):
-        raise ValueError('Binaire Freqtrade absent : python -m zeus.bots.freqtrade --build')
+        raise ValueError('Freqtrade binary missing: python -m zeus.bots.freqtrade --build')
     try:
         manifest = json.loads((ROOT / 'bin' / 'build.json').read_text(encoding='utf-8'))
         source = manifest['source']
@@ -87,13 +88,13 @@ def require_binary():
         if not isinstance(source, str) or not isinstance(expected, str):
             raise TypeError
     except (OSError, ValueError, KeyError, TypeError):
-        raise ValueError('Binaire Freqtrade non vérifié (manifeste de compilation absent ou illisible) : '
+        raise ValueError('Unverified Freqtrade binary (build manifest missing or unreadable): '
                          'python -m zeus.bots.freqtrade --build') from None
     if expected.lower() != hashlib.sha256(path.read_bytes()).hexdigest():
-        raise ValueError('Binaire Freqtrade non vérifié (empreinte différente du manifeste) : '
+        raise ValueError('Unverified Freqtrade binary (hash differs from manifest): '
                          'python -m zeus.bots.freqtrade --build')
     if source != engine_digest():
-        raise ValueError('Binaire Freqtrade périmé (sources Go modifiées depuis la compilation) : '
+        raise ValueError('Stale Freqtrade binary (Go sources changed since the build): '
                          'python -m zeus.bots.freqtrade --build')
     return path
 
@@ -140,7 +141,7 @@ def build():
         if candidate.is_file():
             go = str(candidate)
     if go is None:
-        raise RuntimeError('Go 1.25+ requis pour compiler Freqtrade')
+        raise RuntimeError('Go 1.25+ is required to build Freqtrade')
     binaries = ROOT / 'bin'
     binaries.mkdir(parents=True, exist_ok=True)
     build_dir = ROOT / '.build'
@@ -161,8 +162,8 @@ def build():
             for _, filename in platforms:
                 os.replace(staging / filename, binaries / filename)
         except PermissionError:
-            raise RuntimeError('Binaire Freqtrade verrouillé par un bot en cours ; '
-                               'arrêter le bot puis relancer --build') from None
+            raise RuntimeError('Freqtrade binary is locked by a running bot; '
+                               'stop the bot then rerun --build') from None
         manifest = dict(source=engine_digest(),
                         binaries={name: hashlib.sha256((binaries / name).read_bytes()).hexdigest()
                                   for _, name in platforms})
@@ -189,7 +190,7 @@ def acquire_lock(symbol):
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         handle.close()
-        raise RuntimeError(f'Un bot tourne déjà sur {symbol}')
+        raise RuntimeError(f'A bot is already running on {symbol}')
     _lock_handle = handle
 
 
@@ -224,20 +225,20 @@ def session_config(symbol, amount, metadata):
     # Zeus keeps a conservative 40 USD minimum even though the generated
     # single order quotes the full configured budget on each side.
     if not math.isfinite(amount) or amount < 40:
-        raise ValueError('Montant minimal Freqtrade : 40 USD (100 % par côté, un ordre par côté)')
+        raise ValueError('Freqtrade minimum amount: 40 USD (100% per side, one order per side)')
     dex, bare = symbol.split(':', 1)
     universe, contexts = metadata
     selected = next(((i, row) for i, row in enumerate(universe['universe'])
                      if row.get('name') in (symbol, bare)), None)
     if selected is None:
-        raise ValueError('Contrat introuvable')
+        raise ValueError('Contract not found')
     index, contract = selected
     if contract.get('isDelisted') or index >= len(contexts):
-        raise ValueError('Contrat indisponible')
+        raise ValueError('Contract unavailable')
     mid = float(contexts[index].get('midPx') or 0)
     step = 10 ** -int(contract['szDecimals'])
     if not math.isfinite(mid) or mid <= 0 or math.floor(amount / mid / step) * step * mid < 10:
-        raise ValueError('Montant insuffisant après arrondi à la précision du contrat')
+        raise ValueError('Amount too small after rounding to contract precision')
     config = json.loads((ROOT / 'profile.json').read_text(encoding='utf-8'))
     config.pop('env', None)
     config.pop('wallet_address', None)
@@ -253,7 +254,10 @@ def session_config(symbol, amount, metadata):
     levels = 1
     config['market_making'].update(quote_notional=quote_notional, ladder_levels=levels,
                                   adaptive_notional_enabled=False, trading_schedule_enabled=False,
-                                  volume_burst_enabled=False, wall_front_enabled=False)
+                                  volume_burst_enabled=False, wall_front_enabled=False,
+                                  # Strategy capture events must never pay taker fees.
+                                  price_shock_favorable_ioc_frac=0.0,
+                                  shock_chain_enabled=False)
     config['risk'].update(max_position_notional=amount,
                           max_spread_exposure=round(amount * 1.1, 2),
                           max_aggregate_exposure=round(amount * 1.1, 2),
@@ -293,15 +297,15 @@ def market_eligibility(symbol):
     book = post_info('https://api.hyperliquid.xyz', {'type': 'l2Book', 'coin': symbol})
     levels = book.get('levels') if isinstance(book, dict) else None
     if not isinstance(levels, list) or len(levels) != 2 or not levels[0] or not levels[1]:
-        raise ValueError('Carnet indisponible : impossible de vérifier le spread venu')
+        raise ValueError('Order book unavailable: cannot verify venue spread')
     try:
         best_bid = float(levels[0][0]['px'])
         best_ask = float(levels[1][0]['px'])
     except (KeyError, TypeError, ValueError, IndexError):
-        raise ValueError('Carnet invalide : prix venu illisible') from None
+        raise ValueError('Invalid order book: unreadable venue price') from None
     mid = (best_bid + best_ask) / 2.0
     if not math.isfinite(mid) or mid <= 0 or best_ask <= best_bid:
-        raise ValueError('Carnet invalide : spread venu incohérent')
+        raise ValueError('Invalid order book: inconsistent venue spread')
     venue_half = (best_ask - best_bid) / mid * 10000.0 / 2.0
     required = required_half_spread_bps()
     return {'venue_half_bps': venue_half, 'required_half_bps': required,
@@ -328,10 +332,10 @@ def preflight(binary, config, flag, stop):
             if stop.is_set() or time.monotonic() > deadline:
                 process.terminate()
                 process.wait(timeout=10)
-                raise RuntimeError('Démarrage annulé ou contrôle préalable expiré ; aucun ordre lancé')
+                raise RuntimeError('Start cancelled or pre-flight check timed out; no orders sent')
             stop.wait(0.1)
         if process.returncode != 0:
-            raise RuntimeError(f'Contrôle Freqtrade échoué ({flag}) ; vérifier la configuration, le réseau et l’API wallet')
+            raise RuntimeError(f'Freqtrade check failed ({flag}); check the configuration, network and wallet API')
 
 
 def run(token, amount):
@@ -344,12 +348,13 @@ def run(token, amount):
     session = uuid.uuid4().hex
     state = dict(symbol=symbol, strategy='freqtrade', live=True, start_time=time.time(),
                  phase='connecting', running=True, position_known=False,
-                 action='Validation Freqtrade', error='', volume=0, fees=0, rpnl=0, fills=0,
+                 action='Validating Freqtrade', error='', volume=0, fees=0, rpnl=0, fills=0,
                  cost_per_1m=None, notional=amount)
     safety = SafetyLatch(path=os.getenv("ZEUS_SAFETY_FILE"))
     first_error = ""
     def write():
         state['ts'] = time.time()
+        localize_state(state)
         derive_metrics(state)
         if safety.path:
             safety.phase = state["phase"]
@@ -370,8 +375,8 @@ def run(token, amount):
         metadata = post_info('https://api.hyperliquid.xyz', {'type': 'metaAndAssetCtxs', 'dex': symbol.split(':')[0]})
         config = session_config(symbol, amount, metadata)
         edge = market_eligibility(symbol)
-        edge_note = ' | cotations élargies par le moteur' if edge['warning'] else ''
-        state.update(action=f"FREQTRADE | spread venu {edge['venue_half_bps']:.2f} bps, edge requis {edge['required_half_bps']:.2f} bps{edge_note}")
+        edge_note = ' | quotes widened by the engine' if edge['warning'] else ''
+        state.update(action=f"FREQTRADE | venue spread {edge['venue_half_bps']:.2f} bps, required edge {edge['required_half_bps']:.2f} bps{edge_note}")
         write()
         temporary = tempfile.TemporaryDirectory(prefix='zeus_freqtrade_')
         directory = temporary.name
@@ -390,7 +395,7 @@ def run(token, amount):
         if not confirm_flat(symbol, os.getenv("WALLET_ADDRESS", "")):
             raise RuntimeError("Existing orders/position or unreadable account; no session started")
         if stop.is_set():
-            raise RuntimeError('Démarrage annulé avant ordres')
+            raise RuntimeError('Start cancelled before orders')
         child = subprocess.Popen([str(binary), '-config', str(config_path), '-zeus-session', session,
                                   '-zeus-symbol', symbol, '-zeus-stop-file', str(go_stop)],
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
@@ -441,7 +446,7 @@ def run(token, amount):
         child.stdout.close()
         if child.returncode != 0 or state.get('cleanup_confirmed') is not True:
             state.update(phase='failed', running=False, position_known=False,
-                         error=state.get('error') or f'Freqtrade interrompu (code {child.returncode}) ; état à vérifier')
+                         error=state.get('error') or f'Freqtrade interrupted (code {child.returncode}); state needs review')
     except BaseException as exc:
         state.update(phase='failed', running=False, cleanup_confirmed=False, can_start=False, position_known=False, error=first_error or safe_error(exc))
         if child is not None and child.poll() is None:
@@ -475,9 +480,9 @@ def main():
         build()
         return 0
     if not args.live:
-        parser.error('--live est obligatoire ; aucun ordre lancé')
+        parser.error('--live is required; no orders sent')
     if not math.isfinite(args.notional) or args.notional < 40:
-        parser.error('--notional doit être fini et supérieur ou égal à 40 USD')
+        parser.error('--notional must be finite and greater than or equal to 40 USD')
     return run(args.token, args.notional)
 
 

@@ -138,6 +138,36 @@ func confirmedOrderPresent(rows []any, oid int64) (bool, error) {
 	return present, nil
 }
 
+// modifyAckConfirmed reports whether the exchange confirmed a modification.
+//
+// Hyperliquid answers a successful batchModify with
+// {"status":"ok","response":{"type":"default"}}: no per-order statuses and no
+// OID, because a modification keeps the original order ID. ParsePlacedOrder
+// maps that reply to Status "unknown" with OID 0, so the raw acknowledgement
+// must be inspected instead of treating the missing OID as a rejection.
+func modifyAckConfirmed(order *hyperliquid.PlacedOrder, trackedOID int64) bool {
+	if order == nil || order.IsError() {
+		return false
+	}
+	if order.IsFilled() || order.IsResting() {
+		return order.OID > 0
+	}
+	if trackedOID <= 0 || order.RawResponse == nil {
+		return false
+	}
+	if status, _ := order.RawResponse["status"].(string); !strings.EqualFold(status, "ok") {
+		return false
+	}
+	body, _ := order.RawResponse["response"].(map[string]any)
+	if data, ok := body["data"].(map[string]any); ok {
+		if statuses, ok := data["statuses"].([]any); ok && len(statuses) > 0 {
+			// A per-order status we could not parse is ambiguous: never assume success.
+			return false
+		}
+	}
+	return true
+}
+
 // Preserve the exchange reason instead of hiding it behind a generic ack error.
 func orderAckError(action string, order *hyperliquid.PlacedOrder) error {
 	if order != nil && order.IsError() {
@@ -158,4 +188,27 @@ func (le *LiveExecutor) quoteDeferred(coin string) bool {
 	le.mu.Lock()
 	defer le.mu.Unlock()
 	return time.Now().Before(le.quoteRetryAfter[coin])
+}
+
+// A terminal old order is not a failed session; verify its absence before
+// discarding its identity. Never apply this classification to placements.
+var missingModifyPattern = regexp.MustCompile(`^Cannot modify canceled or filled order\.?( asset=[0-9]+)?$`)
+
+func isMissingModifyReject(order *hyperliquid.PlacedOrder) bool {
+	if order == nil || !order.IsError() {
+		return false
+	}
+	return missingModifyPattern.MatchString(strings.TrimSpace(strings.TrimPrefix(order.Status, "error:")))
+}
+func recoverModifyReject(order *hyperliquid.PlacedOrder, coin string, oid int64,
+	reconcile func(string, int64) (placeOrderResult, error),
+) (placeOrderResult, error) {
+	result, err := reconcile(coin, oid)
+	if err != nil {
+		return placeOrderResult{}, err
+	}
+	if isMissingModifyReject(order) && !result.originalGone {
+		return placeOrderResult{}, fmt.Errorf("modify reconciliation: rejected order %d remains open", oid)
+	}
+	return result, nil
 }

@@ -15,6 +15,8 @@ def main():
             for width in (1440, 390):
                 bots, starts, stops, errors = [], [], [], []
                 fail_start, fail_stop = [False], [False]
+                auto_state = [{"ready": False, "connected": True, "warming_up": True,
+                               "observed_sec": 15, "markets_observed": 200, "candidates": []}]
                 context = browser.new_context(viewport={"width": width, "height": 1000})
                 context.add_init_script("""window.WebSocket = class {
                     static OPEN = 1; static CONNECTING = 0; readyState = 1;
@@ -62,6 +64,8 @@ def main():
                                 if not payload.get("session_id") or bot["session_id"] == payload["session_id"]:
                                     bot.update(running=False, phase="stopped", cleanup_confirmed=True, can_start=True)
                             result = {"status": "ok", "state": status()}
+                        elif path == "/api/outcomes/auto":
+                            result = {**auto_state[0], "updated_at": __import__("time").time()}
                         elif path == "/api/outcomes/status": result = status()
                         elif path == "/api/outcomes/markets":
                             result = {"outcomes": [{"key": "#14881", "id": 1488, "name": "Spurs", "mid0": 0.87, "mid1": 0.13},
@@ -71,7 +75,7 @@ def main():
                         elif path == "/api/sessions/reconcile": result = {"can_start": True, "unresolved": []}
                         route.fulfill(json=result)
                         return
-                    file = FRONTEND / (path.lstrip("/") or "index.html")
+                    file = FRONTEND / (path.lstrip("/").removeprefix("frontend/") or "index.html")
                     if file.name == "config.js": route.fulfill(body="window.ZEUS_CONFIG = {};")
                     elif file.is_file(): route.fulfill(body=file.read_bytes(), content_type=mimetypes.guess_type(file.name)[0] or "application/octet-stream")
                     else: route.fulfill(status=404)
@@ -82,15 +86,25 @@ def main():
                 page.goto("http://zeus.test/")
                 page.locator("#tab-outcome").click()
                 start = page.locator("#outcome-start-btn")
-                expect(start).to_be_disabled()
+                expect(start).to_be_enabled()
+                expect(start).to_contain_text("Choose market")
+                start.click()
+                expect(page.locator("#outcome-market-search")).to_be_focused()
+                page.keyboard.press("Escape")
 
                 def select(name):
                     page.locator("#outcome-market-trigger").click()
-                    expect(page.locator("#outcome-market-options")).not_to_contain_text("Tous les marchés")
+                    expect(page.locator("#outcome-market-options")).not_to_contain_text("All markets")
                     page.locator("#outcome-market-options").get_by_role("option", name=name).click()
 
                 select("Spurs")
                 expect(start).to_be_enabled()
+                expect(page.locator("#outcome-side-help")).to_be_hidden()
+                page.locator("#outcome-details summary").focus()
+                page.keyboard.press("Enter")
+                expect(page.locator("#outcome-side-help")).to_be_visible()
+                page.keyboard.press("Enter")
+                expect(page.locator("#outcome-side-help")).to_be_hidden()
                 yes = page.locator("#outcome-side-yes")
                 no = page.locator("#outcome-side-no")
                 expect(no).to_be_checked()
@@ -104,7 +118,7 @@ def main():
                 maker = page.locator("#outcome-maker-spread")
                 maker.fill("-1")
                 start.click()
-                expect(page.locator("#outcome-form-alert")).to_contain_text("Spread Limit")
+                expect(page.locator("#outcome-form-alert")).to_contain_text("Spread limit")
                 assert not starts
                 maker.fill("0.007")
                 fail_start[0] = True
@@ -147,10 +161,10 @@ def main():
                 bots[0].update(phase="recovering", recovery_error="Insufficient spot balance")
                 first.get_by_role("button").focus()
                 push()
-                expect(first).to_contain_text("reprise auto")
+                expect(first).to_contain_text("auto-recovery")
                 expect(first).to_contain_text("Insufficient spot balance")
                 expect(first.get_by_role("button")).to_be_focused()
-                expect(second).to_contain_text("Actif")
+                expect(second).to_contain_text("Active")
                 before = len(starts)
                 bots[0].update(phase="running", recovery_error="")
                 push()
@@ -161,8 +175,7 @@ def main():
                 expect(first.get_by_role("button")).to_be_visible()
                 fail_stop[0] = False
                 first.get_by_role("button").click()
-                expect(first).to_contain_text("Arrêt confirmé")
-                expect(first.get_by_role("button")).to_be_hidden()
+                expect(first).to_have_count(0)
                 expect(second.get_by_role("button")).to_be_visible()
                 assert stops[-1]["session_id"] == bots[0]["session_id"]
                 select("Spurs")
@@ -185,13 +198,64 @@ def main():
                 screenshot = Path(tempfile.gettempdir()) / f"zeus-outcome-processes-{width}.png"
                 page.screenshot(path=str(screenshot), full_page=True)
                 page.locator("#outcome-stop-btn").click()
-                expect(second).to_contain_text("Arrêt confirmé")
+                expect(page.locator("#confirm-stop")).to_be_visible()
+                page.locator("#confirm-stop-accept").click()
+                expect(second).to_have_count(0)
                 assert stops[-1] == {}
+                expect(page.locator("#outcome-history")).to_have_count(0)
+                expect(page.locator("#outcome-idle")).to_be_visible()
+                expect(first).to_be_hidden()
+                expect(second).to_be_hidden()
+                page.locator("#outcome-side-no").check()
+                page.locator("#outcome-selection-mode").select_option("auto")
+                expect(page.locator("#outcome-auto-status")).to_contain_text("15 / 60")
+                expect(mode).to_have_value("maker")
+                expect(mode).to_be_disabled()
+                expect(maker).to_be_hidden()
+                expect(page.locator("#outcome-market-trigger")).to_be_hidden()
+                expect(start).to_be_enabled()
+                before_auto = len(starts)
+                start.click()
+                expect(start).to_contain_text("Cancel Auto")
+                expect(page.locator("#outcome-order-size")).to_be_disabled()
+                expect(page.locator("#outcome-side-yes")).to_be_disabled()
+                assert len(starts) == before_auto, "Warmup must not place a start request"
+                start.click()
+                expect(start).to_contain_text("Start Auto")
+                expect(page.locator("#outcome-order-size")).to_be_enabled()
+                page.locator("#outcome-auto-spread").fill("5")
+                start.click()
+                expect(start).to_contain_text("Cancel Auto")
+                auto_state[0] = {"ready": True, "connected": True, "warming_up": False,
+                                 "observed_sec": 70, "markets_observed": 200, "candidates": [{
+                                     "market": "#14881", "name": "Spurs", "volume_usd_1m": 500,
+                                     "events_5m": 15, "spread_bps": .2, "queue_proxy_sec": 12}]}
+                # The scheduled scan must launch once using the frozen settings.
+                expect(page.locator("#outcome-auto-status")).to_contain_text("Top $/min", timeout=15000)
+                expect(page.locator("#outcome-auto-candidates")).to_contain_text("500")
+                if page.locator("#outcome-selection-mode").input_value() == "auto":
+                    image_dir = FRONTEND.parent / "output" / "playwright"
+                    image_dir.mkdir(parents=True, exist_ok=True)
+                    page.evaluate("window.scrollTo(0, 0)")
+                    page.screenshot(path=str(image_dir / f"outcome-auto-{width}.png"), full_page=True)
+                expect(first).to_contain_text("Auto flow")
+                expect(first).to_contain_text("best bid / ask")
+                assert starts[-1]["selection_mode"] == "auto" and starts[-1]["auto_max_spread_bps"] == 5
+                assert starts[-1]["exec_mode"] == "maker" and starts[-1]["outcome_side"] == "no"
+                assert starts[-1]["two_sided"] is True and starts[-1]["auto_rotate"] is True
+                expect(first).to_contain_text("Bid + Ask")
+                page.locator("#outcome-selection-mode").select_option("manual")
+                page.locator("#outcome-side-yes").check()
+                expect(first.locator('[data-f="title"]')).to_have_text("Spurs · No")
+                expect(first).to_contain_text("Auto flow")
+                page.screenshot(path=str(Path(tempfile.gettempdir()) / f"zeus-outcome-auto-{width}.png"), full_page=True)
+                first.get_by_role("button").click()
+                expect(first).to_have_count(0)
                 page.locator("#tab-grid").click()
                 grid = {"type": "grid_stats", "running": True, "bots": [{
                     "token": "IO_ANTH", "symbol": "io:ANTH", "strategy": "bbo", "running": True,
                     "phase": "running", "error": "", "cleanup_confirmed": False,
-                    "warning": "Post-only : carnet déplacé, recalcul du côté rejeté.",
+                    "warning": "Post-only: book moved, recalculating the rejected side.",
                     "duration": "00:00:47", "mid_price": 1738.2, "volume_usd": 201.63,
                     "net_pnl": 0.01, "fees": 0.01, "fills": 2}]}
                 page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", grid)
@@ -199,7 +263,7 @@ def main():
                 expect(card).to_contain_text("LIVE")
                 expect(card).to_contain_text("Post-only")
                 expect(card).not_to_have_class(__import__("re").compile(r"\bfailed\b"))
-                expect(card.get_by_role("button", name="Arrêter IO_ANTH")).to_be_visible()
+                expect(card.get_by_role("button", name="Stop IO_ANTH")).to_be_visible()
                 grid["bots"][0]["error"] = "Post only order would have immediately matched"
                 page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", grid)
                 expect(card).not_to_have_class(__import__("re").compile(r"\bfailed\b"))
@@ -207,10 +271,10 @@ def main():
                 page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", grid)
                 expect(card).to_contain_text("LIVE")
                 expect(card).not_to_have_class(__import__("re").compile(r"\bfailed\b"))
-                expect(card.get_by_role("button", name="Arrêter IO_ANTH")).to_be_visible()
-                grid["bots"][0].update(error="", warning="Ordre déjà rempli ou annulé : cotation recalculée après synchronisation.")
+                expect(card.get_by_role("button", name="Stop IO_ANTH")).to_be_visible()
+                grid["bots"][0].update(error="", warning="Order already filled or cancelled: quote recalculated after sync.")
                 page.evaluate("value => window.__testSocket.onmessage({data: JSON.stringify(value)})", grid)
-                expect(card).to_contain_text("déjà rempli ou annulé")
+                expect(card).to_contain_text("already filled or cancelled")
                 expect(card).not_to_have_class(__import__("re").compile(r"\bfailed\b"))
                 page.screenshot(path=str(Path(tempfile.gettempdir()) / f"zeus-bbo-post-only-{width}.png"), full_page=True)
                 assert not errors, errors

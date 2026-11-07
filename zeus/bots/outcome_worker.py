@@ -13,6 +13,8 @@ from zeus.safety import atomic_json, safe_error, supervisor_alive
 def build_config(public, safety_file, stop_file=None, funds_root=None):
     from zeus.bots.worldcup import BotConfig
     market = str(public["market"])
+    from zeus.outcome_policy import assert_coin_allowed
+    assert_coin_allowed(market)
     if not market.startswith("#") or not market[1:].isdigit():
         raise ValueError("Select one exact Outcome market")
     encoded_side = int(market[1:]) % 10
@@ -35,6 +37,11 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         scan_only=False, worldcup=True, countries=[], outcome_side=side,
         exec_mode=public.get("exec_mode", "taker"), maker_offset_pct=0,
         maker_spread_pct=public.get("maker_spread_pct", 0.005), safety_file=str(safety_file),
+        auto_max_spread_bps=public.get("auto_max_spread_bps", 10) if public.get("selection_mode") == "auto" else None,
+        two_sided=public.get("two_sided", False),
+        full_size_quotes=public.get("full_size_quotes", public.get("selection_mode") == "auto"),
+        rotation_file=str(Path(stop_file).with_name("drain.json")) if stop_file else None,
+        risk_pnl_carry=public.get("rotation_pnl_carry", 0),
         stop_file=str(stop_file) if stop_file else None,
         funds_root=str(funds_root) if funds_root else None,
     )

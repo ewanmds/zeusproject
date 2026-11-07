@@ -49,7 +49,7 @@ class MissingModifyRaceTests(unittest.TestCase):
         self.assertEqual(set(self.bot.orders), {20})
         self.assertNotIn(10, self.bot.queue_ahead)
         self.assertEqual(self.bot.queue_ahead[20], 8)
-        self.assertIn("déjà rempli ou annulé", self.bot.quote_warning)
+        self.assertIn("Order already filled or cancelled", self.bot.quote_warning)
         self.raw.bulk_modify_orders_new.assert_called_once()
         self.raw.bulk_cancel.assert_not_called()
 

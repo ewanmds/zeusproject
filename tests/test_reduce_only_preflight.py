@@ -30,6 +30,7 @@ class ReduceOnlyPreflightTests(unittest.TestCase):
         self.raw.bulk_orders.return_value = ack({"resting": {"oid": 123}})
         self.raw.bulk_modify_orders_new.return_value = ack({"resting": {"oid": 124}})
         bot.position = 2
+        bot.entry_price, bot.unrealized_pnl = 0.0, 0.0
         bot.position_revision, bot.position_dirty = 0, False
         bot.pos_since = bot.last_fill_ts = bot.spot_usdc = 0
         bot.best_bid, bot.best_ask, bot.mid = 100, 100.1, 100.05

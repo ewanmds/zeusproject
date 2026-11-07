@@ -24,6 +24,34 @@ def wait_until(check, timeout=12):
     raise AssertionError("Offline worker condition timed out")
 
 
+class OutcomeArchivedPidTests(unittest.TestCase):
+    def test_reused_pid_does_not_resurrect_verified_stopped_session(self):
+        with tempfile.TemporaryDirectory() as folder:
+            manager = server.BotManager(state_dir=folder)
+            record = dict(session_id='archived', key='outcome:#101', account_kind='outcome', symbols=['#101'],
+                          pid=os.getpid(), started=1, phase='stopped', cleanup_confirmed=True)
+            atomic_json(Path(folder)/'archived.json', record)
+            state = manager.get_worldcup_stats()
+            self.assertFalse(state['bots'][0]['running'])
+            self.assertTrue(state['bots'][0]['cleanup_confirmed'])
+            self.assertEqual(state['display_bots'], [])
+            self.assertEqual(manager.stop_worldcup('archived'), ['archived'])
+            manager.outcome.rotation.close()
+
+    def test_unverified_session_is_never_hidden_as_a_pid_reuse_fix(self):
+        with tempfile.TemporaryDirectory() as folder:
+            manager = server.BotManager(state_dir=folder)
+            record = dict(session_id='unknown', key='outcome:#101', account_kind='outcome', symbols=['#101'],
+                          pid=os.getpid(), started=1, phase='failed', cleanup_confirmed=False)
+            atomic_json(Path(folder)/'unknown.json', record)
+            state = manager.get_worldcup_stats()
+            self.assertFalse(state['bots'][0]['cleanup_confirmed'])
+            self.assertEqual(len(state['display_bots']), 1)
+            with self.assertRaises(RuntimeError):
+                manager.stop_worldcup('unknown')
+            manager.outcome.rotation.close()
+
+
 class OutcomeProcessTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -40,6 +68,7 @@ class OutcomeProcessTests(unittest.TestCase):
         self.spawn = self.spawn_patch.start()
 
     def tearDown(self):
+        self.manager.outcome.rotation.close()
         for info in self.manager.outcome.procs.values():
             Path(info["stop_file"]).touch()
             (Path(info["stop_file"]).parent / "release").touch()
@@ -56,6 +85,7 @@ class OutcomeProcessTests(unittest.TestCase):
 
     def fake_spawn(self, cmd, **kwargs):
         self.assertEqual(cmd[3], "zeus.bots.outcome_worker")
+        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
         self.assertNotIn("dummy", " ".join(cmd))
         if self.override_parent:
             kwargs["env"]["ZEUS_PARENT_PID"] = str(self.override_parent)
@@ -96,6 +126,55 @@ class OutcomeProcessTests(unittest.TestCase):
         events = json.loads((Path(infos[0]["stop_file"]).parent / "events.json").read_text())
         self.assertEqual([r["event"] for r in events], ["run", "cleanup"])
         self.assertTrue(all(row["market"] == "#14881" for row in events))
+
+    def test_auto_pins_chosen_market_and_metrics_to_its_worker(self):
+        chosen = {"market": "#14881", "name": "Repeated takers", "score": 123,
+                  "volume_usd_1m": 500, "queue_proxy_sec": 12}
+        with patch("zeus.outcome_flow.scanner.snapshot", return_value={"ready": True, "candidates": [chosen]}) as scan:
+            result = self.start("#14751", selection_mode="auto", outcome_side="no", exec_mode="maker")
+        self.ready()
+        self.assertEqual(result["market"], "#14881")
+        bot = self.manager.get_worldcup_stats()["bots"][0]
+        self.assertEqual(bot["config"]["selection_mode"], "auto")
+        self.assertEqual(bot["config"]["outcome_side"], "no")
+        self.assertEqual(bot["config"]["auto_selection"]["score"], 123)
+        self.assertIsNone(bot["config"]["maker_spread_pct"])
+        from zeus.bots.outcome_worker import build_config
+        self.assertIsNone(build_config(bot["config"], None).maker_spread_pct)
+        self.manager.stop_worldcup(result["session_id"])
+
+    def test_auto_rotation_replaces_only_after_old_worker_stops_and_stop_tracks_chain(self):
+        from collections import deque
+        with patch("zeus.outcome_rotation.OutcomeRotation._loop", return_value=None), \
+             patch("zeus.outcome_flow.scanner.snapshot") as scan:
+            scan.return_value = {"ready": True, "candidates": [{"market": "#14881", "score": 10}]}
+            old = self.start(selection_mode="auto", exec_mode="maker", order_size_usd=10, max_position_usd=200)
+            self.ready()
+            controller = self.manager.outcome.rotation
+            group = controller.groups[old["session_id"]]
+            now = time.time()
+            group["started"] = now-200
+            group["samples"] = deque([(now-180, 100)])
+            scan.return_value = {"ready": True, "candidates": [{"market": "#14751", "score": 20, "volume_usd_1m": 1000}]}
+            controller.tick(now)
+            self.assertEqual(group["state"], "draining")
+            self.assertEqual(self.spawn.call_count, 1)
+            old_info = self.manager.outcome.procs[old["session_id"]]
+            wait_until(lambda: old_info["proc"].poll() is not None and
+                       self.manager._session_status(old_info["safety_file"]).get("cleanup_confirmed"))
+            controller.tick()
+            self.assertEqual(self.spawn.call_count, 2)
+            new_id = group["current"]
+            self.assertNotEqual(new_id, old["session_id"])
+            wait_until(lambda: any(b["session_id"] == new_id and b["phase"] == "running"
+                       for b in self.manager.get_worldcup_stats()["bots"]))
+            cfg = self.manager._session_status(self.manager.outcome.procs[new_id]["safety_file"])["config"]
+            self.assertEqual((cfg["market"], cfg["order_size_usd"], cfg["max_position_usd"], cfg["outcome_side"]),
+                             ("#14751", 10, 200, "no"))
+            self.assertTrue(cfg["two_sided"])
+            self.manager.stop_worldcup(old["session_id"])
+            self.assertTrue(group["cancelled"])
+            self.assertFalse(self.manager.get_worldcup_stats()["running"])
 
     def test_yes_and_no_get_separate_processes_and_scoped_stop(self):
         yes = self.start(outcome_side="yes", exec_mode="maker")

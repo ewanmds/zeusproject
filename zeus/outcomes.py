@@ -13,6 +13,7 @@ downloader without sharing an in-memory instance.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import math
@@ -40,13 +41,13 @@ LOGO_URL_PREFIX = "/frontend/assets/logos/hip4"
 CATEGORY_ORDER = ["sports", "price", "culture", "economics", "technology", "tradfi", "crypto"]
 CATEGORY_LABELS = {
     "sports": "Sports",
-    "price": "Prix",
+    "price": "Price",
     "culture": "Culture",
-    "economics": "Économie",
-    "technology": "Technologie",
+    "economics": "Economics",
+    "technology": "Technology",
     "tradfi": "TradFi",
     "crypto": "Crypto",
-    "other": "Autres",
+    "other": "Other",
 }
 SPORT_ICONS = {
     "association football": "soccer_outcome",
@@ -239,25 +240,31 @@ def _fallback_label(template_id: Optional[str]) -> str:
 # Catalog
 # ---------------------------------------------------------------------------
 def _fetch_payloads() -> Tuple[Dict[str, Any], Dict[str, Dict[str, Any]], Dict[str, Any]]:
-    meta = post_info(HL_API, {"type": "outcomeMeta"})
-    templates: Dict[str, Dict[str, Any]] = {}
-    try:
-        raw_templates = post_info(HL_API, {"type": "outcomeTemplates"})
-        if isinstance(raw_templates, list):
-            templates = {
-                str(item.get("id")): item
-                for item in raw_templates
-                if isinstance(item, dict) and item.get("id")
-            }
-    except Exception as exc:  # noqa: BLE001 - names still work without templates
-        logger.warning("HIP-4 outcomeTemplates unavailable: %s", exc)
-    mids: Dict[str, Any] = {}
-    try:
-        raw_mids = post_info(HL_API, {"type": "allMids"})
-        if isinstance(raw_mids, dict):
-            mids = raw_mids
-    except Exception as exc:  # noqa: BLE001 - prices are optional for the catalog
-        logger.warning("HIP-4 allMids unavailable: %s", exc)
+    # The three public reads are independent; overlap their round-trips so a
+    # cold catalog refresh costs one RTT instead of three sequential ones.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        meta_future = pool.submit(post_info, HL_API, {"type": "outcomeMeta"})
+        templates_future = pool.submit(post_info, HL_API, {"type": "outcomeTemplates"})
+        mids_future = pool.submit(post_info, HL_API, {"type": "allMids"})
+        meta = meta_future.result()
+        templates: Dict[str, Dict[str, Any]] = {}
+        try:
+            raw_templates = templates_future.result()
+            if isinstance(raw_templates, list):
+                templates = {
+                    str(item.get("id")): item
+                    for item in raw_templates
+                    if isinstance(item, dict) and item.get("id")
+                }
+        except Exception as exc:  # noqa: BLE001 - names still work without templates
+            logger.warning("HIP-4 outcomeTemplates unavailable: %s", exc)
+        mids: Dict[str, Any] = {}
+        try:
+            raw_mids = mids_future.result()
+            if isinstance(raw_mids, dict):
+                mids = raw_mids
+        except Exception as exc:  # noqa: BLE001 - prices are optional for the catalog
+            logger.warning("HIP-4 allMids unavailable: %s", exc)
     if not isinstance(meta, dict):
         raise ValueError("outcomeMeta returned an unexpected payload")
     return meta, templates, mids
@@ -374,6 +381,7 @@ def _build_rows(
             "raw_name": raw_name,
             "question_id": int(question.get("question")) if question and question.get("question") is not None else None,
             "question_title": question_title,
+            "question_description": str(question.get("description") or "") if question else "",
             "category": category,
             "category_label": CATEGORY_LABELS.get(category, category.replace("_", " ").title()),
             "subcategory": subcategory or None,
@@ -489,6 +497,27 @@ def catalog_snapshot(force: bool = False) -> List[Dict[str, Any]]:
             by_id=by_id,
         )
     return [dict(row) for row in rows]
+
+
+def prime_catalog(rows: Iterable[Dict[str, Any]]) -> None:
+    """Seed the in-process cache from a catalog built in a public worker.
+
+    ``resolve_market`` lives in the server process while the shared catalog is
+    fetched in a subprocess; without this seed the first Start after a boot
+    repeats three blocking HTTP reads before it can resolve the market.
+    """
+    clean = [dict(row) for row in rows if isinstance(row, dict) and row.get("key")]
+    if not clean:
+        return
+    by_key = {str(row["key"]): row for row in clean}
+    by_id = {}
+    for row in clean:
+        try:
+            by_id[int(row["id"])] = row
+        except (KeyError, TypeError, ValueError):
+            continue
+    with _lock:
+        _cache.update(ts=time.monotonic(), rows=clean, by_key=by_key, by_id=by_id)
 
 
 def resolve_market(value: Any) -> Optional[Dict[str, Any]]:

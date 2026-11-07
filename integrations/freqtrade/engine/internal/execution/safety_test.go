@@ -224,6 +224,51 @@ func TestModifyALOReconcilesBeforeContinuing(t *testing.T) {
 	}
 }
 
+func TestModifyDefaultAcknowledgementKeepsOriginalOrder(t *testing.T) {
+	le := safetyExecutor()
+	le.cfg.Risk.MaxPositionNotional = 1000
+	le.positions = map[string]*livePosition{}
+	le.szDecimals = map[string]int{"io:ANTH": 3}
+	sendCalls := 0
+	send := func(int64, string, string, string, string, ...hyperliquid.ModifyOption) (*hyperliquid.PlacedOrder, error) {
+		sendCalls++
+		// Real Hyperliquid batchModify ack: no per-order status and no OID.
+		return &hyperliquid.PlacedOrder{
+			Status:      "unknown",
+			RawResponse: map[string]any{"status": "ok", "response": map[string]any{"type": "default"}},
+		}, nil
+	}
+	reconcile := func(string, int64) (placeOrderResult, error) {
+		t.Error("unexpected reconciliation")
+		return placeOrderResult{}, nil
+	}
+	result, err := le.modifyWithCallbacks(context.Background(), "io:ANTH", &trackedOrder{OID: 12}, &types.OrderRequest{Coin: "io:ANTH", Side: "buy", Size: 0.1, Price: 1744.6}, send, reconcile)
+	if err != nil || le.SafetyError() != nil {
+		t.Fatalf("default acknowledgement halted execution: %v", err)
+	}
+	if sendCalls != 1 || result.oid != 12 || result.benignReject {
+		t.Fatalf("unexpected result: %+v sends=%d", result, sendCalls)
+	}
+}
+
+func TestModifyUnparsedStatusStillHalts(t *testing.T) {
+	le := safetyExecutor()
+	le.cfg.Risk.MaxPositionNotional = 1000
+	le.positions = map[string]*livePosition{}
+	le.szDecimals = map[string]int{"io:ANTH": 3}
+	send := func(int64, string, string, string, string, ...hyperliquid.ModifyOption) (*hyperliquid.PlacedOrder, error) {
+		return &hyperliquid.PlacedOrder{
+			Status:      "unknown",
+			RawResponse: map[string]any{"status": "ok", "response": map[string]any{"data": map[string]any{"statuses": []any{"unexpected"}}}},
+		}, nil
+	}
+	reconcile := func(string, int64) (placeOrderResult, error) { return placeOrderResult{}, nil }
+	_, err := le.modifyWithCallbacks(context.Background(), "io:ANTH", &trackedOrder{OID: 12}, &types.OrderRequest{Coin: "io:ANTH", Side: "buy", Size: 0.1, Price: 1744.6}, send, reconcile)
+	if err == nil || le.SafetyError() == nil {
+		t.Fatal("ambiguous acknowledgement must halt")
+	}
+}
+
 func TestALOCooldownPreservesOtherMarketsAndStop(t *testing.T) {
 	le := safetyExecutor()
 	le.deferQuotes("io:ANTH")

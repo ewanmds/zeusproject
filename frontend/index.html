@@ -1,18 +1,28 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Zeus — suivi et contrôle des stratégies Hyperliquid.">
+  <meta name="description" content="Zeus — track and control Hyperliquid market-making and Outcome strategies from one terminal.">
   <meta name="theme-color" content="#090d16">
-  <title>Zeus — Trading workspace</title>
+  <meta name="color-scheme" content="dark">
+  <title>Zeus — Trading Workspace</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://3-113-242-142.sslip.io/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Zeus — Hyperliquid Trading Workspace">
+  <meta property="og:description" content="Track and control Hyperliquid market-making and Outcome strategies from one terminal.">
+  <meta property="og:url" content="https://3-113-242-142.sslip.io/">
+  <meta name="twitter:card" content="summary">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Non-blocking: the font CSS must not delay first paint; text swaps when ready. -->
+  <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Orbitron:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all';this.onload=null">
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Orbitron:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
   <link rel="stylesheet" href="index.css">
 </head>
 <body>
-  <a class="skip-link" href="#main-content">Aller au contenu</a>
+  <a class="skip-link" href="#main-content">Skip to content</a>
 
   <svg class="svg-sprite" aria-hidden="true">
     <symbol id="icon-grid" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"></path></symbol>
@@ -30,14 +40,14 @@
 
   <header class="deck-header" id="connection-status">
     <div class="brand">
-      <div class="brand-mark" aria-hidden="true">HL</div>
+      <div class="brand-mark" aria-hidden="true">Z</div>
       <div class="brand-copy">
-        <h1 class="app-title">Hyperliquid</h1>
-        <p>Control Deck</p>
+        <h1 class="app-title">Zeus</h1>
       </div>
     </div>
 
-    <nav class="strategy-tabs" role="tablist" aria-label="Stratégies">
+    <nav class="strategy-tabs" role="tablist" aria-label="Strategies">
+      <span class="tab-indicator" aria-hidden="true"></span>
       <button class="nav-tab active" type="button" role="tab" id="tab-grid" aria-selected="true" aria-controls="page-grid" data-page="grid" tabindex="0">
         <svg aria-hidden="true"><use href="#icon-grid"></use></svg>
         Market Making
@@ -49,57 +59,52 @@
     </nav>
 
     <div class="topbar-actions">
-      <button class="backend-btn" id="backend-connect-btn" type="button" title="Tester / reconnecter le backend">
+      <span class="data-freshness" id="data-freshness" role="status" aria-live="polite">Waiting for data</span>
+      <button class="backend-btn" id="backend-connect-btn" type="button" title="Test or reconnect the backend">
         <svg aria-hidden="true"><use href="#icon-play"></use></svg>
-        Reconnecter
+        Reconnect
       </button>
-      <button class="backend-btn" id="sessions-reconcile-btn" type="button" hidden>Vérifier l’arrêt</button>
+      <button class="backend-btn" id="sessions-reconcile-btn" type="button" hidden>Verify stop</button>
       <div class="connection-pill" role="status">
         <span class="status-dot" aria-hidden="true"></span>
-        <span class="status-text">Connexion…</span>
-      </div>
-      <div class="network-chip">
-        <span class="dex-tag">Hyperliquid <span>HIP-3 / HIP-4</span></span>
+        <span class="status-text">Connecting…</span>
       </div>
     </div>
   </header>
 
-  <!-- Page d'accueil sécurisée: code d'accès (mémorisé en localStorage) -->
+  <!-- Secure landing: access code (remembered in localStorage). -->
   <dialog class="access-gate" id="access-gate" aria-labelledby="access-heading" aria-describedby="access-description" hidden>
     <div class="access-card">
-      <div class="brand-mark access-brand" aria-hidden="true">HL</div>
-      <h2 id="access-heading">Ton espace Zeus</h2>
-      <p id="access-description">Entre le code d'accès pour ouvrir le terminal.<br>
-         Il sera mémorisé sur ce navigateur.</p>
-      <label for="access-code-input">Code d'accès</label>
-      <input type="password" id="access-code-input" placeholder="Saisir le code"
+      <div class="brand-mark access-brand" aria-hidden="true">Z</div>
+      <h2 id="access-heading">Your Zeus workspace</h2>
+      <p id="access-description">Enter your access code.</p>
+      <label for="access-code-input">Access code</label>
+      <input type="password" id="access-code-input" placeholder="Enter code"
              autocomplete="current-password" spellcheck="false" aria-describedby="access-gate-error" required>
       <p class="access-error" id="access-gate-error" role="alert" hidden></p>
-      <button class="btn btn-start access-submit" id="access-code-submit" type="button">Entrer</button>
+      <button class="btn btn-start access-submit" id="access-code-submit" type="button">Enter</button>
     </div>
   </dialog>
 
   <main id="main-content">
     <section id="page-grid" class="page active" role="tabpanel" aria-labelledby="tab-grid">
       <div class="workspace-intro">
-        <div><p class="eyebrow">Terminal d'exécution</p><h2>Market making</h2><p>Configure tes quotes. Garde une vue claire sur chaque session.</p></div>
-        <span class="environment-tag"><span aria-hidden="true"></span>Ordres réels · Mainnet</span>
+        <div><h2>Market making</h2></div>
+        <span class="environment-tag"><span aria-hidden="true"></span>Mainnet</span>
       </div>
       <div class="workspace">
         <aside class="control-panel">
           <header class="panel-head">
             <div class="panel-copy">
-              <p class="eyebrow">Nouvelle session</p><h3 class="panel__title" id="grid-heading">BBO Order Book</h3>
-              <p class="panel__desc" id="grid-description">Quotes au meilleur bid et ask du carnet.</p>
+              <h3 class="panel__title" id="grid-heading">BBO Order Book</h3>
             </div>
-            <span class="state-pill" id="grid-state-pill" hidden>Live</span>
           </header>
 
           <form class="panel__form" id="grid-form" novalidate>
             <fieldset class="form-block">
-              <legend>Stratégie</legend>
+              <legend>Strategy</legend>
               <div class="field">
-                <label for="grid-strategy">Mode de cotation</label>
+                <label for="grid-strategy">Mode</label>
                 <select id="grid-strategy">
                   <option value="bbo">BBO Order Book</option>
                   <option value="mid">MID Order Book</option>
@@ -108,16 +113,25 @@
               </div>
               <div class="field" id="grid-offset-field" hidden>
                 <label for="grid-offset-bps">Distance from mid (bps)</label>
-                <input type="number" id="grid-offset-bps" value="1" min="0" max="9999.9" step="0.1" inputmode="decimal" aria-describedby="grid-offset-error">
+                <input type="number" id="grid-offset-bps" value="1" min="0" max="9999.999999999" step="any" inputmode="decimal" aria-describedby="grid-offset-help grid-offset-error">
+
                 <span class="field-hint" id="grid-offset-error" role="alert" hidden></span>
               </div>
+              <div class="field" id="grid-exit-protection-field" hidden>
+                <label class="mid-exit-toggle" for="grid-protect-exits">
+                  <input type="checkbox" id="grid-protect-exits" checked disabled aria-describedby="grid-exit-protection-help">
+                  <span>Break-even exits</span>
+                </label>
+
+              </div>
+
             </fieldset>
             <fieldset class="form-block">
-              <legend>Marché</legend>
+              <legend>Market</legend>
               <div class="field">
                 <div class="field-head">
                   <span id="grid-token-label">Token</span>
-                  <span class="mini-badge" id="grid-token-count">Chargement…</span>
+                  <span class="mini-badge" id="grid-token-count">Loading…</span>
                 </div>
                 <input type="hidden" id="grid-token" value="SP500">
                 <div class="token-picker" id="grid-token-picker">
@@ -129,15 +143,15 @@
                     </span>
                     <span class="token-chevron" aria-hidden="true">&#9662;</span>
                   </button>
-                  <div class="token-menu" id="grid-token-menu" role="dialog" aria-label="Choisir un marché HIP-3" hidden>
+                  <div class="token-menu" id="grid-token-menu" role="dialog" aria-label="Choose an HIP-3 market" hidden>
                     <div class="token-menu-head">
                       <div class="search-shell">
                         <svg aria-hidden="true"><use href="#icon-search"></use></svg>
-                        <input class="token-search" id="grid-token-search" type="search" placeholder="Nom, ticker ou dex…" aria-label="Rechercher un marché HIP-3" autocomplete="off" aria-controls="grid-token-options">
-                        <button class="search-clear" id="grid-token-search-clear" type="button" aria-label="Effacer la recherche" hidden>&times;</button>
+                        <input class="token-search" id="grid-token-search" type="search" placeholder="Name, ticker or dex…" aria-label="Search HIP-3 markets" autocomplete="off" aria-controls="grid-token-options">
+                        <button class="search-clear" id="grid-token-search-clear" type="button" aria-label="Clear search" hidden>&times;</button>
                       </div>
                       <div class="token-filters">
-                        <div class="dex-chips" id="grid-token-dexes" role="group" aria-label="Filtrer par dex"></div>
+                        <div class="dex-chips" id="grid-token-dexes" role="group" aria-label="Filter by dex"></div>
                         <span class="token-result-count" id="grid-token-results" aria-live="polite"></span>
                       </div>
                     </div>
@@ -147,15 +161,20 @@
               </div>
             </fieldset>
 
-
-
             <fieldset class="form-block">
-              <legend>Taille</legend>
+              <legend>Size</legend>
               <div class="field">
-                <label for="grid-order-size">Montant par ordre <span class="unit-label">USD</span></label>
+                <label for="grid-order-size">Order amount <span class="unit-label">USD</span></label>
                 <input type="number" id="grid-order-size" value="100" min="10" step="1" inputmode="decimal" aria-describedby="grid-form-alert" required>
               </div>
             </fieldset>
+
+            <details class="session-details" id="grid-details">
+              <summary>Details</summary>
+              <p class="field-help" id="grid-offset-help">Distance per side. 1 bp = 0.01%; prices follow the market tick.</p>
+              <p class="field-help" id="grid-exit-protection-help">MID exits rest at break-even, including fees. Holding inventory can increase losses.</p>
+              <p class="field-help" id="grid-execution-help">Automatic orders are post-only. Manual Stop may close at market.</p>
+            </details>
 
             <input type="hidden" id="grid-num-levels" value="1">
             <div class="form-alert" id="grid-form-alert" role="alert" hidden></div>
@@ -163,82 +182,104 @@
             <div class="action-row">
               <button class="btn btn-start" id="grid-start-btn" type="button">
                 <svg aria-hidden="true"><use href="#icon-play"></use></svg>
-                Lancer
+                Start
               </button>
               <button class="btn btn-stop" id="grid-stop-btn" type="button" disabled>
                 <svg aria-hidden="true"><use href="#icon-stop"></use></svg>
-                Tout arrêter
+                Stop all
               </button>
             </div>
           </form>
         </aside>
 
         <section class="dashboard" aria-label="Market making session stats">
-          <div class="overview-grid" aria-label="Vue d'ensemble des sessions">
-            <article class="overview-card"><span>Volume exécuté</span><strong id="overview-volume">—</strong><small>Sessions actives</small></article>
-            <article class="overview-card"><span>PnL net réalisé</span><strong id="overview-pnl">—</strong><small>Frais déduits · hors funding</small></article>
-            <article class="overview-card"><span>Coût / million</span><strong id="overview-cost">—</strong><small>(Frais − PnL réalisé) / volume × 1M</small></article>
+          <div class="overview-grid" aria-label="Session overview">
+            <article class="overview-card"><span>Executed volume</span><strong id="overview-volume" data-skeleton>—</strong></article>
+            <article class="overview-card"><span>Realized PnL</span><strong id="overview-pnl" data-skeleton>—</strong></article>
+            <article class="overview-card"><span>Cost / million</span><strong id="overview-cost" data-skeleton>—</strong></article>
           </div>
-          <div class="sessions-heading"><h3>Sessions</h3><span id="session-count" class="mini-badge">En attente</span></div>
+          <div class="sessions-heading">
+            <h3>Sessions</h3>
+            <div class="sessions-heading-actions">
+              <span id="session-count" class="mini-badge">Waiting</span>
+              <button class="ghost-link metrics-guide-btn" type="button" aria-haspopup="dialog" aria-controls="metrics-guide">Metrics</button>
+            </div>
+          </div>
           <div class="run-banner" id="grid-run-banner" hidden>
             <span class="run-dot" aria-hidden="true"></span>
             <div class="run-copy">
-              <strong>Session active</strong>
+              <strong>Active session</strong>
               <span><span id="grid-run-token">SP500</span> · <span id="grid-run-duration">00:00:00</span></span>
             </div>
           </div>
 
-          <!-- Bots actifs (multi-process): une carte par token, stop individuel -->
+          <!-- Active bots (multi-process): one card per token, individual stop. -->
           <div class="bots-list" id="grid-bots-list" hidden></div>
           <div class="empty-state" id="grid-empty-state">
             <div class="empty-state-icon" aria-hidden="true"><svg><use href="#icon-book"></use></svg></div>
-            <h3>Ton prochain marché, ici.</h3>
-            <p>Choisis un mode, un token et un montant.<br>Chaque session aura ses propres chiffres et commandes.</p>
-            <div class="empty-state-steps" aria-label="Étapes de configuration"><span><b>1</b>Mode</span><span><b>2</b>Marché</span><span><b>3</b>Montant</span></div>
+            <h3>No active sessions</h3>
+            <button class="btn btn-start empty-state-cta" id="grid-empty-cta" type="button">
+              <svg aria-hidden="true"><use href="#icon-search"></use></svg>
+              Choose a market
+            </button>
           </div>
         </section>
       </div>
     </section>
 
     <section id="page-outcome" class="page" role="tabpanel" aria-labelledby="tab-outcome" hidden>
-      <div class="workspace-intro"><div><p class="eyebrow">Marchés de prédiction</p><h2>Outcome</h2><p>Tous les marchés HIP-4 du deployer <strong>out</strong>, avec leurs logos Hyperliquid.</p></div><span class="environment-tag"><span aria-hidden="true"></span>Ordres réels · Mainnet</span></div>
+      <div class="workspace-intro"><div><h2>Outcome</h2></div><span class="environment-tag"><span aria-hidden="true"></span>Mainnet</span></div>
       <div class="workspace">
         <aside class="control-panel">
           <header class="panel-head">
             <div class="panel-copy">
-              <p class="eyebrow">Nouvelle session</p><h3 class="panel__title" id="outcome-heading">Outcome</h3>
-              <p class="panel__desc">Catalogue HIP-4 dynamique · deployer out.</p>
+              <h3 class="panel__title" id="outcome-heading">New session</h3>
             </div>
-            <span class="state-pill" id="outcome-state-pill" hidden>Live</span>
           </header>
 
           <form class="panel__form" id="outcome-form" novalidate>
             <fieldset class="form-block">
-              <legend>Marché</legend>
+              <legend>Market</legend>
               <div class="field">
+                <label for="outcome-selection-mode">Selection</label>
+                <select id="outcome-selection-mode" aria-describedby="outcome-auto-help">
+                  <option value="manual">Manual</option>
+                  <option value="auto">Auto</option>
+                </select>
+
+              </div>
+              <div id="outcome-auto-panel" hidden>
+                <div class="field">
+                  <label for="outcome-auto-spread">Max spread (bps)</label>
+                  <input id="outcome-auto-spread" type="number" value="10" min="0.01" max="100" step="0.01" inputmode="decimal">
+                </div>
+                <p class="field-help" id="outcome-auto-status" role="status" aria-live="polite">Select Auto to observe recent trades.</p>
+                <ol class="field-help" id="outcome-auto-candidates" aria-label="Ranked markets"></ol>
+              </div>
+              <div class="field" id="outcome-manual-market">
                 <div class="field-head">
-                  <span id="outcome-market-label">Marché</span>
-                  <span class="mini-badge" id="outcome-market-count">Chargement…</span>
+                  <span id="outcome-market-label">Market</span>
+                  <span class="mini-badge" id="outcome-market-count">Loading…</span>
                 </div>
                 <input type="hidden" id="outcome-market" value="">
                 <div class="token-picker" id="outcome-market-picker">
                   <button class="token-trigger" id="outcome-market-trigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="outcome-market-menu" aria-labelledby="outcome-market-label outcome-market-name">
                     <span class="token-logo" id="outcome-market-logo" aria-hidden="true">OU</span>
                     <span class="token-copy">
-                      <strong id="outcome-market-name">Choisir un marché</strong>
-                      <small id="outcome-market-symbol">catalogue HIP-4 · out</small>
+                      <strong id="outcome-market-name">Select a market</strong>
+                      <small id="outcome-market-symbol">HIP-4 catalog · out</small>
                     </span>
                     <span class="token-chevron" aria-hidden="true">&#9662;</span>
                   </button>
-                  <div class="token-menu" id="outcome-market-menu" role="dialog" aria-label="Choisir un marché Outcome" hidden>
+                  <div class="token-menu" id="outcome-market-menu" role="dialog" aria-label="Choose an Outcome market" hidden>
                     <div class="token-menu-head">
                       <div class="search-shell">
                         <svg aria-hidden="true"><use href="#icon-search"></use></svg>
-                        <input class="token-search" id="outcome-market-search" type="search" placeholder="Nom, équipe, catégorie…" aria-label="Rechercher un marché HIP-4" aria-controls="outcome-market-options" autocomplete="off">
-                        <button class="search-clear" id="outcome-market-search-clear" type="button" aria-label="Effacer la recherche" hidden>&times;</button>
+                        <input class="token-search" id="outcome-market-search" type="search" placeholder="Name, team, category…" aria-label="Search HIP-4 markets" aria-controls="outcome-market-options" autocomplete="off">
+                        <button class="search-clear" id="outcome-market-search-clear" type="button" aria-label="Clear search" hidden>&times;</button>
                       </div>
                       <div class="token-filters">
-                        <div class="dex-chips" id="outcome-market-categories" role="group" aria-label="Filtrer par catégorie"></div>
+                        <div class="dex-chips" id="outcome-market-categories" role="group" aria-label="Filter by category"></div>
                         <span class="token-result-count" id="outcome-market-results" aria-live="polite"></span>
                       </div>
                     </div>
@@ -250,7 +291,7 @@
             <fieldset class="form-block">
               <legend>Parameters</legend>
               <fieldset class="outcome-side-picker" aria-describedby="outcome-side-help">
-                <legend>Côté coté</legend>
+                <legend>Side</legend>
                 <label class="outcome-side-option" for="outcome-side-yes">
                   <input id="outcome-side-yes" type="radio" name="outcome-side" value="yes">
                   <span><strong>Yes</strong><small id="outcome-side-yes-prob">—</small></span>
@@ -260,17 +301,17 @@
                   <span><strong>No</strong><small id="outcome-side-no-prob">—</small></span>
                 </label>
               </fieldset>
-              <p class="field-help" id="outcome-side-help">Le bot achète et revend le token sélectionné. Ce choix ne modifie pas les bots déjà lancés.</p>
+
               <div class="field">
-                <label for="outcome-exec-mode">Exécution</label>
+                <label for="outcome-exec-mode">Execution</label>
                 <select id="outcome-exec-mode" aria-describedby="outcome-exec-help">
                   <option value="taker">Market / Taker</option>
                   <option value="maker">Limit / Maker</option>
                 </select>
-                <p class="field-help" id="outcome-exec-help" aria-live="polite">Exécution immédiate avec limite de slippage.</p>
+
               </div>
               <div class="field">
-                <label for="outcome-order-size">Order (USD)</label>
+                <label for="outcome-order-size">Order <span class="unit-label">USD</span></label>
                 <input type="number" id="outcome-order-size" value="50" min="10" step="1" inputmode="decimal" aria-describedby="outcome-form-alert" required>
               </div>
               <div class="field-row">
@@ -279,39 +320,47 @@
                   <input type="number" id="outcome-spread" value="0.02" min="0" step="0.005" inputmode="decimal" aria-describedby="outcome-form-alert" required>
                 </div>
                 <div class="field" id="outcome-maker-spread-field" hidden>
-                  <label for="outcome-maker-spread">Spread Limit (%)</label>
+                  <label for="outcome-maker-spread">Quote spread (%)</label>
                   <input type="number" id="outcome-maker-spread" value="0.005" min="0" step="0.001" inputmode="decimal" aria-describedby="outcome-maker-spread-help outcome-form-alert" disabled>
-                  <p class="field-help" id="outcome-maker-spread-help">Écart cible total autour du milieu du carnet. Arrondi au pas de prix, sans croiser le carnet.</p>
+
                 </div>
                 <div class="field">
-                  <label for="outcome-max-pos">Max position (USD)</label>
+                  <label for="outcome-max-pos">Position cap <span class="unit-label">USD</span></label>
                   <input type="number" id="outcome-max-pos" value="200" min="10" step="10" inputmode="decimal" aria-describedby="outcome-form-alert" required>
                 </div>
               </div>
             </fieldset>
+
+            <details class="session-details" id="outcome-details">
+              <summary>Details</summary>
+              <p class="field-help" id="outcome-auto-help">Auto ranks eligible $/min. Low fills over 3 minutes trigger a switch after orders are cancelled and inventory is flat. Fills are not guaranteed.</p>
+              <p class="field-help" id="outcome-side-help">Maker quotes bid and ask together when inventory allows. Order size is per order; the position cap stays shared. Running sessions keep their selected side.</p>
+              <p class="field-help" id="outcome-exec-help" aria-live="polite">Post-only orders rest in the book. Taker orders execute immediately.</p>
+              <p class="field-help" id="outcome-maker-spread-help">Total quote spread, rounded to the market tick.</p>
+              <p class="field-help">Stop cancels orders and may sell positions at market.</p>
+            </details>
 
             <div class="form-alert" id="outcome-form-alert" role="alert" hidden></div>
 
             <div class="action-row">
               <button class="btn btn-start" id="outcome-start-btn" type="button">
                 <svg aria-hidden="true"><use href="#icon-play"></use></svg>
-                Start
+                <span id="outcome-start-label">Start</span>
               </button>
               <button class="btn btn-stop" id="outcome-stop-btn" type="button" disabled>
                 <svg aria-hidden="true"><use href="#icon-stop"></use></svg>
-                Tout arrêter
+                Stop all
               </button>
             </div>
-            <p class="field-help" id="outcome-start-help" role="status">Choisis un marché pour lancer son bot.</p>
-            <p class="field-help">Chaque marché a son propre bot. Stop annule ses ordres et tente de vendre immédiatement ses positions, même en Limit. « Tout arrêter » cible tous les bots Outcome.</p>
+            <p class="field-help" id="outcome-start-help" role="status">Choose a market to start its bot.</p>
           </form>
         </aside>
 
-        <section class="dashboard" aria-label="Statistiques des bots Outcome">
+        <section class="dashboard" aria-label="Outcome bot statistics">
           <div class="run-banner" id="outcome-run-banner" hidden>
             <span class="run-dot" aria-hidden="true"></span>
             <div class="run-copy">
-              <strong>Session active</strong>
+              <strong>Active session</strong>
               <span id="outcome-active-mode"></span>
               <span id="outcome-run-duration">00:00:00</span>
             </div>
@@ -323,8 +372,7 @@
                 <svg><use href="#icon-cup"></use></svg>
               </div>
               <span class="metric-label">Net PnL</span>
-              <strong class="metric-value positive" id="outcome-pnl">—</strong>
-              <span class="metric-foot">Real-time profit/loss</span>
+              <strong class="metric-value positive" id="outcome-pnl" data-skeleton>—</strong>
             </article>
 
             <article class="metric-card">
@@ -332,8 +380,7 @@
                 <svg><use href="#icon-grid"></use></svg>
               </div>
               <span class="metric-label">Duration</span>
-              <strong class="metric-value metric-mono" id="outcome-duration">00:00:00</strong>
-              <span class="metric-foot">Elapsed time</span>
+              <strong class="metric-value metric-mono" id="outcome-duration" data-skeleton>00:00:00</strong>
             </article>
 
             <article class="metric-card">
@@ -341,8 +388,7 @@
                 <svg><use href="#icon-play"></use></svg>
               </div>
               <span class="metric-label">Volume</span>
-              <strong class="metric-value metric-mono" id="outcome-volume">—</strong>
-              <span class="metric-foot">Total traded volume</span>
+              <strong class="metric-value metric-mono" id="outcome-volume" data-skeleton>—</strong>
             </article>
 
             <article class="metric-card">
@@ -350,8 +396,7 @@
                 <svg><use href="#icon-info"></use></svg>
               </div>
               <span class="metric-label">Fees</span>
-              <strong class="metric-value metric-mono" id="outcome-fees">—</strong>
-              <span class="metric-foot">Execution fees</span>
+              <strong class="metric-value metric-mono" id="outcome-fees" data-skeleton>—</strong>
             </article>
 
             <article class="metric-card">
@@ -359,8 +404,7 @@
                 <svg><use href="#icon-alert"></use></svg>
               </div>
               <span class="metric-label">Cost / 1M</span>
-              <strong class="metric-value metric-mono" id="outcome-cost-1m">—</strong>
-              <span class="metric-foot">Cost per million</span>
+              <strong class="metric-value metric-mono" id="outcome-cost-1m" data-skeleton>—</strong>
             </article>
 
             <article class="metric-card">
@@ -368,20 +412,57 @@
                 <svg><use href="#icon-check"></use></svg>
               </div>
               <span class="metric-label">Fills</span>
-              <strong class="metric-value metric-mono" id="outcome-fills">0</strong>
-              <span class="metric-foot">Filled orders count</span>
+              <strong class="metric-value metric-mono" id="outcome-fills" data-skeleton>0</strong>
             </article>
           </div>
-          <div class="sessions-header"><h2 id="outcome-sessions-heading" tabindex="-1">Sessions Outcome</h2><span id="outcome-sessions-count" class="mini-badge">0 actif(s)</span></div>
-          <div class="bots-list" id="outcome-bots-list" aria-labelledby="outcome-sessions-heading"></div>
+          <div class="sessions-header">
+            <h2 id="outcome-sessions-heading" tabindex="-1">Sessions</h2>
+            <div class="sessions-heading-actions">
+              <span id="outcome-sessions-count" class="mini-badge">0 active</span>
+              <button class="ghost-link metrics-guide-btn" type="button" aria-haspopup="dialog" aria-controls="metrics-guide">Metrics</button>
+            </div>
+          </div>
+          <div class="bots-list" id="outcome-bots-list" aria-labelledby="outcome-sessions-heading">
+            <p class="field-help" id="outcome-idle">No active sessions.</p>
+          </div>
         </section>
       </div>
     </section>
   </main>
 
+  <dialog class="app-dialog confirm-dialog" id="confirm-stop" aria-labelledby="confirm-stop-title" aria-describedby="confirm-stop-message">
+    <div class="dialog-card">
+      <h2 id="confirm-stop-title">Stop all sessions?</h2>
+      <p id="confirm-stop-message">This cancels every open order and closes each position reduce-only for all active sessions.</p>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" id="confirm-stop-cancel" type="button">Cancel</button>
+        <button class="btn btn-stop" id="confirm-stop-accept" type="button">Stop all</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="app-dialog guide-dialog" id="metrics-guide" aria-labelledby="metrics-guide-title">
+    <div class="dialog-card">
+      <header class="dialog-head">
+        <h2 id="metrics-guide-title">Metrics guide</h2>
+        <button class="dialog-close" id="metrics-guide-close" type="button" aria-label="Close metrics guide">&times;</button>
+      </header>
+      <dl class="metric-definitions">
+        <div><dt>Markout B/A</dt><dd>Average price move after a fill on the bid and ask sides. Positive markout means fills are followed by favorable price movement.</dd></div>
+        <div><dt>Required edge / side</dt><dd>Minimum half-spread the engine needs before quoting a side, compared with the current quoted half-spread.</dd></div>
+        <div><dt>Cost / 1M</dt><dd>All-in cost per million dollars of volume: fees minus realized PnL, normalized by volume.</dd></div>
+        <div><dt>Fills/h</dt><dd>Number of fills per hour since the session started.</dd></div>
+        <div><dt>Actions/h</dt><dd>Order placements, modifications and cancellations per hour.</dd></div>
+        <div><dt>Spread</dt><dd>Current quoted spread in basis points.</dd></div>
+        <div><dt>Position</dt><dd>Current position notional in USD, including unrealized exposure.</dd></div>
+      </dl>
+    </div>
+  </dialog>
+
   <div class="toast-stack" id="toast-stack" aria-live="polite" aria-atomic="true"></div>
 
   <script src="config.js"></script>
+    <script src="/frontend/state.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

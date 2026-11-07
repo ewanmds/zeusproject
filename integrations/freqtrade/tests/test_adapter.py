@@ -91,7 +91,7 @@ class AdapterTests(unittest.TestCase):
             binary.write_bytes(b'MZtest')
             binary.chmod(0o755)
             with patch.object(ft, 'ROOT', root), patch.object(ft, 'binary_path', return_value=binary):
-                with self.assertRaisesRegex(ValueError, 'non vérifié.*--build'):
+                with self.assertRaisesRegex(ValueError, 'Unverified Freqtrade binary.*--build'):
                     ft.require_binary()
 
     def test_stale_binary_is_reported_separately(self):
@@ -105,7 +105,7 @@ class AdapterTests(unittest.TestCase):
             (root / 'bin' / 'build.json').write_text(json.dumps(manifest), encoding='utf-8')
             with patch.object(ft, 'ROOT', root), patch.object(ft, 'binary_path', return_value=binary), \
                  patch.object(ft, 'engine_digest', return_value='new-source'):
-                with self.assertRaisesRegex(ValueError, 'périmé.*--build'):
+                with self.assertRaisesRegex(ValueError, 'Stale Freqtrade binary.*--build'):
                     ft.require_binary()
 
     def test_flat_confirmation_requires_valid_fresh_rest_state(self):

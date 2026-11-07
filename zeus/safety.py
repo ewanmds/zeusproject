@@ -17,38 +17,62 @@ class ExecutionStopped(RuntimeError):
     pass
 
 
+class SubmissionSkipped(RuntimeError):
+    """A local pre-send check proves no SDK request was sent."""
+    pass
+
+
 class ExecutionPaused(RuntimeError):
     pass
 
 
+_SUPERVISOR_CACHE = {"pid": None, "ts": 0.0, "alive": True}
+_SUPERVISOR_LOCK = threading.Lock()
+
+
 def supervisor_alive():
-    """Standalone runs have no supervisor; supervised children stop on its death."""
+    """Standalone runs have no supervisor; supervised children stop on its death.
+
+    On Windows this opens a process handle on every call. The final-send gate
+    calls it on the hot path, so cache the answer for 50 ms (same bound a
+    watchdog thread would use).
+    """
     value = os.getenv("ZEUS_PARENT_PID")
     if not value:
         return True
+    now = time.monotonic()
+    with _SUPERVISOR_LOCK:
+        if (_SUPERVISOR_CACHE["pid"] == value
+                and now - _SUPERVISOR_CACHE["ts"] < 0.05):
+            return _SUPERVISOR_CACHE["alive"]
     try:
         pid = int(value)
         if pid <= 0:
-            return False
-        if os.name == "nt":
+            alive = False
+        elif os.name == "nt":
             import ctypes
             kernel = ctypes.WinDLL("kernel32", use_last_error=True)
             kernel.OpenProcess.restype = ctypes.c_void_p
             kernel.CloseHandle.argtypes = [ctypes.c_void_p]
             handle = kernel.OpenProcess(0x1000, False, pid)
             if not handle:
-                return ctypes.get_last_error() == 5
-            code = ctypes.c_ulong()
-            kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
-            ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
-            kernel.CloseHandle(handle)
-            return bool(ok and code.value == 259)
-        os.kill(pid, 0)
-        return True
+                alive = ctypes.get_last_error() == 5
+            else:
+                code = ctypes.c_ulong()
+                kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+                ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+                kernel.CloseHandle(handle)
+                alive = bool(ok and code.value == 259)
+        else:
+            os.kill(pid, 0)
+            alive = True
     except PermissionError:
-        return True
+        alive = True
     except (ValueError, ProcessLookupError):
-        return False
+        alive = False
+    with _SUPERVISOR_LOCK:
+        _SUPERVISOR_CACHE.update(pid=value, ts=now, alive=alive)
+    return alive
 
 
 def safe_error(error):
@@ -95,6 +119,16 @@ def finite(value):
     return result
 
 
+def duplicate_nonce_rejection(detail):
+    return isinstance(detail, str) and re.fullmatch(r"Invalid nonce: duplicate nonce [0-9]+", detail) is not None
+
+
+def legacy_nonce_rejection(record):
+    """Exact persisted first failure only; never infer rejection from a timeout."""
+    return (not record.get("recovery_error") and isinstance(record.get("error"), str)
+            and re.fullmatch(r"(?:order|bulk_orders|bulk_modify_orders_new): exchange rejected: Invalid nonce: duplicate nonce [0-9]+", record["error"]) is not None)
+
+
 def confirmed_client_order(info, account, cloid, symbols):
     result = info.post("/info", {"type": "orderStatus", "user": account, "oid": cloid})
     if not isinstance(result, dict) or result.get("status") != "order":
@@ -116,12 +150,20 @@ def acknowledged_status(status, placing):
         return not placing
     if not isinstance(status, dict):
         return False
+    if sum(key in status for key in ("error","resting","filled"))!=1:
+        return False
     if isinstance(status.get("error"), str) and status["error"]:
         return True
     if isinstance(status.get("resting"), dict):
-        return int(status["resting"]["oid"]) > 0
+        oid=status["resting"].get("oid")
+        return not isinstance(oid,bool) and isinstance(oid,(int,str)) and str(oid).isdigit() and int(oid)>0
     if isinstance(status.get("filled"), dict):
-        return finite(status["filled"]["totalSz"]) >= 0 and finite(status["filled"]["avgPx"]) > 0
+        filled=status["filled"];oid=filled.get("oid")
+        try:
+            return (not isinstance(oid,bool) and isinstance(oid,(int,str)) and str(oid).isdigit() and int(oid)>0
+                    and finite(filled["totalSz"])>0 and finite(filled["avgPx"])>0)
+        except (KeyError,TypeError,ValueError,OverflowError):
+            return False
     return False
 
 
@@ -136,18 +178,27 @@ def post_only_rejection(error):
         error) is not None
 
 
+def invalid_modify_rejection(error):
+    return isinstance(error, str) and re.fullmatch(
+        r"Attempted to modify to invalid new order\.?(?: asset=\d+)?", error) is not None
+
+
 def missing_modify_rejection(error):
     return isinstance(error, str) and re.fullmatch(
         r"Cannot modify canceled or filled order\.?(?: asset=\d+)?", error) is not None
 
 
 class SafetyLatch:
-    def __init__(self, on_stop=None, path=None, is_running=None):
+    def __init__(self, on_stop=None, path=None, is_running=None, passive_only=False):
         self.lock = threading.RLock()
         self.stopped = threading.Event()
         self.on_stop = on_stop or (lambda: None)
         self.is_running = is_running or (lambda: True)
         self.local = threading.local()
+        self.passive_only = bool(passive_only)
+        # An ordinary failure, signal, or cleanup never grants market execution.
+        # A new runtime must observe a fresh explicit manual-stop request.
+        self.manual_stop_requested = False
         self.phase = "connecting"
         self.error = ""
         self.cleanup_error = ""
@@ -175,10 +226,12 @@ class SafetyLatch:
                     cleanup_confirmed=self.cleanup_confirmed, can_start=self.cleanup_confirmed,
                     position_known=self.account_known or self.cleanup_confirmed, session_id=self.session_id,
                     quoting_enabled=not self.stopped.is_set() and self.phase == "running",
-                    recovery_error=self.recovery_error)
+                    recovery_error=self.recovery_error,
+                    passive_only=self.passive_only, manual_stop_requested=self.manual_stop_requested)
 
     def publish(self):
         if self.path:
+            started=time.perf_counter_ns()
             try:
                 atomic_json(self.path, {**self.metadata, **self.snapshot(), "pid": os.getpid(),
                                         "owned_oids": sorted(self.owned), "cloids": sorted(self.cloids),
@@ -191,6 +244,8 @@ class SafetyLatch:
                 self.cleanup_confirmed = False
                 self.on_stop()
                 return False
+            finally:
+                if getattr(self,"metrics",None):self.metrics.observe("durable_journal",(time.perf_counter_ns()-started)/1e6)
         return True
 
     def stop(self, error=None):
@@ -208,6 +263,70 @@ class SafetyLatch:
     def fail(self, error):
         self.account_known = False
         self.stop(error)
+
+    def request_manual_stop(self, error=None):
+        """Record the explicit user origin before closing the execution gate."""
+        self.manual_stop_requested = True
+        self.stop(error)
+
+    @contextmanager
+    def manual_close_scope(self):
+        """Narrow capability for a manual Stop's explicit reduce-only close.
+
+        cleanup_scope only permits requests after Stop; it does not itself
+        permit crossing orders. The capability is thread-local and reentrant.
+        """
+        if not self.manual_stop_requested:
+            raise ExecutionStopped("An explicit manual Stop is required for market closing")
+        previous = getattr(self.local, "manual_close", False)
+        self.local.manual_close = True
+        try:
+            yield
+        finally:
+            self.local.manual_close = previous
+
+    def assert_allowed_action(self, name, args=(), kwargs=None):
+        """Final-send policy check, independent of the strategy's quote builder.
+
+        Reject locally before journaling/CLOIDs and permit a caller to repeat
+        the same check immediately before signing or transport submission.
+        """
+        if not self.passive_only:
+            return
+        kwargs = kwargs or {}
+        if name in {"market_open", "market_close"}:
+            raise SubmissionSkipped("Passive-only session blocks SDK market convenience methods; use an explicit authorized reduce-only close")
+        if name == "order":
+            requests = [(kwargs.get("order_type", args[4] if len(args)>4 else None),
+                         kwargs.get("reduce_only", args[5] if len(args)>5 else False))]
+        elif name == "modify_order":
+            requests = [(kwargs.get("order_type", args[5] if len(args)>5 else None),
+                         kwargs.get("reduce_only", args[6] if len(args)>6 else False))]
+        elif name in {"bulk_orders", "bulk_modify_orders_new"}:
+            rows = args[0] if args else kwargs.get("order_requests" if name=="bulk_orders" else "modify_requests")
+            if not isinstance(rows, (list,tuple)) or not rows:
+                raise SubmissionSkipped("Passive-only session requires a non-empty explicit order batch")
+            requests = []
+            for row in rows:
+                request = row.get("order") if name=="bulk_modify_orders_new" and isinstance(row,dict) else row
+                if not isinstance(request,dict):
+                    raise SubmissionSkipped("Passive-only session received an invalid order request")
+                requests.append((request.get("order_type"),request.get("reduce_only",False)))
+        else:
+            return  # cancellation/leverage do not create crossing exposure
+        manual = self.manual_stop_requested and getattr(self.local,"manual_close",False)
+        closing_only = self.stopped.is_set() or getattr(self.local,"cleanup",False)
+        for order_type,reduce_only in requests:
+            if closing_only and reduce_only is not True:
+                raise SubmissionSkipped("A stopped passive session permits only explicit reduce-only closing orders")
+            if not isinstance(order_type,dict) or set(order_type)!={"limit"} or not isinstance(order_type["limit"],dict):
+                raise SubmissionSkipped("Passive-only session blocks trigger or implicit market orders")
+            tif = order_type["limit"].get("tif")
+            if tif == "Alo":
+                continue
+            if manual and reduce_only is True and tif in {"Ioc","Gtc"}:
+                continue
+            raise SubmissionSkipped("Passive-only session requires post-only Alo; crossing closes require an explicit manual Stop")
 
     def pause(self, error, pending_cloids=()):
         """Keep the session alive while an opt-in engine reconciles read-only."""
@@ -243,10 +362,10 @@ class SafetyLatch:
     def owns(self, order):
         return int(order.get("oid", 0)) in self.owned or str(order.get("cloid", "")) in self.cloids
 
-    def wrap(self, exchange, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None, reconcile_modify=None):
-        return GuardedExchange(exchange, self, reconcile_cancel, on_error, reconcile_reduce_only, reconcile_post_only, reconcile_modify)
+    def wrap(self, exchange, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None, reconcile_modify=None, reconcile_invalid_modify=None):
+        return GuardedExchange(exchange, self, reconcile_cancel, on_error, reconcile_reduce_only, reconcile_post_only, reconcile_modify, reconcile_invalid_modify)
 
-    def cleanup(self, snapshot, cancel, close, timeout=30, sleep=time.sleep):
+    def cleanup(self, snapshot, cancel, close, timeout=30, sleep=time.sleep, allow_close=True):
         """snapshot returns fresh [(symbol, position, orders)] or raises.
 
         The caller supplies only this session's managed symbols. Unknown
@@ -278,6 +397,15 @@ class SafetyLatch:
                         # Other orders on the same symbol make closing ambiguous.
                         if any(orders for _, _, orders in rows):
                             raise RuntimeError("Unrelated orders on managed market; manual reconciliation required")
+                        # Absence in an open-order snapshot does not settle an
+                        # action still in flight on the exchange. Do not send a
+                        # second liquidation while its outcome remains unknown.
+                        if self.pending_cloids:
+                            raise RuntimeError("Placement client IDs remain unconfirmed; no new closing order sent")
+                        can_close = allow_close and (not self.passive_only or self.manual_stop_requested
+                                                     and getattr(self.local,"manual_close",False))
+                        if not can_close and any(abs(finite(position))>1e-9 for _,position,_ in rows):
+                            raise RuntimeError("Residual position; automatic cleanup cannot market-close it, explicit manual Stop required")
                         for symbol, position, _ in rows:
                             if abs(finite(position)) > 1e-9:
                                 if not self.exposure_started:
@@ -306,7 +434,7 @@ class SafetyLatch:
 class GuardedExchange:
     ACTIONS = {"order", "bulk_orders", "bulk_modify_orders_new", "modify_order", "bulk_cancel", "cancel", "update_leverage"}
 
-    def __init__(self, exchange, safety, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None, reconcile_modify=None):
+    def __init__(self, exchange, safety, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None, reconcile_modify=None, reconcile_invalid_modify=None):
         self._exchange = exchange
         self._safety = safety
         self._reconcile_cancel = reconcile_cancel
@@ -314,9 +442,14 @@ class GuardedExchange:
         self._reconcile_reduce_only = reconcile_reduce_only
         self._reconcile_post_only = reconcile_post_only
         self._reconcile_modify = reconcile_modify
+        self._reconcile_invalid_modify = reconcile_invalid_modify
 
     def __getattr__(self, name):
         method = getattr(self._exchange, name)
+        if name in {"market_open", "market_close"} and self._safety.passive_only:
+            def blocked(*args, **kwargs):
+                self._safety.assert_allowed_action(name,args,kwargs)
+            return blocked
         if name not in self.ACTIONS:
             return method
 
@@ -329,6 +462,7 @@ class GuardedExchange:
                     raise ExecutionStopped("Session halted; manual restart required")
                 if gate.phase == "recovering" and not cleanup:
                     raise ExecutionPaused("Session active; waiting for exchange reconciliation")
+                gate.assert_allowed_action(name,args,kwargs)
                 placing = name in {"order", "bulk_orders", "bulk_modify_orders_new"}
                 operation_cloids = set()
                 acknowledged = False
@@ -358,6 +492,12 @@ class GuardedExchange:
                     if not isinstance(result, dict) or result.get("status") != "ok":
                         if isinstance(result, dict) and result.get("status") == "err":
                             detail = safe_error(result.get("response") or result.get("error") or "No exchange reason provided")
+                            if duplicate_nonce_rejection(result.get("response")):
+                                # An explicit whole-action rejection is not an unknown send.
+                                acknowledged = True
+                                gate.pending_cloids.difference_update(operation_cloids)
+                                gate.metadata["rejected_cloids"] = sorted(set(gate.metadata.get("rejected_cloids", [])) | operation_cloids)
+                                gate.publish()
                             raise RuntimeError(f"{name}: exchange rejected: {detail}")
                         raise RuntimeError(f"{name}: invalid or rejected response ({type(result).__name__})")
                     if name == "update_leverage":
@@ -385,8 +525,12 @@ class GuardedExchange:
                                 result = {**result, "response": {**result["response"], "data": {
                                     **result["response"]["data"], "statuses": statuses}}}
                         for status in statuses:
-                            if isinstance(status, dict) and "resting" in status:
-                                gate.owned.add(int(status["resting"]["oid"]))
+                            if isinstance(status, dict) and acknowledged_status(status,placing):
+                                detail = status.get("resting", status.get("filled", {}))
+                                if isinstance(detail, dict) and detail.get("oid") is not None:
+                                    gate.owned.add(int(detail["oid"]))
+                        if not acknowledged:
+                            raise RuntimeError(f"{name}: malformed or incomplete acknowledgement: {safe_error(statuses)}")
                         if acknowledged:
                             gate.pending_cloids.difference_update(operation_cloids)
                         gate.publish()
@@ -404,7 +548,11 @@ class GuardedExchange:
                             missing_modifies = [i for i, status in enumerate(statuses)
                                                 if name == "bulk_modify_orders_new" and self._reconcile_modify
                                                 and isinstance(status, dict) and missing_modify_rejection(status.get("error"))]
-                            recoverable = set(rejected + post_only + missing_modifies)
+                            invalid_modifies = [i for i, status in enumerate(statuses)
+                                                if name == "bulk_modify_orders_new" and self._reconcile_invalid_modify
+                                                and isinstance(status, dict) and invalid_modify_rejection(status.get("error"))
+                                                and requests[i].get("order_type", {}).get("limit", {}).get("tif") == "Alo"]
+                            recoverable = set(rejected + post_only + missing_modifies + invalid_modifies)
                             if recoverable and all(i in recoverable or isinstance(status, dict)
                                                    and ("resting" in status or "filled" in status)
                                                    for i, status in enumerate(statuses)):
@@ -414,18 +562,25 @@ class GuardedExchange:
                                     self._reconcile_post_only([requests[i] for i in post_only], name)
                                 if missing_modifies:
                                     self._reconcile_modify([args[0][i] for i in missing_modifies])
+                                if invalid_modifies:
+                                    self._reconcile_invalid_modify([args[0][i] for i in invalid_modifies])
                                 resolved_rejections = recoverable
                         if len(statuses) != expected or any(i not in resolved_rejections and not (
                                 status == "success" or isinstance(status, dict) and
                                 ("resting" in status or "filled" in status)) for i, status in enumerate(statuses)):
                             raise RuntimeError(f"{name}: rejected or incomplete acknowledgement: {safe_error(statuses)}")
                     return result
+                except SubmissionSkipped:
+                    # A local final-send gate declined BEFORE SDK invocation.
+                    gate.pending_cloids.difference_update(operation_cloids)
+                    gate.publish()
+                    raise
                 except ExecutionStopped:
                     raise
                 except Exception as exc:
                     if cleanup:
                         gate.cleanup_error = safe_error(exc)
-                        if placing:
+                        if placing and not acknowledged:
                             gate.uncertain_close = True
                     else:
                         if self._on_error:

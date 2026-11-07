@@ -10,6 +10,7 @@ a bare ticker (``SP500``) or a dex-qualified market (``XYZ:COPPER``,
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import math
 import threading
@@ -75,11 +76,11 @@ def _split_symbol(symbol: str) -> Tuple[str, str]:
     """Split ``dex:TICKER`` (case-insensitive) into ``(dex, TICKER)``."""
     raw = str(symbol or "").strip()
     if ":" not in raw:
-        raise ValueError(f"Symbole HIP-3 invalide (dex:TICKER attendu) : {symbol!r}")
+        raise ValueError(f"Invalid HIP-3 symbol (expected dex:TICKER): {symbol!r}")
     dex, ticker = raw.split(":", 1)
     dex, ticker = _clean_dex(dex), _clean_ticker(ticker)
     if not dex or not ticker:
-        raise ValueError(f"Symbole HIP-3 invalide (dex:TICKER attendu) : {symbol!r}")
+        raise ValueError(f"Invalid HIP-3 symbol (expected dex:TICKER): {symbol!r}")
     return dex, ticker
 
 
@@ -139,7 +140,7 @@ def _load_dex(dex: str) -> List[Dict[str, Any]]:
     """Fetch one dex universe.  Raises on transport/API errors."""
     raw = post_info(HL_API, {"type": "metaAndAssetCtxs", "dex": dex})
     if not isinstance(raw, list) or len(raw) < 2:
-        raise ValueError(f"metaAndAssetCtxs invalide pour {dex}")
+        raise ValueError(f"Invalid metaAndAssetCtxs for {dex}")
     universe = (raw[0] or {}).get("universe") or []
     contexts = raw[1] or []
     markets: List[Dict[str, Any]] = []
@@ -162,12 +163,21 @@ def catalog_snapshot(force: bool = False) -> Tuple[List[Dict[str, Any]], Dict[st
 
     markets: List[Dict[str, Any]] = []
     seen: set[str] = set()
-    for dex in discover_dexes():
+    dexes = discover_dexes()
+    # Dex universes are independent: one round-trip each, so fetch them
+    # concurrently instead of paying N sequential round-trips per refresh.
+    def load(dex: str) -> List[Dict[str, Any]]:
         try:
-            dex_markets = _load_dex(dex)
+            return _load_dex(dex)
         except Exception as exc:  # noqa: BLE001 - one bad dex must not hide the rest
             logger.warning("HIP-3 meta unavailable for dex %s: %s", dex, exc)
-            continue
+            return []
+    if dexes:
+        with ThreadPoolExecutor(max_workers=min(8, len(dexes))) as pool:
+            loaded = list(pool.map(load, dexes))
+    else:
+        loaded = []
+    for dex_markets in loaded:
         for market in dex_markets:
             key = market["name"].lower()
             if key in seen:
@@ -337,11 +347,11 @@ def resolve_symbol(token: str, *, force: bool = False) -> str:
             markets, _ = catalog_snapshot(force=True)
             live = _find_live_market(dex, ticker, markets)
         if live is None:
-            raise ValueError(f"Marché inconnu ou delisté : {dex}:{ticker}")
+            raise ValueError(f"Unknown or delisted market: {dex}:{ticker}")
         return str(live["name"])
 
     ticker = _clean_ticker(raw)
     for market in markets:
         if market.get("ticker") == ticker:
             return str(market["name"])
-    raise ValueError(f"Marché inconnu : {ticker}")
+    raise ValueError(f"Unknown market: {ticker}")
