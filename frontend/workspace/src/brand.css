@@ -1,0 +1,195 @@
+/* Interface polish using the existing Zeus color tokens. */
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+p {
+  text-wrap: pretty;
+}
+.brand > span:last-child {
+  font-family: "Orbitron", sans-serif;
+  font-size: 17px;
+  letter-spacing: 0.4px;
+}
+.brand .brand-sub {
+  font-family: "Exo 2", sans-serif;
+}
+.launch-form {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.012), transparent 42%),
+    var(--surface);
+}
+.strategy-card {
+  position: relative;
+}
+.strategy-card.selected {
+  background:
+    radial-gradient(ellipse at 0 0, rgba(139, 92, 246, 0.16), transparent 85%),
+    rgba(139, 92, 246, 0.035);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.045),
+    0 0 0 1px rgba(139, 92, 246, 0.08);
+}
+.strategy-card.selected .strategy-icon {
+  color: #dac8ff;
+  background: rgba(139, 92, 246, 0.2);
+}
+.strategy-card .selection-check {
+  transition:
+    background-color 160ms,
+    border-color 160ms;
+}
+.summary h2 {
+  font-size: 25px;
+  letter-spacing: -0.6px;
+}
+.summary-top {
+  margin-bottom: 14px;
+}
+.summary .available {
+  margin-top: 23px;
+}
+.session-steps {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 18px;
+}
+.session-steps li {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  font-size: 9px;
+  color: var(--subtle);
+  white-space: nowrap;
+}
+.session-step-mark {
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 50%;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 8px;
+  flex-shrink: 0;
+}
+.session-steps .done {
+  color: #6dc5a8;
+}
+.session-steps .done .session-step-mark {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.25);
+}
+.session-steps .current {
+  color: #dccbf6;
+}
+.session-steps .current .session-step-mark {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.6);
+}
+.wallet-option {
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08);
+}
+.wallet-option:focus-visible {
+  outline-offset: 2px;
+}
+.account-card {
+  position: relative;
+  overflow: hidden;
+}
+.account-card .account-orb {
+  position: relative;
+  width: 50px;
+  height: 50px;
+  border-radius: 15px;
+  margin-bottom: 14px;
+  background: #211e36;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+}
+.account-card .account-orb svg {
+  width: 24px;
+  height: 24px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .wallet-option:not(:disabled):hover {
+    border-color: rgba(245, 158, 11, 0.3);
+    background: rgba(245, 158, 11, 0.025);
+  }
+}
+@media (max-width: 900px) {
+  .session-steps {
+    gap: 5px;
+  }
+  .session-steps li {
+    font-size: 8px;
+    gap: 4px;
+  }
+}
+@media (max-width: 600px) {
+  .strategy-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .strategy-card {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr) 32px;
+    grid-template-rows: auto auto;
+    gap: 3px 12px;
+    padding: 12px;
+    min-height: 66px;
+    align-items: center;
+  }
+  .strategy-top,
+  .strategy-bottom {
+    display: contents;
+  }
+  .strategy-card .strategy-icon {
+    grid-column: 1;
+    grid-row: 1 / 3;
+    width: 32px;
+    height: 32px;
+  }
+  .strategy-card .micro-label {
+    grid-column: 3;
+    grid-row: 1;
+    font-size: 8px;
+    text-align: right;
+  }
+  .strategy-card h3 {
+    grid-column: 2;
+    grid-row: 1;
+    font-size: 13px;
+    margin: 0;
+  }
+  .strategy-card p {
+    grid-column: 2;
+    grid-row: 2;
+    font-size: 11px;
+    line-height: 1.4;
+    margin: 0;
+    min-height: 0;
+  }
+  .strategy-bottom > span:first-child {
+    display: none;
+  }
+  .strategy-bottom > .selection-check {
+    grid-column: 3;
+    grid-row: 2;
+    justify-self: end;
+  }
+  .summary h2 {
+    font-size: 22px;
+  }
+  .session-steps {
+    justify-content: flex-start;
+    gap: 17px;
+  }
+  .session-steps li {
+    font-size: 9px;
+  }
+}

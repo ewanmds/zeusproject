@@ -121,6 +121,11 @@ class GridStopRequest(BaseModel):
 
 
 class WorldcupStartRequest(BaseModel):
+    session_duration_sec: Optional[float] = Field(default=None, ge=60, le=2592000, allow_inf_nan=False)
+    session_expires_at: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    target_volume_usd: Optional[float] = Field(default=None, ge=10, allow_inf_nan=False)
+    session_volume_carry: float = Field(default=0, ge=0, allow_inf_nan=False)
+    session_stop_loss_usd: float = Field(default=50, gt=0, allow_inf_nan=False)
     selection_mode: Literal["manual", "auto"] = "manual"
     auto_max_spread_bps: float = Field(default=10, gt=0, le=100, allow_inf_nan=False)
     two_sided: bool = False
@@ -291,13 +296,17 @@ signal.signal = _safe_signal
 class BotManager:
     """Manages lifecycle and stats for both trading bots."""
 
-    def __init__(self, state_dir=None) -> None:
+    def __init__(self, state_dir=None, account_context=None) -> None:
         # OBI bots: un PROCESS ENFANT par token. token_key -> {proc, symbol,
         # stats_file, stop_file, started, config}
         self.obi_procs: Dict[str, Dict[str, Any]] = {}
         self.grid_config: Dict[str, Any] = {}   # dernière config (restart)
 
         self.state_dir = None if state_dir is False else Path(state_dir or PROJECT_ROOT / ".zeus-state")
+        self.account_context = account_context
+        self.runtime_root = self.state_dir / 'grid-runtime' if account_context else None
+        if self.runtime_root:
+            self.runtime_root.mkdir(parents=True, exist_ok=True)
 
         # Connected WebSocket clients
         self.ws_clients: set = set()
@@ -390,7 +399,7 @@ class BotManager:
         from hyperliquid.info import Info
         from zeus.safety import confirmed_client_order
         kind = record["account_kind"]
-        account = os.getenv("WALLET_ADDRESS_OUTCOME" if kind == "outcome" else "WALLET_ADDRESS", "").strip()
+        account = self.account_context.account if self.account_context else os.getenv("WALLET_ADDRESS_OUTCOME" if kind == "outcome" else "WALLET_ADDRESS", "").strip()
         if not account:
             raise RuntimeError("Account unavailable for stop verification")
         if record.get("account") and record["account"].lower() != account.lower():
@@ -506,13 +515,10 @@ class BotManager:
                 raise ValueError("offset_bps must be finite, at least 0 and less than 10000")
             offset_bps = max(0.0, offset_bps)
         module_name = "zeus.bots.order_book"
-        obi_mod = _safe_import(module_name)
-        if obi_mod is None:
-            raise RuntimeError(
-                f"Cannot import {module_name} — check the Zeus installation"
-            )
+        from zeus.markets import resolve_symbol
+        from zeus.bots.runtime_paths import grid_path
         try:
-            symbol = obi_mod.resolve_token(token_key)
+            symbol = resolve_symbol(token_key)
         except BaseException as exc:  # resolve_token lève SystemExit si inconnu
             raise ValueError(f"Unknown token '{config.token}': {exc}")
         order_usd = max(10.5, float(config.order_size_usd))
@@ -527,18 +533,31 @@ class BotManager:
                 raise RuntimeError(f"A bot is already running on {token_key}")
 
             # Stopfile périmé d'un run précédent: le supprimer avant de lancer.
-            stop_file = obi_mod.stop_file_path(symbol)
+            safety_file = self._reserve_session("grid:" + symbol, [symbol], "perp")
+            session_runtime = self.runtime_root
+            if self.account_context and safety_file:
+                session_runtime = self.runtime_root / Path(safety_file).stem
+                session_runtime.mkdir(parents=True, exist_ok=True)
+            stop_file = grid_path(symbol, 'stop', session_runtime)
             try:
                 os.remove(stop_file)
             except OSError:
                 pass
 
             env = os.environ.copy()
+            if self.account_context:
+                env.update(self.account_context.environment())
+                env['ZEUS_RUNTIME_DIR'] = str(session_runtime)
+                env['ZEUS_INSTANCE_DIR'] = str(self.runtime_root)
             env["OBI_HEADLESS"] = "1"   # pas de Rich Live dans un process enfant
             env["ZEUS_PARENT_PID"] = str(os.getpid())
-            safety_file = self._reserve_session("grid:" + symbol, [symbol], "perp")
             if safety_file:
                 env["ZEUS_SAFETY_FILE"] = str(safety_file)
+                if self.account_context:
+                    record = self._session_status(safety_file)
+                    atomic_json(safety_file, {**record, 'account': self.account_context.account,
+                        'started': time.time(), 'config': config.model_dump(),
+                        'stats_file': grid_path(symbol, 'stats', session_runtime), 'stop_file': stop_file})
             cmd = [
                 sys.executable, "-u", "-m", module_name,
                 "--token", token_key, "--live", "--notional", str(order_usd),
@@ -551,15 +570,16 @@ class BotManager:
             proc = subprocess.Popen(
                 cmd, cwd=str(BASE_DIR), env=env,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
             )
-            if safety_file:
+            if safety_file and not self.account_context:
                 record = self._session_status(safety_file)
                 atomic_json(safety_file, {**record, "pid": proc.pid})
             self.obi_procs[token_key] = {
                 "safety_file": safety_file,
                 "proc": proc,
                 "symbol": symbol,
-                "stats_file": obi_mod.stats_file_path(symbol),
+                "stats_file": grid_path(symbol, 'stats', session_runtime),
                 "stop_file": stop_file,
                 "started": time.time(),
                 "config": {"token": token_key, "strategy": strategy, "mode": "live",
@@ -653,7 +673,8 @@ class BotManager:
             with self.lock:
                 items = list(self.obi_procs.items())
             bots = [{"token": r["symbols"][0].split(":")[-1], "symbol": r["symbols"][0],
-                     "strategy": r.get("strategy", "bbo"), "running": pid_alive(r.get("pid")),
+                     'session_id': r['session_id'], 'started': r.get('started', 0), 'config': r.get('config', {}),
+                     "strategy": r.get('config', {}).get('strategy', r.get("strategy", "bbo")), "running": pid_alive(r.get("pid")),
                      "phase": "failed", "error": r.get("error") or "Interrupted session; stop not confirmed",
                      "cleanup_error": r.get("cleanup_error", ""), "cleanup_confirmed": False,
                      "can_start": False, "position_known": False, "position_usd": None,
@@ -702,6 +723,8 @@ class BotManager:
                 confirmed = lifecycle.get("cleanup_confirmed") is True and not alive
                 position_known = bool(st.get("position_known")) if alive else confirmed
                 entry = {
+                    'session_id': Path(info['safety_file']).stem if info.get('safety_file') else key,
+                    'started': start, 'duration_sec': max(0, end-start), 'config': info['config'],
                     "cleanup_confirmed": confirmed,
                     "cleanup_error": lifecycle.get("cleanup_error", ""),
                     "warning": str(st.get("warning") or ""),

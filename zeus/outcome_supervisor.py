@@ -86,15 +86,19 @@ class OutcomeSupervisor:
         from zeus.outcome_flow import blocked_outcome
         if blocked_outcome(resolved):
             raise ValueError("Fed interest-rate markets are excluded")
-        account = os.getenv("WALLET_ADDRESS_OUTCOME", "").strip()
-        if not account or not os.getenv("PRIVATE_KEY_OUTCOME", "").strip():
+        context = getattr(self.manager, 'account_context', None)
+        account = context.account if context else os.getenv("WALLET_ADDRESS_OUTCOME", "").strip()
+        if not account or not (context.private_key if context else os.getenv("PRIVATE_KEY_OUTCOME", "").strip()):
             raise ValueError("Outcome requires WALLET_ADDRESS_OUTCOME and PRIVATE_KEY_OUTCOME in .env")
         public = request.model_dump()
+        if public.get('session_duration_sec') and not public.get('session_expires_at'):
+            public['session_expires_at'] = time.time()+public['session_duration_sec']
         public["market"] = market
         public["outcome_side"] = side
         if selection is not None:
             public["two_sided"] = True
             public["rotation_pnl_carry"] = self.rotation.groups[rotation_group].get("pnl_carry", 0) if rotation_group else 0
+            public['session_volume_carry'] = self.rotation.groups[rotation_group].get('volume_carry', 0) if rotation_group else 0
             public["auto_selection"] = {**selection, "selected_at": time.time()}
             # Quote at touch instead of improving a spread chosen in a draft.
             public["maker_spread_pct"] = None
@@ -132,6 +136,9 @@ class OutcomeSupervisor:
             atomic_json(config_file, {"config": public, "safety_file": str(journal),
                         "funds_root": str(self.root / "funds"), "locks_root": str(self.root / "instances")})
             env = os.environ.copy()
+            if context:
+                env.update(context.environment())
+                env['ZEUS_SIGNING_ROOT'] = str(PROJECT_ROOT / '.zeus-state' / 'signing')
             env["ZEUS_PARENT_PID"] = str(os.getpid())
             env["OUTCOME_HEADLESS"] = "1"
             cmd = [sys.executable, "-u", "-m", "zeus.bots.outcome_worker", "--config", str(config_file)]

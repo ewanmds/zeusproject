@@ -1,0 +1,24 @@
+[Unit]
+Description=Zeus wallet workspace
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/zeusproject
+EnvironmentFile=-/home/ec2-user/zeusproject/.env
+EnvironmentFile=/home/ec2-user/zeusproject/.env.workspace
+ExecStart=/home/ec2-user/zeusproject/.venv-workspace/bin/python -m zeus.workspace
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=120
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

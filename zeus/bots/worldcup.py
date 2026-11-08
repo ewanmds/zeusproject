@@ -250,6 +250,10 @@ class BotConfig:
     auto_max_spread_bps: Optional[float] = None
     two_sided: bool = False
     full_size_quotes: bool = False
+    session_expires_at: Optional[float] = None
+    target_volume_usd: Optional[float] = None
+    session_volume_carry: float = 0
+    signing_root: Optional[str] = None
     market_label: str = ""
     rotation_file: Optional[str] = None
     risk_pnl_carry: float = 0.0
@@ -410,6 +414,9 @@ class HyperliquidSpreadBot:
         self.wallet = None
         if cfg.live:
             self._init_exchange(perp_dexs)
+            if cfg.signing_root:
+                from zeus.signing import SigningCoordinator
+                self.exchange = SigningCoordinator(cfg.signing_root, self.wallet.address).wrap(self.exchange)
             if self.funds:
                 self.exchange = self.funds.wrap(self.exchange)
             self.exchange = self.safety.wrap(
@@ -1403,7 +1410,11 @@ class HyperliquidSpreadBot:
 
     # ------------------------------------------------------------ order logic
     def rotation_requested(self) -> bool:
-        return bool(self.cfg.rotation_file and os.path.exists(self.cfg.rotation_file))
+        from zeus.session_targets import finish_reason
+        target = finish_reason({'session_expires_at': self.cfg.session_expires_at,
+                                'target_volume_usd': self.cfg.target_volume_usd,
+                                'session_volume_carry': self.cfg.session_volume_carry}, self.stats.volume_usd, time.time())
+        return bool(target or self.cfg.rotation_file and os.path.exists(self.cfg.rotation_file))
 
     def bilateral_requests(self, st: MarketState) -> Dict[bool, Dict[str, Any]]:
         """One funded bid and one inventory-backed ask. Existing holds count once."""

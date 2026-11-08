@@ -34,7 +34,7 @@ class OutcomeRotation:
             if group is None:
                 group = self.groups[group_id] = {"id": group_id, "config": dict(config),
                     "members": set(), "cancelled": False, "rotations": 0, "cooldown": {},
-                    "pnl_carry": 0.0, "accounted": set()}
+                    "pnl_carry": 0.0, "volume_carry": 0.0, "accounted": set()}
             now = time.time()
             group.update(current=session["session_id"], started=now, state="observing",
                          samples=deque([(now, 0.0)], maxlen=2000), reason="", retry_at=0.0,
@@ -64,6 +64,10 @@ class OutcomeRotation:
     def assert_admission(self, group_id):
         if self.closed.is_set() or group_id is not None and self.groups[group_id]["cancelled"]:
             raise RuntimeError("Auto rotation cancelled by Stop")
+        if group_id is not None:
+            from zeus.session_targets import finish_reason
+            if finish_reason(self.groups[group_id]['config'], None, time.time()):
+                raise RuntimeError('Session duration reached')
 
     def candidate_allowed(self, group_id, market, now=None):
         if group_id is None:
@@ -154,6 +158,20 @@ class OutcomeRotation:
                 group = self.groups[group_id]
                 if group["cancelled"] or current_id != group["current"] or self.closed.is_set():
                     continue
+                from zeus.session_targets import finish_reason
+                reason = finish_reason({**config, 'session_volume_carry': group.get('volume_carry', 0)},
+                                       current.get('volume_usd'), now)
+                if reason or group['state'] == 'finishing':
+                    if not current['running'] and current.get('cleanup_confirmed'):
+                        group.update(cancelled=True, state='stopped', reason='')
+                    else:
+                        group.update(state='finishing', reason=reason or group['reason'])
+                        info = self.owner.procs.get(current_id)
+                        if info:
+                            path = Path(info['stop_file']).with_name('drain.json')
+                            if not path.exists():
+                                atomic_json(path, {'requested_at': now, 'reason': group['reason'], 'session_finished': True})
+                    continue
                 if group["state"] == "draining":
                     if current["running"]:
                         group["reason"] = "Rotation: cancelling bids / selling remaining inventory"
@@ -166,6 +184,7 @@ class OutcomeRotation:
                         continue
                     if current_id not in group.setdefault("accounted", set()):
                         group["pnl_carry"] = group.get("pnl_carry", 0)+float(current.get("net_pnl", 0))
+                        group['volume_carry'] = group.get('volume_carry', 0)+float(current.get('volume_usd', 0))
                         group["accounted"].add(current_id)
                 elif not current["running"]:
                     group.update(cancelled=True, state="stopped", reason="")

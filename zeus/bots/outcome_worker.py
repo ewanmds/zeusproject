@@ -29,7 +29,7 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         order_usd=public["order_size_usd"], min_order_usd=public["order_size_usd"], close_min_order_usd=0,
         max_spread_pct=public.get("max_spread_pct") if public.get("max_spread_pct") is not None else public.get("max_spread_bps", 2) / 100,
         max_position_usd=public["max_position_usd"], min_action_interval_sec=0.03,
-        stale_sec=1.2, refresh_hz=12, stop_loss_usd=50, take_profit_usd=0,
+        stale_sec=1.2, refresh_hz=12, stop_loss_usd=public.get('session_stop_loss_usd', 50), take_profit_usd=0,
         rest_bbo_hz=4, rest_workers=24, rest_max_per_sweep=2, rest_429_backoff_sec=2.5,
         market_slippage_bps=5, market_cycle_cooldown_sec=0.12, account_sync_sec=2,
         account_address=os.getenv("WALLET_ADDRESS_OUTCOME", "").strip(),
@@ -40,6 +40,9 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         auto_max_spread_bps=public.get("auto_max_spread_bps", 10) if public.get("selection_mode") == "auto" else None,
         two_sided=public.get("two_sided", False),
         full_size_quotes=public.get("full_size_quotes", public.get("selection_mode") == "auto"),
+        session_expires_at=public.get('session_expires_at'), target_volume_usd=public.get('target_volume_usd'),
+        session_volume_carry=public.get('session_volume_carry', 0),
+        signing_root=os.getenv('ZEUS_SIGNING_ROOT') or None,
         market_label=(public.get('auto_selection') or {}).get('name', ''),
         rotation_file=str(Path(stop_file).with_name("drain.json")) if stop_file else None,
         risk_pnl_carry=public.get("rotation_pnl_carry", 0),
@@ -72,6 +75,13 @@ def run_worker(config_path, bot_factory=None):
         payload = {**snap, **lifecycle, "session_id": metadata["session_id"],
                     "market": cfg.symbols[0], "pid": os.getpid(), "started": started,
                     "ts": time.time(), "config": public["config"]}
+        if bot is not None and not final:
+            from zeus.session_targets import finish_reason
+            reason = finish_reason(public['config'], snap.get('volume_usd'), time.time())
+            drain = runtime/'drain.json'
+            if reason and not drain.exists():
+                atomic_json(drain, {'requested_at': time.time(), 'reason': reason, 'session_finished': True})
+                bot.wake.set()
         return telemetry.final(payload) if final else telemetry.write(payload)
 
     def monitor():

@@ -1,4 +1,9 @@
 .env
+.env.*
+!.env.workspace.example
+!.env.example
+output/
+.playwright-cli/
 *.log
 logs/
 *.db
@@ -7,9 +12,13 @@ obi_fills_*.db
 __pycache__/
 *.pyc
 .venv/
+.venv-workspace/
 frontend/dist/
 frontend/node_modules/
 integrations/freqtrade/local/
 integrations/freqtrade/bin/
 integrations/freqtrade/.build/
 .zeus-state/
+.zeus-workspace/
+frontend/workspace/node_modules/
+frontend/workspace/dist/

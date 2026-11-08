@@ -427,10 +427,11 @@ def _safe_symbol(symbol: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in symbol)
 
 
-def stats_file_path(symbol: str) -> str:
+def stats_file_path(symbol: str, runtime_root=None) -> str:
     """Fichier JSON de stats live, écrit ~1x/s par le bot et lu par le
     dashboard (bot_server) — c'est le canal de télémétrie inter-process."""
-    return os.path.join(tempfile.gettempdir(), f"hl_obi_stats_{_safe_symbol(symbol)}.json")
+    from zeus.bots.runtime_paths import grid_path
+    return grid_path(symbol, 'stats', runtime_root)
 
 
 def write_startup_status(symbol, strategy, started, live, phase, error=""):
@@ -446,12 +447,13 @@ def write_startup_status(symbol, strategy, started, live, phase, error=""):
     os.replace(temporary, path)
 
 
-def stop_file_path(symbol: str) -> str:
+def stop_file_path(symbol: str, runtime_root=None) -> str:
     """Fichier sentinelle: sa présence demande un arrêt PROPRE (cancel all,
     puis fermeture reduce-only seulement si le Stop est explicitement manuel)
     au bot de ce symbole — utilisé par le dashboard pour stopper un process
     enfant sans le tuer brutalement."""
-    return os.path.join(tempfile.gettempdir(), f"hl_obi_stop_{_safe_symbol(symbol)}.flag")
+    from zeus.bots.runtime_paths import grid_path
+    return grid_path(symbol, 'stop', runtime_root)
 
 
 _LOCK_HANDLE = None
@@ -462,7 +464,8 @@ def acquire_instance_lock(symbol: str) -> bool:
     token, mais on refuse le même coin en double)."""
     global _LOCK_HANDLE
     safe = "".join(c if c.isalnum() else "_" for c in symbol)
-    path = os.path.join(tempfile.gettempdir(), f"hl_obi_bot_{safe}.lock")
+    from zeus.bots.runtime_paths import grid_path
+    path = grid_path(symbol, 'lock')
     try:
         if os.name == "nt":
             import msvcrt

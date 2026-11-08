@@ -6,3 +6,6 @@ hyperliquid-python-sdk
 python-dotenv
 requests
 rich
+sqlalchemy>=2,<3
+cryptography>=43
+psycopg[binary]>=3,<4

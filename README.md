@@ -2,6 +2,28 @@
 
 Hyperliquid market-making dashboard with two strategies and a HIP-4 Outcome bot.
 
+## Wallet workspace
+
+The new multiuser workspace runs independently on **http://127.0.0.1:8081**.
+On Windows, double-click [START-WORKSPACE.bat](START-WORKSPACE.bat).
+
+```sh
+pip install -r requirements.txt
+npm install --prefix frontend/workspace
+npm run build --prefix frontend/workspace
+python -m zeus.workspace
+```
+
+Each wallet signs its own login message and approves its own Hyperliquid agent.
+The four views cover launch, sessions, performance and account authorization.
+No trading starts merely by opening the workspace. Installed EVM wallets work
+directly; mobile WalletConnect requires `ZEUS_WALLETCONNECT_PROJECT_ID`.
+See [workspace operation](docs/WORKSPACE.md) for account isolation, production
+configuration, tests and migration. The private dashboard below remains on 8080.
+
+To replace the public EC2 site, use [the workspace deployment guide](deploy/WORKSPACE.md).
+It prepares production storage and switches the existing Caddy site to the new service.
+
 ## Run
 
 ```sh
