@@ -109,9 +109,23 @@
         return `${number < 0 ? "-" : showSign && number > 0 ? "+" : ""}$${formatted}`;
     }
     function errorText(value) {
-        const text = String(value || "");
-        return /HTTPSConnectionPool|Read timed out|Hyperliquid unreachable|ConnectTimeout|ReadTimeout/.test(text)
-            ? "Hyperliquid unavailable. Verify stop before restarting." : text;
+        if (value && typeof value === "object") {
+            return String(value.message || value.detail || "");
+        }
+        const text = String(value || "").trim();
+        if (!text) return "";
+        // Exchange failures arrive as a raw requests tuple. Show the action the
+        // operator must take; the full text stays available in the card title.
+        if (/\b429\b/.test(text) || /rate limit/i.test(text)) {
+            return "Rate limited by Hyperliquid (429). Placement unconfirmed — verify the stop before restarting.";
+        }
+        if (/Placement still unconfirmed/i.test(text)) {
+            return "Placement unconfirmed — verify the stop before restarting.";
+        }
+        if (/HTTPSConnectionPool|Read timed out|Hyperliquid unreachable|ConnectTimeout|ReadTimeout/.test(text)) {
+            return "Hyperliquid unavailable. Verify stop before restarting.";
+        }
+        return text.length > 200 ? `${text.slice(0, 197)}…` : text;
     }
     const quoteNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 });
     function quoteText(quote) {
@@ -1578,7 +1592,7 @@
             set("markout", `${formatBPS(b.markout_bid_bps)} / ${formatBPS(b.markout_ask_bps)}`);
             set("edge", b.edge_required_bps ? `${formatBPS(b.edge_required_bps)} / ${formatBPS(b.quote_half_spread_bps)}` : "—");
             const passiveRisk = b.risk_exit_reason ? `Maker exit: ${b.risk_exit_reason}` : "";
-            set("action", [b.error, b.cleanup_error, b.accounting_error].filter(Boolean).join(" · ") || [passiveRisk, b.warning].filter(Boolean).join(" · ") || b.action || "");
+            set("action", [b.error, b.cleanup_error, b.accounting_error].map(displayError).filter(Boolean).join(" · ") || [passiveRisk, b.warning].map(displayError).filter(Boolean).join(" · ") || b.action || "");
             const stopBtn = card._stopBtn || (card._stopBtn = card.querySelector(".bot-card-stop"));
             if (stopBtn) {
                 if (!b.running && document.activeElement === stopBtn) {
