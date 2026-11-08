@@ -425,7 +425,6 @@ class HyperliquidSpreadBot:
         self.account_synced_at = 0.0
         self.last_fill_at = 0.0
         if cfg.worldcup:
-            from zeus.outcome_reads import OutcomeAccountReads
             self.account_reader = OutcomeAccountReads(cfg.base_url, cfg.account_address)
 
         try:
@@ -451,7 +450,6 @@ class HyperliquidSpreadBot:
         return retry_read(label, operation, cancelled=self._startup_cancelled, sleep=self._startup_retry_wait)
 
     def _load_sdk_metadata(self):
-        from zeus.outcome_reads import read_info
         meta = self._startup_read("Native SDK metadata", lambda: read_info(self.cfg.base_url, {"type": "meta"}))
         spot = self._startup_read("Spot SDK metadata", lambda: read_info(self.cfg.base_url, {"type": "spotMeta"}))
         if (not isinstance(meta, dict) or not isinstance(meta.get('universe'), list)
@@ -1051,7 +1049,6 @@ class HyperliquidSpreadBot:
             self.wake.set()
 
     def fetch_rest_bbo(self, symbol: str) -> Tuple[float, float]:
-        from zeus.outcome_reads import read_info
         try:
             book = read_info(self.cfg.base_url, {"type": "l2Book", "coin": symbol}, timeout=1.5)
         except requests.HTTPError as exc:
@@ -2302,6 +2299,54 @@ def main(argv: Optional[List[str]] = None) -> int:
     bot = HyperliquidSpreadBot(cfg)
     bot.run()
     return 0
+
+# --- merged from outcome_reads.py ---
+
+"""Parallel, read-only account snapshots with persistent per-thread HTTP sessions.
+
+Exchange submissions never enter this module. Consumers still validate both
+responses and reject snapshots overtaken by WebSocket account revisions.
+"""
+from concurrent.futures import ThreadPoolExecutor, wait
+import threading
+
+import requests
+
+
+_local = threading.local()
+
+
+def read_info(base_url, payload, *, timeout=10):
+    if not hasattr(_local, 'session'):
+        _local.session = requests.Session()
+    response = _local.session.post(base_url+'/info', json=payload, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+class OutcomeAccountReads:
+    def __init__(self, base_url, account, *, read=read_info):
+        self.base_url, self.account, self.read = base_url, account, read
+        self.lock = threading.Lock()
+        self.closed = False
+        self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='outcome-account')
+
+    def snapshot(self):
+        with self.lock:
+            if self.closed:
+                raise RuntimeError('Outcome account reader closed')
+            futures = [self.pool.submit(self.read, self.base_url, {'type': kind, 'user': self.account})
+                       for kind in ('spotClearinghouseState', 'openOrders')]
+            # Drain both bounded reads even if one fails: no old request may
+            # leak into a later reconciliation or mutate execution state.
+            wait(futures)
+            return tuple(future.result() for future in futures)
+
+    def close(self):
+        with self.lock:
+            if not self.closed:
+                self.closed = True
+                self.pool.shutdown(wait=False, cancel_futures=True)
 
 
 if __name__ == "__main__":

@@ -17,14 +17,11 @@ from collections import deque
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, NamedTuple
 from zeus import PROJECT_ROOT
-from zeus.safety import SafetyLatch, account_snapshot, supervisor_alive, finite, post_only_rejection, missing_modify_rejection
+from zeus.safety import SafetyLatch, account_snapshot, supervisor_alive, finite, post_only_rejection, missing_modify_rejection, atomic_json
 from zeus.safety import SubmissionSkipped, safe_error
 from zeus.safety import invalid_modify_rejection
 from zeus.latency import LatencyMetrics
-from zeus.snapshot_writer import LatestSnapshotWriter
 from zeus.mid_maintenance import MidMaintenance, MaintenanceRequest
-from zeus.maker_exit import exit_price as protected_exit_price
-from zeus.session_accounting import summarize_fills
 from zeus.inventory import apply_fill, mark_inventory, InventoryDesyncError
 from zeus.ws_execution import WebSocketExecution
 from zeus.action_worker import LatestActionWorker
@@ -3350,7 +3347,7 @@ class OrderBookBot:
             return min(touch, anchor) if is_buy else max(touch, anchor)
         age = now - pos_since
         if 0 <= age < MID_EXIT_PROTECT_SEC and MID_EXIT_PROTECTION:
-            protected = protected_exit_price(touch, is_buy, entry, tick,
+            protected = exit_price(touch, is_buy, entry, tick,
                                              entry_rate, maker_rate)
             if protected is not None:
                 return protected
@@ -4693,6 +4690,109 @@ def resolve_token(name: str) -> str:
         return resolve_symbol(name)
     except ValueError as exc:
         raise SystemExit(f"❌ Token inconnu: {name} ({exc})") from exc
+
+# --- merged from session_accounting.py ---
+
+"""Strict final fill aggregation scoped to exchange order IDs of one session."""
+from zeus.safety import finite
+
+
+def summarize_fills(rows, symbol, owned, expected=None, *, allow_large=False):
+    # A single userFillsByTime page is capped at 2000 rows. The caller that
+    # pages the history may pass allow_large=True; a raw single-page response
+    # of >=2000 rows is still treated as truncated.
+    if not isinstance(rows,list) or (not allow_large and len(rows)>=2000):
+        raise ValueError("Final fills unavailable or truncated")
+    fills={}
+    for row in rows:
+        if not isinstance(row,dict):
+            raise ValueError("Invalid final fill row")
+        if row.get("coin") not in (symbol,symbol.split(":")[-1]) or int(row.get("oid",0)) not in owned:
+            continue
+        if row.get("tid") is None or row.get("feeToken","USDC")!="USDC":
+            raise ValueError("Final fill identity or fee currency unconfirmed")
+        price,size,fee,pnl=(finite(row[k]) for k in ("px","sz","fee","closedPnl"))
+        if price<=0 or size<=0:
+            raise ValueError("Invalid final fill size/price")
+        key=str(row["tid"])
+        item=(int(row["oid"]),price,size,fee,pnl,row.get("crossed"))
+        if key in fills and fills[key]!=item:
+            raise ValueError("Conflicting duplicate final fill")
+        fills[key]=item
+    for oid,size in (expected or {}).items():
+        observed=sum(item[2] for item in fills.values() if item[0]==oid)
+        if observed+1e-9<size:
+            raise ValueError("Closing fills not yet confirmed in history")
+    return {"volume":sum(px*sz for _,px,sz,_,_,_ in fills.values()),
+            "fees":sum(fee for _,_,_,fee,_,_ in fills.values()),
+            "rpnl":sum(pnl for _,_,_,_,pnl,_ in fills.values()),
+            "fills":len(fills),
+            "maker":sum(role is False for *_,role in fills.values()),
+            "taker":sum(role is True for *_,role in fills.values()),
+            "unknown":sum(role is not True and role is not False for *_,role in fills.values()),
+            "tids":tuple(fills)}
+
+# --- merged from snapshot_writer.py ---
+
+"""One background publisher with a single replaceable pending snapshot."""
+import threading
+import time
+from zeus.safety import atomic_json
+
+class LatestSnapshotWriter:
+    def __init__(self,path,metrics=None,publish=atomic_json):
+        self.path,self.metrics,self.publish=path,metrics,publish
+        self.condition=threading.Condition();self.pending=None;self.stopping=False
+        self.error=""
+        self.thread=threading.Thread(target=self._run,name="mid-statistics",daemon=True)
+        self.thread.start()
+    def submit(self,data):
+        with self.condition:
+            if self.stopping:return False
+            if self.pending is not None and self.metrics:self.metrics.count("stats_coalesced")
+            self.pending=data;self.condition.notify()
+        return True
+    def _run(self):
+        while True:
+            with self.condition:
+                self.condition.wait_for(lambda:self.pending is not None or self.stopping)
+                if self.pending is None and self.stopping:return
+                data=self.pending;self.pending=None
+            started=time.perf_counter_ns()
+            try:self.publish(self.path,data);self.error=""
+            except Exception as exc:
+                self.error=type(exc).__name__
+                if self.metrics:self.metrics.count("stats_write_failures")
+            finally:
+                if self.metrics:self.metrics.observe("stats_write",(time.perf_counter_ns()-started)/1e6)
+    def close(self,final,timeout=2):
+        with self.condition:
+            self.pending=final;self.stopping=True;self.condition.notify()
+        self.thread.join(timeout)
+        return not self.thread.is_alive() and not self.error
+
+# --- merged from maker_exit.py ---
+
+"""Bounded maker exit protection using observed fees; never authorizes taker."""
+import math
+
+
+def exit_price(base, buy, entry, tick, opening_rate, maker_rate):
+    """Break-even after estimated fees plus one tick, rounded away from loss.
+
+    Rates are conservative maxima observed in fills on this exact market.
+    Returns None when costs cannot be estimated, rather than assuming zero.
+    """
+    values=(base,entry,tick,opening_rate,maker_rate)
+    if any(v is None or not math.isfinite(v) for v in values):
+        return None
+    if min(base,entry,tick)<=0 or not 0<=opening_rate<1 or not 0<=maker_rate<1:
+        return None
+    if buy:
+        target=(entry*(1-opening_rate)-tick)/(1+maker_rate)
+        return min(base, math.floor((target+tick*1e-9)/tick)*tick) if target>0 else None
+    target=(entry*(1+opening_rate)+tick)/(1-maker_rate)
+    return max(base, math.ceil((target-tick*1e-9)/tick)*tick)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Credential-free HIP-3 catalog shared by BBO/MID, Freqtrade and the dashboard.
+"""Credential-free HIP-3 catalog shared by BBO/MID and the dashboard.
 
 The static ``TOKENS`` presets below are only a safety net / source of market
 specific defaults (session windows, half spread).  The live catalog is

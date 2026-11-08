@@ -55,6 +55,32 @@ def account_key(account):
     return hashlib.sha256(account.strip().lower().encode()).hexdigest()[:24]
 
 
+def pid_alive(pid):
+    """True when the OS process still exists. Cheap; safe on Windows."""
+    if not pid:
+        return False
+    if os.name == "nt":
+        import ctypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel.OpenProcess(0x1000, False, int(pid))
+        if not handle:
+            return ctypes.get_last_error() == 5
+        code = ctypes.c_ulong()
+        kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel.CloseHandle(handle)
+        return bool(ok and code.value == 259)
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 class OutcomeFunds:
     def __init__(self, root, account, session_id):
         self.root = Path(root) / account_key(account)

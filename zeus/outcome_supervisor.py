@@ -11,7 +11,7 @@ import time
 import uuid
 
 from zeus import PROJECT_ROOT
-from zeus.localize import localize_state
+from zeus.dashboard import localize_state
 from zeus.process_control import ProcessLock, account_key
 from zeus.safety import atomic_json, finite, safe_error, read_json
 
@@ -83,7 +83,7 @@ class OutcomeSupervisor:
         resolved = outcomes.resolve_market(market)
         if resolved is None:
             raise ValueError("This Outcome side is unavailable")
-        from zeus.outcome_policy import blocked_outcome
+        from zeus.outcome_flow import blocked_outcome
         if blocked_outcome(resolved):
             raise ValueError("Fed interest-rate markets are excluded")
         account = os.getenv("WALLET_ADDRESS_OUTCOME", "").strip()
@@ -154,14 +154,13 @@ class OutcomeSupervisor:
         return result
 
     def _entry(self, journal, record, info=None):
-        from zeus.server import _pid_alive
         session_id = record["session_id"]
-        alive = info["proc"].poll() is None if info else _pid_alive(record.get("pid"))
+        # Only a child attached to this server is displayed as live. An
+        # unattached journal needs reconciliation; trusting a recycled OS PID
+        # would show a phantom running session after a crash or reboot.
+        alive = info["proc"].poll() is None if info else False
         # An archived, durably verified terminal session cannot become active
         # again when the OS assigns its old PID to an unrelated application.
-        if not info and record.get("cleanup_confirmed") is True and record.get("phase") in {"stopped", "failed"}:
-            alive = False
-        # A journal without an attached child is interrupted, never auto-attached.
         phase = record.get("phase", "failed")
         snap = {}
         if record.get("stats_file"):
@@ -184,8 +183,6 @@ class OutcomeSupervisor:
         # Keep metadata frozen, but use the newest real lifecycle publication.
         lifecycle = snap if snap.get("ts", 0) >= (record.get("ts") or 0) else record
         phase = lifecycle.get("phase", phase)
-        if not info and alive and not record.get("cleanup_confirmed"):
-            phase = "failed"
         if not alive and not record.get("cleanup_confirmed"):
             phase = "failed"
         confirmed = not alive and record.get("cleanup_confirmed") is True
@@ -216,37 +213,99 @@ class OutcomeSupervisor:
         entry.update(self.rotation.describe(session_id))
         return localize_state(entry)
 
+    @staticmethod
+    def _tracked(record):
+        """Confirmed terminal sessions can no longer change."""
+        if not record.get("symbols"):
+            return False
+        return not (record.get("cleanup_confirmed") is True
+                    and record.get("phase") in {"stopped", "failed"})
+
+    def _prune(self, kept):
+        """Keep the process/cache registries bounded on long-lived servers."""
+        with self.manager.lock:
+            if len(self.procs) > 80:
+                dead = [sid for sid, info in self.procs.items() if info["proc"].poll() is not None]
+                for sid in dead[:max(0, len(self.procs)-80)]:
+                    if str(self.procs[sid]["safety_file"]) not in kept:
+                        self.procs.pop(sid, None)
+        if len(self.cache) > 2048:
+            live = {record["session_id"] for _, record in kept.values()}
+            for sid in [sid for sid in self.cache if sid not in live]:
+                self.cache.pop(sid, None)
+        # Parsed stats files are only useful while their session is tracked.
+        with self._stats_lock:
+            if len(self._stats_cache) > 512:
+                live_files = {str(record.get("stats_file")) for _, record in kept.values()
+                              if record.get("stats_file")}
+                for path in [p for p in self._stats_cache if str(p) not in live_files]:
+                    self._stats_cache.pop(path, None)
+
     def status(self):
+        # Filesystem scans happen outside the manager lock so Start/Stop never
+        # waits for a dashboard collection.
         with self.manager.lock:
             attached = dict(self.procs)
-            records = {str(p): (p, r) for p, r in self.records()}
+        records = {str(p): (p, r) for p, r in self.records()}
         for info in attached.values():
             p = info["safety_file"]
             records[str(p)] = (p, self.manager._session_status(p))
+
+        # Only live, unconfirmed, or just-closed rows are read. Confirmed
+        # history is excluded, which keeps a tick bounded over months.
+        kept = {key: value for key, value in records.items() if self._tracked(value[1])}
+        groups = {r.get("auto_group_id") or r.get("config", {}).get("auto_group_id")
+                  for _, r in kept.values()}
+        groups.discard(None)
+        # A drained worker that is already confirmed drops out of `kept`, but
+        # its rotation group still needs it to observe the stop and launch the
+        # next market. Keep every non-cancelled rotation group visible.
+        intents = self.rotation.display_intents()
+        groups.update(intent["group_id"] for intent in intents if not intent.get("cancelled"))
+        for key, (path, record) in records.items():
+            gid = record.get("auto_group_id") or record.get("config", {}).get("auto_group_id")
+            if gid in groups:
+                kept.setdefault(key, (path, record))
+
         latest = {}
-        for journal, record in records.values():
+        for journal, record in kept.values():
             if not record.get("symbols"):
                 continue
             market = record["symbols"][0]
             if market not in latest or record.get("started", 0) > latest[market][1].get("started", 0):
                 latest[market] = (journal, record)
         all_entries = {r["session_id"]: self._entry(p, r, attached.get(r["session_id"]))
-                       for p, r in records.values() if r.get("symbols")}
+                       for p, r in kept.values() if r.get("symbols")}
         bots = [all_entries[r["session_id"]] for _, r in latest.values()]
-        result = {"type": "worldcup_stats", "bots": bots, "running": any(b["running"] for b in bots),
-                  "active_markets": sum(b["running"] for b in bots), "can_start": True,
-                  "phase": "running" if any(b["running"] for b in bots) else "stopped",
-                  "cleanup_confirmed": all(b["cleanup_confirmed"] for b in bots),
-                  "stale": False, "partial_stale": any(b["stale"] for b in bots),
-                  "config": {}, "mid_price": 0, "spread_bps": 0}
-        result["accounting_complete"] = all(b["accounting_complete"] for b in all_entries.values())
-        for key in ("volume_usd", "net_pnl", "fees", "fills"):
-            result[key] = sum(b[key] for b in all_entries.values())
-        from zeus.dashboard_state import outcome_projection
-        result.update(outcome_projection(list(all_entries.values()), self.rotation.display_intents()))
-        result["duration"] = result["active_metrics"]["duration"]
-        result["cost_per_1m"] = -result["net_pnl"] * 1e6 / result["volume_usd"] if result["volume_usd"] else None
-        result["position_usd"] = sum(b["position_usd"] for b in bots) if all(b["position_known"] for b in bots) else None
+        from zeus.dashboard import outcome_projection
+        projection = outcome_projection(list(all_entries.values()), intents)
+        metrics = projection["active_metrics"]
+        result = {
+            "type": "worldcup_stats",
+            "bots": bots,
+            "display_bots": projection["display_bots"],
+            "active_metrics": metrics,
+            "running": metrics["running"],
+            "active_markets": metrics["active_markets"],
+            "can_start": not self.manager._corrupt_journals,
+            "phase": "running" if metrics["running"] else "stopped",
+            "cleanup_confirmed": all(b["cleanup_confirmed"] for b in bots),
+            "stale": metrics["stale"],
+            "partial_stale": any(b["stale"] for b in bots),
+            "accounting_complete": metrics["accounting_complete"],
+            "duration": metrics["duration"],
+            "duration_sec": metrics["duration_sec"],
+            "volume_usd": metrics["volume_usd"],
+            "net_pnl": metrics["net_pnl"],
+            "fees": metrics["fees"],
+            "fills": metrics["fills"],
+            "cost_per_1m": metrics["cost_per_1m"],
+            "position_usd": metrics["position_usd"],
+            "config": {}, "mid_price": 0, "spread_bps": 0,
+            "journal_error": "; ".join(f"{name}: {error}"
+                                        for name, error in self.manager._corrupt_journals.items()),
+        }
+        self._prune(kept)
         return result
 
     def stop(self, session_id=None):

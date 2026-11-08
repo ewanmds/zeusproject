@@ -8,13 +8,12 @@ import time
 
 from zeus.process_control import ProcessLock, account_key
 from zeus.safety import atomic_json, safe_error, supervisor_alive, read_json
-from zeus.outcome_telemetry import OutcomeTelemetry
 
 
 def build_config(public, safety_file, stop_file=None, funds_root=None):
     from zeus.bots.worldcup import BotConfig
     market = str(public["market"])
-    from zeus.outcome_policy import assert_coin_allowed
+    from zeus.outcome_flow import assert_coin_allowed
     assert_coin_allowed(market)
     if not market.startswith("#") or not market[1:].isdigit():
         raise ValueError("Select one exact Outcome market")
@@ -132,6 +131,47 @@ def main():
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     return run_worker(args.config)
+
+# --- merged from outcome_telemetry.py ---
+
+"""Bounded retries for UI snapshots only. Durable risk journals stay strict."""
+import time
+from zeus.safety import atomic_json
+
+
+class OutcomeTelemetry:
+    def __init__(self, path, *, grace=5, publish=atomic_json, clock=time.monotonic, sleep=time.sleep):
+        self.path, self.grace, self.publish = path, grace, publish
+        self.clock, self.sleep = clock, sleep
+        self.failed_since = None
+        self.retries = 0
+
+    def write(self, data):
+        try:
+            self.publish(self.path, {**data, 'telemetry_write_retries': self.retries})
+        except PermissionError:
+            self.retries += 1
+            now = self.clock()
+            if self.failed_since is None:
+                self.failed_since = now
+            if now-self.failed_since >= self.grace:
+                raise
+            return False  # Keep the last valid file and its original timestamp.
+        self.failed_since = None
+        return True
+
+    def final(self, data, timeout=2):
+        until = self.clock()+timeout
+        while True:
+            try:
+                self.publish(self.path, {**data, 'telemetry_write_retries': self.retries})
+                self.failed_since = None
+                return True
+            except PermissionError:
+                self.retries += 1
+                if self.clock() >= until:
+                    raise
+                self.sleep(min(.1, max(0, until-self.clock())))
 
 
 if __name__ == "__main__":

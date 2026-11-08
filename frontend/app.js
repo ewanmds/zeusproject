@@ -29,29 +29,107 @@
 
     let ws = null;
     let reconnectTimer = null;
+    let reconnectDelay = 1000;
     let hasConnectedOnce = false;
     let gridRunning = false;
     let outcomeRunning = false;
     let outcomeSessions = [];
     let outcomeState = { can_start: false, phase: "connecting" };
+    let lastOutcomeIncident = "";
+    let lastGridJournalError = "";
     let gridSessions = [];
     let gridTokens = [];
     let selectedGridToken = normalizeToken({ key: "SP500", symbol: "xyz:SP500" });
-    const dashboardState = window.ZeusState.createStore();
-    // Older tabs may have cached state.js independently of app.js. Optional
-    // display helpers must never stop financial counters from rendering.
+    const dashboardState = (() => {
+        const finite = (value) => typeof value === "number" && Number.isFinite(value);
+        function clock(seconds) {
+            seconds = Math.floor(Math.max(0, Number(seconds) || 0));
+            return [Math.floor(seconds/3600), Math.floor(seconds/60)%60, seconds%60]
+                .map((part) => String(part).padStart(2, "0")).join(":");
+        }
+        function seconds(row) {
+            if (finite(row?.duration_sec)) return Math.max(0, row.duration_sec);
+            const parts = String(row?.duration || "").match(/^(\d+):(\d{2}):(\d{2})$/);
+            return parts ? Number(parts[1])*3600+Number(parts[2])*60+Number(parts[3]) : 0;
+        }
+        const states = new Map();
+        function accept(kind, data) {
+            if (!data || typeof data !== "object") return false;
+            const old = states.get(kind);
+            if (old && data.source_id && data.source_id === old.data.source_id
+                    && finite(data.revision) && finite(old.data.revision) && data.revision < old.data.revision) {
+                return false;
+            }
+            states.set(kind, { data, receivedAt: Date.now() });
+            return true;
+        }
+        function view(kind) {
+            const saved = states.get(kind);
+            if (!saved) return null;
+            const data = saved.data;
+            const stale = Boolean(data.stale || data.active_metrics?.stale
+                || Date.now()-saved.receivedAt > 6000);
+            if (kind === "outcome") {
+                return { ...data, ...(data.active_metrics || {}),
+                    bots: data.display_bots || data.bots || [], stale };
+            }
+            return { ...data, stale };
+        }
+        function age(kind) {
+            const saved = states.get(kind);
+            return saved ? Math.max(0, Date.now()-saved.receivedAt) : Infinity;
+        }
+        function elapsed(kind, row) {
+            const saved = states.get(kind);
+            if (!saved) return row?.duration || "00:00:00";
+            const delta = row?.running && !row.stale && !view(kind)?.stale
+                ? Math.max(0, Date.now()-saved.receivedAt)/1000 : 0;
+            return clock(seconds(row)+delta);
+        }
+        return { accept, view, age, elapsed };
+    })();
+
+    const numberFormats = new Map();
+    function numberFormat(digits) {
+        let format = numberFormats.get(digits);
+        if (!format) {
+            format = new Intl.NumberFormat("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+            numberFormats.set(digits, format);
+        }
+        return format;
+    }
+    function currency(value, showSign = false) {
+        if (value == null || value === "" || !Number.isFinite(Number(value))) return "—";
+        let number = Number(value);
+        const magnitude = Math.abs(number);
+        const digits = magnitude > 0 && magnitude < .01
+            ? Math.min(8, Math.max(4, 1-Math.floor(Math.log10(magnitude)))) : 2;
+        number = Number(number.toFixed(digits));
+        const formatted = numberFormat(number === 0 ? 2 : digits).format(Math.abs(number));
+        return `${number < 0 ? "-" : showSign && number > 0 ? "+" : ""}$${formatted}`;
+    }
+    function errorText(value) {
+        const text = String(value || "");
+        return /HTTPSConnectionPool|Read timed out|Hyperliquid unreachable|ConnectTimeout|ReadTimeout/.test(text)
+            ? "Hyperliquid unavailable. Verify stop before restarting." : text;
+    }
     const quoteNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 });
-    const quoteText = window.ZeusState.quoteText || ((quote) => {
+    function quoteText(quote) {
         if (!quote) return "";
         const side = (name) => Number.isFinite(quote[`${name}_price`]) && quote[`${name}_price`] > 0 &&
             Number.isFinite(quote[`${name}_size`]) && quote[`${name}_size`] > 0
             ? `${quoteNumber.format(quote[`${name}_size`])} × ${quoteNumber.format(quote[`${name}_price`])}` : "—";
         return `BID ${side("bid")} · ASK ${side("ask")}`;
-    });
-    const displayError = window.ZeusState.errorText || ((value) => String(value || ""));
+    }
+    const displayError = errorText;
     const pendingRenders = new Map();
     const renderFailures = new Set();
+    const renderFailureText = new Map();
+    const lastRenderStale = new Map();
     let renderFrame = 0;
+    // Locked until boot/access verification: polls, clocks and reconnects must
+    // stay fully idle while the access gate is open.
+    let appLocked = true;
 
     function receiveDashboard(kind, data) {
         if (!dashboardState.accept(kind, data)) return;
@@ -79,11 +157,22 @@
                     if (name === "outcome") renderOutcomeDashboard(state);
                     else renderGridDashboard(state);
                     renderFailures.delete(name);
+                    // Clear a previous render-failure message, but leave any
+                    // validation or journal error the render just wrote.
+                    const previous = renderFailureText.get(name);
+                    if (previous) {
+                        renderFailureText.delete(name);
+                        const alert = $(`#${name}-form-alert`);
+                        if (alert && alert.textContent === previous) setFormError(name, "");
+                    }
+                    lastRenderStale.set(name, Boolean(state.stale));
                 } catch (error) {
                     // One card/source must not discard the other source's frame.
                     console.error(`Dashboard render failed (${name})`, error);
+                    const message = "Display unavailable. Refresh the page.";
                     renderFailures.add(name);
-                    setFormError(name, "Display unavailable. Reconnecting…");
+                    renderFailureText.set(name, message);
+                    setFormError(name, message);
                 }
             }
             updateFreshness();
@@ -127,7 +216,7 @@
     }
 
     function formatUSD(val, showSign = false) {
-        return window.ZeusState.currency(val, showSign);
+        return currency(val, showSign);
     }
 
     function formatPrice(val) {
@@ -167,6 +256,18 @@
     function setText(id, value) {
         const el = $(`#${id}`);
         if (el && el.textContent !== String(value)) el.textContent = value;
+    }
+
+    // A card is rebuilt only when its identity changes, so its cells can be
+    // resolved once instead of running querySelector for every field on every
+    // WebSocket frame.
+    function field(card, name) {
+        let refs = card._refs;
+        if (!refs) {
+            refs = card._refs = new Map();
+            card.querySelectorAll("[data-f]").forEach((el) => refs.set(el.dataset.f, el));
+        }
+        return refs.get(name) || null;
     }
 
     function showToast(type, title, message = "") {
@@ -283,16 +384,11 @@
         updateFreshness();
     }
 
-    function setRunState(prefix, running) {
-        const pill = $(`#${prefix}-state-pill`);
+    function setRunState(prefix, running, attention = false) {
+        // The banner also carries failures and unconfirmed stops, so it must
+        // stay visible while a session needs the operator's attention.
         const banner = $(`#${prefix}-run-banner`);
-        if (pill) {
-            pill.hidden = !running;
-            pill.classList.toggle("running", running);
-            pill.classList.toggle("idle", !running);
-            pill.textContent = running ? "Active" : "";
-        }
-        if (banner) banner.hidden = !running;
+        if (banner) banner.hidden = !running && !attention;
     }
 
     function setBusy(buttonId, busy) {
@@ -313,7 +409,8 @@
         const blocked = gridSessions.some((bot) => (bot.token === token || bot.symbol === selectedGridToken.symbol) && bot.can_start === false);
         if (startBtn) startBtn.disabled = blocked || startBtn.getAttribute("aria-busy") === "true";
         if (stopBtn) stopBtn.disabled = !gridRunning || stopBtn.getAttribute("aria-busy") === "true";
-        setRunState("grid", gridRunning);
+        const attention = gridSessions.some((bot) => (bot.phase === "failed" && bot.cleanup_confirmed !== true) || bot.stale);
+        setRunState("grid", gridRunning, attention);
         updateReconcileButton();
     }
 
@@ -326,23 +423,15 @@
     function updateGridStrategy() {
         const strategy = $("#grid-strategy")?.value || "bbo";
         const offsetField = $("#grid-offset-field");
-        const amountInput = $("#grid-order-size");
-        if (amountInput) amountInput.min = strategy === "freqtrade" ? "40" : "10";
         if (offsetField) offsetField.hidden = strategy !== "mid";
         const exitField = $("#grid-exit-protection-field");
         const exitToggle = $("#grid-protect-exits");
         if (exitField) exitField.hidden = strategy !== "mid";
         if (exitToggle) exitToggle.disabled = strategy !== "mid";
-        const executionHelp = $("#grid-execution-help");
-        if (executionHelp) executionHelp.hidden = strategy === "freqtrade";
         ["grid-offset-help", "grid-exit-protection-help"].forEach((id) => {
             const help = $(`#${id}`);
             if (help) help.hidden = strategy !== "mid";
         });
-        if (strategy === "freqtrade") {
-            setText("grid-heading", "Freqtrade");
-            return;
-        }
         if (strategy === "mid") {
             setText("grid-heading", "MID");
             return;
@@ -352,6 +441,7 @@
 
     let outcomeAutoSnapshot = null;
     let outcomeAutoBusy = false;
+    let outcomeAutoQueued = false;
     let outcomeAutoEpoch = 0;
     let outcomeAutoPending = null;
     const outcomeIsAuto = () => $("#outcome-selection-mode")?.value === "auto";
@@ -369,7 +459,7 @@
                 item.innerHTML = "<strong></strong><small></small><span></span>";
             }
             const values = [candidate.name, candidate.market,
-                `${formatUSD(candidate.volume_usd_1m)}/min · queue ${Math.round(candidate.queue_proxy_sec)}s · ${candidate.spread_bps.toFixed(2)} bps`];
+                `${formatUSD(candidate.volume_usd_1m)}/min · queue ${Math.round(Number(candidate.queue_proxy_sec) || 0)}s · ${(Number(candidate.spread_bps) || 0).toFixed(2)} bps`];
             Array.from(item.children).forEach((child, i) => {
                 if (child.textContent !== values[i]) child.textContent = values[i];
             });
@@ -380,8 +470,15 @@
     }
 
     async function refreshOutcomeAuto() {
-        if (!outcomeIsAuto() || outcomeAutoBusy || document.hidden) return;
+        if (appLocked || !outcomeIsAuto() || document.hidden) return;
+        // A settings change during a fetch must not be dropped: remember it
+        // and run one more request as soon as the current one settles.
+        if (outcomeAutoBusy) {
+            outcomeAutoQueued = true;
+            return;
+        }
         outcomeAutoBusy = true;
+        outcomeAutoQueued = false;
         const epoch = outcomeAutoEpoch;
         const side = selectedOutcomeSide();
         try {
@@ -408,8 +505,14 @@
             outcomeAutoBusy = false;
             updateOutcomeButtons();
             await launchPendingOutcome();
+            if (outcomeAutoQueued) {
+                outcomeAutoQueued = false;
+                refreshOutcomeAuto();
+            }
         }
     }
+
+    const refreshOutcomeAutoSoon = debounce(refreshOutcomeAuto, 300);
 
     function changeOutcomeSelection() {
         outcomeAutoEpoch++;
@@ -423,7 +526,7 @@
             $("#outcome-exec-mode").value = "maker";
             $("#outcome-auto-candidates").replaceChildren();
             setText("outcome-auto-status", "Scanning…");
-            refreshOutcomeAuto();
+            refreshOutcomeAutoSoon();
         }
         updateOutcomeButtons();
     }
@@ -451,7 +554,8 @@
             input.disabled = busy || !auto && input.value === "no" && selectedOutcomeMarket.sides?.length === 1;
         });
         updateOutcomeExecutionMode();
-        setRunState("outcome", outcomeRunning);
+        const attention = outcomeState.stale || outcomeSessions.some((bot) => bot.phase === "failed" && bot.cleanup_confirmed !== true);
+        setRunState("outcome", outcomeRunning, attention);
         updateReconcileButton();
     }
 
@@ -507,6 +611,9 @@
 
     let wsConnected = false;
     function updateFreshness() {
+        // Clock ticks, DOM scans and live-region updates are pure work in a
+        // hidden tab; the latest snapshot is rendered on return.
+        if (document.hidden) return;
         const el = $("#data-freshness");
         if (!el) return;
         const kind = $(".nav-tab.active")?.dataset.page === "outcome" ? "outcome" : "grid";
@@ -518,7 +625,8 @@
         const shell = $("#connection-status");
         shell?.classList.toggle("connected", reachable);
         const label = shell?.querySelector(".status-text");
-        if (label) label.textContent = wsConnected ? "Connected" : reachable ? "Polling" : "Disconnected";
+        const connection = wsConnected ? "Connected" : reachable ? "Polling" : "Disconnected";
+        if (label && label.textContent !== connection) label.textContent = connection;
         const text = displayFailed ? "Display delayed" : !Number.isFinite(age) ? "Waiting for data" : fresh ? "Updated just now" : `Delayed · ${Math.round(age/1000)}s`;
         if (el.textContent !== text) el.textContent = text;
         el.classList.toggle("offline", !reachable);
@@ -526,8 +634,17 @@
         for (const name of ["grid", "outcome"]) {
             const current = dashboardState.view(name);
             if (!current) continue;
-            if (name === "outcome" && current.stale !== outcomeState.stale) {
-                outcomeState = current;
+            // A snapshot that turns stale (or fresh again) changes card labels
+            // and counters, so force one render on that transition too.
+            if (current.stale !== lastRenderStale.get(name)) {
+                if (name === "outcome") {
+                    outcomeState = current;
+                    outcomeSessions = Array.isArray(current.bots) ? current.bots : [];
+                    outcomeRunning = Boolean(current.running);
+                } else {
+                    gridSessions = Array.isArray(current.bots) ? current.bots : [];
+                    gridRunning = Boolean(current.running);
+                }
                 scheduleDashboardRender(name, current);
             }
         }
@@ -540,10 +657,11 @@
             const text = dashboardState.elapsed("outcome", outcome);
             setText("outcome-duration", text);
             setText("outcome-run-duration", text);
+            const rows = new Map(outcomeSessions.map((item) => [item.session_id, item]));
             for (const card of $$("#outcome-bots-list .bot-card")) {
-                const row = outcomeSessions.find((item) => item.session_id === card.dataset.sessionId);
+                const row = rows.get(card.dataset.sessionId);
                 const value = row && dashboardState.elapsed("outcome", row);
-                const label = card.querySelector('[data-f="duration"]');
+                const label = field(card, "duration");
                 if (label && value && label.textContent !== value) label.textContent = value;
             }
         }
@@ -569,22 +687,28 @@
     }
 
     async function fetchJson(url, options = {}) {
-        const headers = new Headers(options.headers || {});
+        const { timeoutMs = 15000, ...init } = options;
+        const headers = new Headers(init.headers || {});
         if (apiToken) headers.set("X-API-Token", apiToken);
-        const apiRead = url.includes("/api/") && !options.method;
-        const controller = apiRead ? new AbortController() : null;
-        const timeout = controller ? setTimeout(() => controller.abort(), 10000) : null;
+        // Every call, including Start/Stop, must settle: a hung POST would
+        // otherwise leave its button busy forever. Stop/reconcile callers opt
+        // into a longer budget than the server's 30 s stop deadline.
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
         let resp;
         let data = {};
         try {
-            resp = await fetch(url, { cache: "no-store", ...options, headers, ...(controller ? { signal: controller.signal } : {}) });
+            resp = await fetch(url, { cache: "no-store", ...init, headers, signal: controller.signal });
             try { data = await resp.json(); }
             catch (error) {
                 if (error.name === "AbortError") throw error;
                 throw new Error("Invalid server response");
             }
+        } catch (error) {
+            if (error.name === "AbortError") throw new Error("Request timed out");
+            throw error;
         } finally {
-            if (timeout) clearTimeout(timeout);
+            clearTimeout(timeout);
         }
         if (resp.status === 401) {
             lockApp("Invalid access code — please enter it again.");
@@ -995,7 +1119,7 @@
         const hidden = $("#outcome-market");
         if (hidden) hidden.value = selectedOutcomeCoin();
         setText("outcome-side-yes-prob", outcomeProbability(selectedOutcomeMarket, 0));
-        setText("outcome-side-no-prob", selectedOutcomeMarket.sides?.length === 1 ? "Indisponible" : outcomeProbability(selectedOutcomeMarket, 1));
+        setText("outcome-side-no-prob", selectedOutcomeMarket.sides?.length === 1 ? "Unavailable" : outcomeProbability(selectedOutcomeMarket, 1));
         paintOutcomeLogo($("#outcome-market-logo"), selectedOutcomeMarket);
         setText("outcome-market-name", selectedOutcomeMarket.name);
         setText("outcome-market-symbol", outcomeTriggerSubtitle(selectedOutcomeMarket));
@@ -1087,7 +1211,7 @@
             : `${shown} market${shown === 1 ? "" : "s"}`);
     }
 
-    function applyOutcomeCatalog(data) {
+    function applyOutcomeCatalog(data, { preserve = false } = {}) {
         const markets = Array.isArray(data?.outcomes) ? data.outcomes.map(normalizeOutcome) : [];
         if (markets.length === 0) return false;
         outcomeMarkets = markets;
@@ -1097,7 +1221,7 @@
             ? data.categories.filter((category) => category && category.key)
             : [];
         outcomeCatalogLoaded = true;
-        activeOutcomeCategory = "all";
+        if (!preserve) activeOutcomeCategory = "all";
         renderOutcomeCategoryChips();
         const current = outcomeMarkets.find((market) => market.key === selectedOutcomeMarket.key);
         setSelectedOutcomeMarket(current || OUTCOME_EMPTY_MARKET);
@@ -1105,16 +1229,16 @@
         return true;
     }
 
-    async function loadOutcomeMarkets() {
+    async function loadOutcomeMarkets({ preserve = false } = {}) {
         const cached = readCatalogCache("outcome");
-        const painted = applyOutcomeCatalog(cached);
+        const painted = applyOutcomeCatalog(cached, { preserve });
         if (!painted) setText("outcome-market-count", "Loading…");
         try {
             const data = await fetchJson(`${API_BASE}/api/outcomes/markets`);
             if (!Array.isArray(data.outcomes) || data.outcomes.length === 0) {
                 throw new Error(data.error || "No HIP-4 markets available");
             }
-            applyOutcomeCatalog(data);
+            applyOutcomeCatalog(data, { preserve });
             writeCatalogCache("outcome", data);
             return true;
         } catch (error) {
@@ -1191,7 +1315,7 @@
         });
     }
 
-    function applyGridTokenCatalog(data) {
+    function applyGridTokenCatalog(data, { preserve = false } = {}) {
         const tokens = Array.isArray(data?.tokens) ? data.tokens.map(normalizeToken) : [];
         if (tokens.length === 0) return false;
         // Markets sorted by 24h volume descending (then ticker/dex).
@@ -1204,21 +1328,24 @@
         const preferred = gridTokens.find((token) => token.key === selectedGridToken.key)
             || gridTokens.find((token) => token.key === "SP500")
             || gridTokens[0];
-        activeGridDex = "all";
+        if (!preserve) activeGridDex = "all";
         renderDexChips();
-        setSelectedGridToken(preferred);
+        // A background refresh keeps the current selection unless it vanished.
+        if (!preserve || !gridTokens.some((token) => token.key === selectedGridToken.key)) {
+            setSelectedGridToken(preferred);
+        }
         const dexCount = new Set(gridTokens.map((token) => token.dex)).size;
         setText("grid-token-count", `${gridTokens.length} markets · ${dexCount} dex`);
         return true;
     }
 
-    async function loadGridTokens() {
+    async function loadGridTokens({ preserve = false } = {}) {
         const cached = readCatalogCache("grid");
-        const painted = applyGridTokenCatalog(cached);
+        const painted = applyGridTokenCatalog(cached, { preserve });
         if (!painted) setText("grid-token-count", "Loading");
         try {
             const data = await fetchJson(`${API_BASE}/api/grid/tokens`);
-            if (!applyGridTokenCatalog(data)) return;
+            if (!applyGridTokenCatalog(data, { preserve })) return;
             writeCatalogCache("grid", data);
         } catch (error) {
             if (painted) return;        // keep the cached list until the next refresh
@@ -1232,6 +1359,7 @@
 
     let statusRefreshPromise = null;
     function loadInitialStatus({ silent = false } = {}) {
+        if (appLocked) return Promise.resolve();
         if (statusRefreshPromise) return statusRefreshPromise;
         statusRefreshPromise = Promise.allSettled([
             fetchJson(`${API_BASE}/api/grid/status`).then(updateGridDashboard),
@@ -1246,6 +1374,7 @@
     }
 
     function connectWebSocket() {
+        if (appLocked) return;
         if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
         try {
@@ -1263,6 +1392,7 @@
                 showToast("success", "Back online", "Live stats are streaming again.");
             }
             hasConnectedOnce = true;
+            reconnectDelay = 1000;
             if (reconnectTimer) {
                 clearTimeout(reconnectTimer);
                 reconnectTimer = null;
@@ -1296,11 +1426,13 @@
     }
 
     function scheduleReconnect() {
-        if (reconnectTimer) return;
+        if (appLocked || reconnectTimer) return;
         reconnectTimer = setTimeout(() => {
             reconnectTimer = null;
             connectWebSocket();
-        }, 3000);
+        }, reconnectDelay);
+        // Back off to 10 s so a down backend does not see a request storm.
+        reconnectDelay = Math.min(10000, reconnectDelay * 2);
     }
 
     function updateGridDashboard(data) {
@@ -1309,6 +1441,12 @@
 
     function renderGridDashboard(data) {
         setText("grid-run-duration", data.duration || "00:00:00");
+        // A corrupt journal blocks every launch; say so instead of failing
+        // only when the operator presses Start.
+        const journalError = data.journal_error ? `Unreadable session journal: ${data.journal_error}` : "";
+        if (journalError) setFormError("grid", journalError);
+        else if (lastGridJournalError) setFormError("grid", "");
+        lastGridJournalError = journalError;
 
         const bots = Array.isArray(data.bots) ? data.bots : [];
         gridSessions = bots;
@@ -1332,7 +1470,7 @@
             : (data.config?.token || selectedGridToken.key);
         setText("grid-run-token", token);
 
-        renderBotsList(bots);
+        renderBotsList(bots, Boolean(data.stale));
 
         if (typeof data.running === "boolean") {
             gridRunning = data.running;
@@ -1340,7 +1478,7 @@
         }
     }
 
-    function renderBotsList(bots) {
+    function renderBotsList(bots, globalStale = false) {
         const container = $("#grid-bots-list");
         if (!container) return;
         if (!bots.length) {
@@ -1389,7 +1527,7 @@
                 <footer class="bot-card-action" data-f="action"></footer>
               </article>`).join("");
             container.querySelectorAll(".bot-card-stop").forEach((btn) => {
-                btn.addEventListener("click", () => stopGridBot(btn.dataset.token));
+                btn.addEventListener("click", () => stopGridBot(btn.dataset.token, btn));
             });
         }
 
@@ -1401,20 +1539,19 @@
             card.classList.toggle("stopped", !b.running);
             card.classList.toggle("failed", (b.phase === "failed" || !b.phase && !b.running && Boolean(b.error)) && !riskNotice);
             const set = (f, v) => {
-                const el = card.querySelector(`[data-f="${f}"]`);
+                const el = field(card, f);
                 if (el && el.textContent !== v) el.textContent = v;
             };
             const modeLabel = b.strategy === "mid" ? `MID · ${formatMIDBPS(b.offset_bps)}${b.mid_exit_policy === "hold_to_profit" ? " · HOLD PROFIT" : b.mid_protect_exits ? ` · EXIT GUARD ${Number(b.mid_exit_protect_sec || 30)}S` : ""}`
-                : b.strategy === "freqtrade" ? "FREQTRADE"
-                : b.strategy === "bbo" ? "BBO" : "ANCIEN MODE";
-            const stateLabel = b.stale ? "STALE STATE" : b.phase === "failed" ? (b.cleanup_confirmed ? "FAILED · FLAT" : "FAILED · STOP UNCONFIRMED") : b.phase === "stopping" ? "STOPPING" : !b.running ? "STOPPED" : b.phase === "connecting" ? "CONNECTING" : "LIVE";
+                : "BBO";
+            const stateLabel = (b.stale || globalStale) ? "STALE STATE" : b.phase === "failed" ? (b.cleanup_confirmed ? "FAILED · FLAT" : "FAILED · STOP UNCONFIRMED") : b.phase === "stopping" ? "STOPPING" : !b.running ? "STOPPED" : b.phase === "connecting" ? "CONNECTING" : "LIVE";
             const executionLabel = b.execution_policy === "maker_only_auto" ? ` · MAKER${b.execution_transport === "websocket" ? " / WS" : ""}` : "";
             set("title", `${b.token} · ${modeLabel}${executionLabel} · ${stateLabel}`);
             set("duration", b.duration || "00:00:00");
             set("mid", formatPrice(b.mid_price));
             set("vol", formatUSD(b.volume_usd));
             set("pnl", b.net_pnl == null ? "—" : formatUSD(b.net_pnl, true));
-            const pnlEl = card.querySelector('[data-f="pnl"]');
+            const pnlEl = field(card, "pnl");
             if (pnlEl) setPnLColor(pnlEl, b.net_pnl);
             set("fees", formatUSD(b.fees));
             set("rpnl", b.realized_pnl == null ? "—" : formatUSD(b.realized_pnl, true));
@@ -1425,7 +1562,9 @@
             set("actions-rate", b.order_actions_per_hour == null ? "—" : Number(b.order_actions_per_hour).toFixed(1));
             set("pos", formatUSD(b.position_usd));
             set("spread", formatBPS(b.spread_bps));
-            card.querySelectorAll("[data-mid-quote]").forEach((el) => { el.hidden = b.strategy !== "mid"; });
+            const midQuoteCells = card._midQuoteCells
+                || (card._midQuoteCells = Array.from(card.querySelectorAll("[data-mid-quote]")));
+            midQuoteCells.forEach((el) => { el.hidden = b.strategy !== "mid"; });
             if (b.strategy === "mid") {
                 const quote = b.mid_quote || {};
                 set("mid-target", formatMIDPair(quote.target_bid, quote.target_ask));
@@ -1440,7 +1579,7 @@
             set("edge", b.edge_required_bps ? `${formatBPS(b.edge_required_bps)} / ${formatBPS(b.quote_half_spread_bps)}` : "—");
             const passiveRisk = b.risk_exit_reason ? `Maker exit: ${b.risk_exit_reason}` : "";
             set("action", [b.error, b.cleanup_error, b.accounting_error].filter(Boolean).join(" · ") || [passiveRisk, b.warning].filter(Boolean).join(" · ") || b.action || "");
-            const stopBtn = card.querySelector(".bot-card-stop");
+            const stopBtn = card._stopBtn || (card._stopBtn = card.querySelector(".bot-card-stop"));
             if (stopBtn) {
                 if (!b.running && document.activeElement === stopBtn) {
                     card.tabIndex = -1;
@@ -1483,15 +1622,16 @@
                 container.append(card);
                 cards.set(bot.session_id, card);
             }
-            if (!card.querySelector('[data-f="quotes"]')) {
+            if (!field(card, "quotes")) {
                 const quotes = document.createElement("p");
                 quotes.className = "bot-card-quotes";
                 quotes.dataset.f = "quotes";
                 quotes.hidden = true;
-                card.querySelector('[data-f="settings"]').after(quotes);
+                field(card, "settings").after(quotes);
+                card._refs.set("quotes", quotes);
             }
             const set = (key, value) => {
-                const element = card.querySelector(`[data-f="${key}"]`);
+                const element = field(card, key);
                 if (element && element.textContent !== String(value)) element.textContent = value;
             };
             const config = bot.config || {};
@@ -1503,21 +1643,21 @@
             set("settings", `${autoMode ? "Auto flow · " : ""}${config.exec_mode === "maker" ? "Limit / Maker" : "Market / Taker"}${config.two_sided ? " · Bid + Ask" : ""} · order ${formatUSD(config.order_size_usd)} · cap ${formatUSD(config.max_position_usd)} · ${autoMode ? `best bid / ask · rotate on low fills${bot.auto_rotations ? ` · ${bot.auto_rotations} switches` : ""}` : config.exec_mode === "maker" ? `target spread ${config.maker_spread_pct}%` : `max spread ${config.max_spread_pct ?? config.max_spread_bps / 100}%`}`);
             set("state", bot.stale || outcomeState.stale ? "Stale data" : ({ connecting: "Starting", running: bot.execution_state || "Active", rotating: "Switching market", blocked: "Verification required", recovering: "Verifying · auto-recovery", stopping: "Stopping", stopped: "Stop confirmed", failed: bot.cleanup_confirmed ? "Error · flat" : "Stop unconfirmed" }[bot.phase] || bot.phase));
             const quote = !bot.stale && !outcomeState.stale && bot.running ? bot.quotes?.[0] : null;
-            const quoteLabel = card.querySelector('[data-f="quotes"]');
+            const quoteLabel = field(card, "quotes");
             set("quotes", quoteText(quote));
             quoteLabel.hidden = !quote;
-            card.querySelector('[data-f="state"]').title = Number.isFinite(bot.account_sync_ms)
+            field(card, "state").title = Number.isFinite(bot.account_sync_ms)
                 ? `Account sync ${Math.round(bot.account_sync_ms)} ms${Number.isFinite(bot.orders_sent) ? ` · ${bot.orders_sent} orders · ${bot.cancels_sent} cancels` : ""}` : "";
             for (const key of ["volume_usd", "net_pnl", "fees", "cost_per_1m", "position_usd"]) set(key, bot.accounting_complete === false ? "—" : formatUSD(bot[key]));
             set("fills", bot.accounting_complete === false ? "—" : String(bot.fills || 0));
             const errors = [bot.error, bot.recovery_error, bot.cleanup_error].filter(Boolean);
             set("error", [...new Set(errors.map(displayError)), bot.auto_rotation_reason,
                 !bot.error && !bot.recovery_error ? bot.blocked_reason || (bot.execution_state ? "" : bot.last_action || bot.status) : ""].filter(Boolean).join(" · "));
-            card.querySelector('[data-f="error"]').title = errors.join(" · ");
+            field(card, "error").title = errors.join(" · ");
             card.classList.toggle("stopped", !bot.running);
             card.classList.toggle("failed", bot.phase === "failed");
-            setPnLColor(card.querySelector('[data-f="net_pnl"]'), bot.net_pnl);
-            const button = card.querySelector("button");
+            setPnLColor(field(card, "net_pnl"), bot.net_pnl);
+            const button = card._stopBtn || (card._stopBtn = card.querySelector("button"));
             button.setAttribute("aria-label", `Stop ${name} ${side === "yes" ? "Yes" : "No"}`);
             if (!bot.running && document.activeElement === button) { card.tabIndex = -1; card.focus({ preventScroll: true }); }
             button.hidden = !bot.running;
@@ -1553,12 +1693,24 @@
             outcomeRunning = data.running;
             updateOutcomeButtons();
         }
-        const incident = [...new Set([data.error, data.recovery_error, data.cleanup_error].filter(Boolean).map(displayError)), data.stale ? "Live data delayed." : ""].filter(Boolean).join(" · ");
-        setFormError("outcome", incident);
+        const incident = [...new Set([data.error, data.recovery_error, data.cleanup_error].filter(Boolean).map(displayError)), data.stale ? "Live data delayed." : "", data.journal_error ? `Unreadable session journal: ${data.journal_error}` : ""].filter(Boolean).join(" · ");
+        // Only clear the previous live incident; a validation message shown
+        // while the user typed must survive the next dashboard tick.
+        if (incident) {
+            setFormError("outcome", incident);
+        } else if (lastOutcomeIncident) {
+            setFormError("outcome", "");
+        }
+        lastOutcomeIncident = incident;
         const banner = $("#outcome-run-banner");
-        const stateLabel = data.stale ? "Stale data" : `${data.active_markets || 0} active Outcome bot(s)`;
+        const attention = Boolean(data.stale) || data.phase === "failed"
+            || outcomeSessions.some((bot) => bot.phase === "failed" && bot.cleanup_confirmed !== true);
+        const stateLabel = data.stale ? "Stale data"
+            : outcomeSessions.some((bot) => bot.phase === "failed" && bot.cleanup_confirmed !== true) ? "Stop unconfirmed · verify the session"
+            : outcomeSessions.some((bot) => bot.phase === "failed") ? "Last session failed · flat"
+            : `${data.active_markets || 0} active Outcome bot(s)`;
         if (banner) {
-            banner.hidden = !data.running && data.phase !== "failed";
+            banner.hidden = !data.running && !attention;
             const title = banner.querySelector("strong");
             if (title) title.textContent = stateLabel;
         }
@@ -1602,6 +1754,7 @@
             }
             const response = await fetchJson(`${API_BASE}/api/grid/start`, {
                 method: "POST",
+                timeoutMs: 30000,
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
             });
@@ -1619,12 +1772,20 @@
         }
     }
 
-    async function stopGridBot(token) {
+    async function stopGridBot(token, button = null) {
         // token précis → stoppe ce bot; sans token → stoppe TOUS les bots.
-        setBusy("grid-stop-btn", true);
+        const local = button instanceof HTMLElement ? button : null;
+        if (local) {
+            local.disabled = true;
+            local.setAttribute("aria-busy", "true");
+        } else {
+            setBusy("grid-stop-btn", true);
+        }
         try {
             const response = await fetchJson(`${API_BASE}/api/grid/stop`, {
                 method: "POST",
+                // The server allows up to 30 s to confirm a flatten.
+                timeoutMs: 45000,
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(token ? { token } : {}),
             });
@@ -1635,7 +1796,12 @@
         } catch (error) {
             showToast("error", "Stop failed", error.message);
         } finally {
-            setBusy("grid-stop-btn", false);
+            if (local) {
+                local.disabled = false;
+                local.setAttribute("aria-busy", "false");
+            } else {
+                setBusy("grid-stop-btn", false);
+            }
             updateGridButtons();
         }
     }
@@ -1709,6 +1875,7 @@
         try {
             const started = await fetchJson(`${API_BASE}/api/outcomes/start`, {
                 method: "POST",
+                timeoutMs: 30000,
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
             });
@@ -1735,12 +1902,21 @@
         const button = sessionId ? Array.from($("#outcome-bots-list")?.children || []).find((card) => card.dataset.sessionId === sessionId)?.querySelector("button") : $("#outcome-stop-btn");
         if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
         try {
-            const response = await fetchJson(`${API_BASE}/api/outcomes/stop`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sessionId ? { session_id: sessionId } : {}) });
+            const response = await fetchJson(`${API_BASE}/api/outcomes/stop`, { method: "POST", timeoutMs: 45000, headers: { "Content-Type": "application/json" }, body: JSON.stringify(sessionId ? { session_id: sessionId } : {}) });
             const state = response.state || await fetchJson(`${API_BASE}/api/outcomes/status`);
             updateOutcomeDashboard(state);
-            const verified = response.stopped_session_ids;
-            const targets = (state.bots || []).filter((bot) => !sessionId || (verified ? verified.includes(bot.session_id) : bot.session_id === sessionId));
-            if ((!targets.length && !verified) || targets.some((bot) => bot.running || bot.cleanup_confirmed !== true)) throw new Error("Stop not confirmed: verify orders and position.");
+            const verified = Array.isArray(response.stopped_session_ids) ? response.stopped_session_ids : [];
+            const bots = Array.isArray(state.bots) ? state.bots : [];
+            // A card id is the logical (Auto group) id; the server returns the
+            // physical worker ids it stopped, so match on both.
+            const relevant = sessionId
+                ? bots.filter((bot) => bot.session_id === sessionId || verified.includes(bot.session_id)
+                    || bot.auto_group_id === sessionId || bot.config?.auto_group_id === sessionId)
+                : bots;
+            if (relevant.some((bot) => bot.running || bot.cleanup_confirmed !== true)
+                    || (sessionId && !verified.length && !relevant.length)) {
+                throw new Error("Stop not confirmed: verify orders and position.");
+            }
             showToast("info", "Stop confirmed", sessionId ? "The selected bot is stopped." : "All Outcome bots are stopped.");
         } catch (error) {
             showToast("error", "Outcome stop failed", error.message);
@@ -1780,17 +1956,13 @@
         pendingStopScope = null;
     }
 
-    function openMetricsGuide() {
-        const dialog = $("#metrics-guide");
-        if (dialog && !dialog.open) dialog.showModal();
-    }
-
     // ------------------------------------------------------------ access gate
     let appBooted = false;
 
     function bootApp() {
         if (appBooted) return;
         appBooted = true;
+        appLocked = false;
         loadGridTokens();
         ensureOutcomeCatalog();
         loadInitialStatus();
@@ -1807,7 +1979,13 @@
             err.textContent = message || "";
             err.hidden = !message;
         }
-        requestAnimationFrame(() => $("#access-code-input")?.focus());
+        // A 401 retry storm must not steal focus every few seconds.
+        const input = $("#access-code-input");
+        if (input && document.activeElement !== input) {
+            requestAnimationFrame(() => {
+                if (document.activeElement !== input) input.focus();
+            });
+        }
     }
 
     function hideAccessGate() {
@@ -1816,11 +1994,13 @@
             gate.close();
             gate.hidden = true;
         }
+        appLocked = false;
     }
 
     function lockApp(message) {
         try { localStorage.removeItem(TOKEN_STORAGE_KEY); } catch { /* private mode */ }
         apiToken = "";
+        appLocked = true;
         if (ws) {
             try { ws.close(); } catch { /* déjà fermé */ }
             ws = null;
@@ -2025,34 +2205,43 @@
             if (event.target === event.currentTarget) closeStopConfirm();
         });
 
-        $$(".metrics-guide-btn").forEach((button) => button.addEventListener("click", openMetricsGuide));
-        $("#metrics-guide-close")?.addEventListener("click", () => $("#metrics-guide")?.close());
-        $("#metrics-guide")?.addEventListener("click", (event) => {
-            if (event.target === event.currentTarget) event.currentTarget.close();
+        $("#grid-empty-cta")?.addEventListener("click", (event) => {
+            // The picker's document-level outside-click handler would close it
+            // immediately if this click bubbled.
+            event.stopPropagation();
+            openTokenPicker();
         });
-        $("#grid-empty-cta")?.addEventListener("click", () => openTokenPicker());
 
         window.addEventListener("resize", updateTabIndicator);
         document.fonts?.ready.then(updateTabIndicator);
         window.setInterval(updateFreshness, 1000);
         window.setInterval(() => {
-            if (appBooted && !document.hidden && (dashboardState.age("grid") > 2000 || dashboardState.age("outcome") > 2000)) {
+            if (appBooted && !appLocked && !document.hidden
+                    && (dashboardState.age("grid") > 2000 || dashboardState.age("outcome") > 2000)) {
                 loadInitialStatus({ silent: true });
             }
         }, 3000);
+        // Mids, volumes and probabilities change; without this the pickers
+        // stay frozen at the values loaded on the first page view.
+        window.setInterval(() => {
+            if (!appBooted || appLocked || document.hidden) return;
+            loadGridTokens({ preserve: true });
+            loadOutcomeMarkets({ preserve: true });
+        }, 5 * 60 * 1000);
         document.addEventListener("visibilitychange", () => {
             if (document.hidden) return;
+            updateFreshness();
             flushDashboardRenders();
-            if (appBooted) { loadInitialStatus({ silent: true }); connectWebSocket(); }
+            if (appBooted && !appLocked) { loadInitialStatus({ silent: true }); connectWebSocket(); }
         });
         $("#outcome-exec-mode")?.addEventListener("change", updateOutcomeExecutionMode);
         $$("input[name='outcome-side']").forEach((input) => input.addEventListener("change", () => setSelectedOutcomeMarket(selectedOutcomeMarket)));
         $("#sessions-reconcile-btn")?.addEventListener("click", async () => {
             setBusy("sessions-reconcile-btn", true);
             try {
-                const state = await fetchJson(`${API_BASE}/api/sessions/reconcile`, { method: "POST" });
+                const state = await fetchJson(`${API_BASE}/api/sessions/reconcile`, { method: "POST", timeoutMs: 60000 });
                 await loadInitialStatus();
-                showToast(state.can_start ? "success" : "error", "Stop verification", state.can_start ? "Orders and positions verified. Manual restart is possible." : "Stop not confirmed: " + state.unresolved.join(", "));
+                showToast(state.can_start ? "success" : "error", "Stop verification", state.can_start ? "Orders and positions verified. Manual restart is possible." : "Stop not confirmed: " + ((Array.isArray(state.unresolved) && state.unresolved.length) ? state.unresolved.join(", ") : state.journal_error ? `unreadable journal — ${state.journal_error}` : "verify sessions manually"));
             } catch (error) { showToast("error", "Verification failed", error.message); }
             finally { setBusy("sessions-reconcile-btn", false); }
         });

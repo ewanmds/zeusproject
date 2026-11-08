@@ -42,37 +42,12 @@ from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 from zeus import PROJECT_ROOT
-from zeus.localize import localize_state
+from zeus.dashboard import localize_state
 from zeus.safety import atomic_json, account_snapshot, safe_error, read_json
+from zeus.process_control import pid_alive
 
 
-def _pid_alive(pid):
-    if not pid:
-        return False
-    if os.name == "nt":
-        import ctypes
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.restype = ctypes.c_void_p
-        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-        handle = kernel.OpenProcess(0x1000, False, int(pid))
-        if not handle:
-            return ctypes.get_last_error() == 5
-        code = ctypes.c_ulong()
-        kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
-        ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
-        kernel.CloseHandle(handle)
-        return bool(ok and code.value == 259)
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-GRID_NUM_LEVELS = 1
 logger = logging.getLogger("zeus.server")
-
 # ---------------------------------------------------------------------------
 # .env loader (manual, no external dependency)
 # ---------------------------------------------------------------------------
@@ -337,6 +312,12 @@ class BotManager:
         # re-parse only when the file changes (atomic_json replaces the file).
         self._journal_cache: Dict[Path, tuple] = {}
         self._journal_lock = threading.Lock()
+        # Journals that cannot be parsed block new launches instead of
+        # taking the whole dashboard (and every WebSocket) down.
+        self._corrupt_journals: Dict[str, str] = {}
+        # One scan result is shared by every dashboard consumer in a tick;
+        # Start/Stop and reconcile always force a fresh scan.
+        self._scan_cache: Optional[tuple] = None
         from zeus.outcome_supervisor import OutcomeSupervisor
         self.outcome = OutcomeSupervisor(self)
 
@@ -356,21 +337,53 @@ class BotManager:
             self._journal_cache[path] = (key, record)
         return record
 
-    def _session_files(self):
+    def _scan_session_files(self):
+        """Read every journal and quarantine the ones that cannot be used."""
         if self.state_dir is None:
-            return []
+            return [], {}
         result = []
         seen = set()
+        corrupt = {}
         for path in self.state_dir.glob("*.json"):
             seen.add(path)
             try:
-                result.append((path, self._read_journal(path)))
-            except (OSError, ValueError):
-                raise RuntimeError("Session journal unreadable; manual verification required")
+                record = self._read_journal(path)
+                if not isinstance(record, dict):
+                    raise ValueError("Session journal is not a JSON object")
+                if not record.get("session_id"):
+                    raise ValueError("Session journal has no session_id")
+                result.append((path, record))
+            except (OSError, ValueError) as exc:
+                corrupt[str(path.name)] = safe_error(exc)
+        # Log a broken journal once per distinct error instead of on every
+        # dashboard tick (the scan runs at WebSocket frequency).
+        for name, error in corrupt.items():
+            if self._corrupt_journals.get(name) != error:
+                logger.error("Session journal unreadable: %s (%s)", name, error)
         with self._journal_lock:
             for stale_path in list(self._journal_cache):
                 if stale_path not in seen:
                     self._journal_cache.pop(stale_path, None)
+        return result, corrupt
+
+    def _session_files(self, *, fresh=False):
+        """Snapshot of session journals, shared across dashboard consumers.
+
+        A dashboard tick asks grid, outcome and rotation for the same scan;
+        caching it for 0.5 s turns four scans into one without ever letting a
+        launch decision use a stale list (`fresh=True`).
+        """
+        if self.state_dir is None:
+            return []
+        with self._journal_lock:
+            cached = self._scan_cache
+        if not fresh and cached is not None and time.monotonic()-cached[0] < 0.5:
+            self._corrupt_journals = cached[2]
+            return cached[1]
+        result, corrupt = self._scan_session_files()
+        self._corrupt_journals = corrupt
+        with self._journal_lock:
+            self._scan_cache = (time.monotonic(), result, corrupt)
         return result
 
     def _verify_session_flat(self, record):
@@ -403,7 +416,12 @@ class BotManager:
             OutcomeFunds(record["funds_root"], account, record["session_id"]).resolve(record.get("pending_cloids", []))
 
     def _reserve_session(self, key, symbols, kind):
-        for _, record in self._session_files():
+        # A start decision must never use the dashboard's cached scan.
+        records, corrupt = self._scan_session_files()
+        self._corrupt_journals = corrupt
+        if corrupt:
+            raise RuntimeError("Unreadable session journal; manual verification required")
+        for _, record in records:
             if record.get("key") == key and not record.get("cleanup_confirmed"):
                 raise RuntimeError("Previous session stop not confirmed; reconcile before starting")
         if self.state_dir is None:
@@ -428,7 +446,8 @@ class BotManager:
         with self.lock:
             perp_processes = self.obi_procs.copy()
             outcome_processes = self.outcome.procs.copy()
-            records = self._session_files()
+        # The journal scan must not hold the manager lock: it touches every file.
+        records = self._session_files(fresh=True)
         for path, record in records:
             if record.get("cleanup_confirmed"):
                 continue
@@ -437,7 +456,9 @@ class BotManager:
             if any(str(i["safety_file"]) == str(path) and i["proc"].poll() is None
                    for i in outcome_processes.values()):
                 owned = True
-            if owned or record.get("pid") != os.getpid() and _pid_alive(record.get("pid")) or _pid_alive(record.get("child_pid")):
+            pid = record.get("pid")
+            alive = (pid != os.getpid() and pid_alive(pid)) or pid_alive(record.get("child_pid"))
+            if owned or alive:
                 unresolved.append(record["key"])
                 continue
             try:
@@ -448,7 +469,8 @@ class BotManager:
                 unresolved.append(record["key"])
                 atomic_json(path, {**record, "phase": "failed", "cleanup_confirmed": False,
                                    "can_start": False, "cleanup_error": safe_error(exc), "ts": time.time()})
-        return {"unresolved": unresolved, "can_start": not unresolved}
+        return {"unresolved": unresolved, "can_start": not unresolved and not self._corrupt_journals,
+                "journal_error": "; ".join(f"{name}: {error}" for name, error in self._corrupt_journals.items())}
 
     def _orphans(self, kind):
         attached = {str(info.get("safety_file")) for info in self.obi_procs.copy().values()}
@@ -468,7 +490,7 @@ class BotManager:
             raise ValueError('Market making requires mode=live')
         token_key = (config.token or "SP500").strip().upper()
         strategy = (config.strategy or "bbo").strip().lower()
-        if strategy not in ("bbo", "mid", "freqtrade"):
+        if strategy not in ("bbo", "mid"):
             raise ValueError(f"Unknown market making strategy: {config.strategy}")
         offset_bps = None
         if strategy == "mid":
@@ -478,7 +500,7 @@ class BotManager:
             if not math.isfinite(offset_bps) or not 0 <= offset_bps < 10000:
                 raise ValueError("offset_bps must be finite, at least 0 and less than 10000")
             offset_bps = max(0.0, offset_bps)
-        module_name = "zeus.bots.freqtrade" if strategy == "freqtrade" else "zeus.bots.order_book"
+        module_name = "zeus.bots.order_book"
         obi_mod = _safe_import(module_name)
         if obi_mod is None:
             raise RuntimeError(
@@ -489,23 +511,11 @@ class BotManager:
         except BaseException as exc:  # resolve_token lève SystemExit si inconnu
             raise ValueError(f"Unknown token '{config.token}': {exc}")
         order_usd = max(10.5, float(config.order_size_usd))
-        if strategy == "freqtrade":
-            order_usd = float(config.order_size_usd)
-            if not math.isfinite(order_usd) or order_usd < 40:
-                raise ValueError("Freqtrade requires at least 40 USD (100% per side, one order per side) and a finite amount")
-            obi_mod.require_binary()
-
-        with self.lock:
-            needs_confirmation = any(info["symbol"] == symbol and info.get("stop_unconfirmed") for info in self.obi_procs.values())
-        confirmed_flat = False
-        if needs_confirmation:
-            from zeus.bots.freqtrade import confirm_flat
-            confirmed_flat = confirm_flat(symbol, os.getenv("WALLET_ADDRESS", ""))
 
         with self.lock:
             if any(info["symbol"] == symbol and info["proc"].poll() is None for info in self.obi_procs.values()):
                 raise RuntimeError(f"A bot is already running on {symbol}")
-            if not confirmed_flat and any(info["symbol"] == symbol and info.get("stop_unconfirmed") for info in self.obi_procs.values()):
+            if any(info["symbol"] == symbol and info.get("stop_unconfirmed") for info in self.obi_procs.values()):
                 raise RuntimeError("The previous flatten is not confirmed; no new bot was started")
             existing = self.obi_procs.get(token_key)
             if existing is not None and existing["proc"].poll() is None:
@@ -600,7 +610,7 @@ class BotManager:
                 info["stop_unconfirmed"] = True
                 failures.append(key)
         for key, info in targets:
-            deadline = stop_started + (95 if info["config"].get("strategy") == "freqtrade" else 30)
+            deadline = stop_started + 30
             proc = info["proc"]
             while proc.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.1)
@@ -630,6 +640,7 @@ class BotManager:
             "net_adverse_lost": 0.0,
             "adverse_halt": False,
             "config": self.grid_config,
+            "journal_error": "",
         }
         default["bots"] = []
         try:
@@ -637,7 +648,7 @@ class BotManager:
             with self.lock:
                 items = list(self.obi_procs.items())
             bots = [{"token": r["symbols"][0].split(":")[-1], "symbol": r["symbols"][0],
-                     "strategy": r.get("strategy", "bbo"), "running": _pid_alive(r.get("pid")),
+                     "strategy": r.get("strategy", "bbo"), "running": pid_alive(r.get("pid")),
                      "phase": "failed", "error": r.get("error") or "Interrupted session; stop not confirmed",
                      "cleanup_error": r.get("cleanup_error", ""), "cleanup_confirmed": False,
                      "can_start": False, "position_known": False, "position_usd": None,
@@ -707,12 +718,12 @@ class BotManager:
                     "phase": phase,
                     "duration": _fmt_duration(max(0.0, end - start)),
                     "volume_usd": _json_float(vol, 2),
-                    "net_pnl": _json_float(rpnl - fees_v, 4) if st.get("accounting_complete") is not False else None,
+                    "net_pnl": _json_float(rpnl - fees_v, 4) if bool(st) and st.get("accounting_complete") is not False else None,
                     "fees": _json_float(fees_v, 4),
                     "realized_pnl": _json_float(rpnl, 4),
-                    "accounting_complete": st.get("accounting_complete") is not False,
+                    "accounting_complete": bool(st) and st.get("accounting_complete") is not False,
                     "cost_per_1m": (_json_float((fees_v - rpnl) / (vol / 1_000_000), 2)
-                                    if vol > 0 and st.get("accounting_complete") is not False else None),
+                                    if vol > 0 and bool(st) and st.get("accounting_complete") is not False else None),
                     "fills": int(st.get("fills", 0) or 0),
                     "maker_fills": st.get("maker_fills"),
                     "taker_fills": st.get("taker_fills"),
@@ -772,6 +783,7 @@ class BotManager:
                 "adverse_halt": False,
                 "bots": bots,
                 "config": self.grid_config,
+                "journal_error": "; ".join(f"{name}: {error}" for name, error in self._corrupt_journals.items()),
             }
             self._grid_stats_cache = result
             return result
@@ -827,12 +839,15 @@ async def _server_lifespan(_app):
     if public_catalogs.closed:
         public_catalogs = PublicCatalogService()
     warm = asyncio.create_task(_warm_public_catalogs())
-    await reconcile_on_startup()
+    # Recovery talks to the exchange; never delay the listening socket for it.
+    recovery = asyncio.create_task(reconcile_on_startup())
+    publisher = asyncio.create_task(_dashboard_publisher())
     try:
         yield
     finally:
-        warm.cancel()
-        await asyncio.gather(warm, return_exceptions=True)
+        for task in (publisher, recovery, warm):
+            task.cancel()
+        await asyncio.gather(publisher, recovery, warm, return_exceptions=True)
         manager.outcome.rotation.close()
         from zeus.outcome_flow import scanner
         await asyncio.to_thread(scanner.close)
@@ -869,10 +884,42 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 manager = BotManager()
-from zeus.dashboard_broker import DashboardBroker
+from zeus.dashboard import DashboardBroker
 dashboard = DashboardBroker({"grid": lambda: manager.get_grid_stats(),
                              "outcome": lambda: manager.get_worldcup_stats()},
-                            ttl=0.9)
+                            ttl=0.5)
+
+
+async def _send_frame(client, text):
+    try:
+        await asyncio.wait_for(client.send_text(text), timeout=3)
+        return None
+    except BaseException as exc:  # disconnect, timeout or closed socket
+        return exc
+
+
+async def _dashboard_publisher():
+    """One collection and one JSON encoding shared by every client."""
+    while True:
+        try:
+            clients = list(manager.ws_clients)
+            if clients:
+                for kind in ("grid", "outcome"):
+                    if not clients:
+                        break
+                    text = await asyncio.to_thread(dashboard.payload, kind)
+                    results = await asyncio.gather(
+                        *(_send_frame(client, text) for client in clients),
+                        return_exceptions=True)
+                    for client, result in zip(clients, results):
+                        if result is not None:
+                            manager.ws_clients.discard(client)
+                    clients = [client for client in clients if client in manager.ws_clients]
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Dashboard publish skipped: %s", safe_error(exc))
+        await asyncio.sleep(0.5)
 
 
 @app.middleware("http")
@@ -919,11 +966,6 @@ async def serve_js():
     if js_file.exists():
         return FileResponse(str(js_file), media_type="application/javascript", headers=_NO_CACHE)
     return JSONResponse(status_code=404, content={"detail": "app.js not found"})
-
-
-@app.get("/state.js")
-async def serve_state_js():
-    return FileResponse(str(frontend_dir / "state.js"), media_type="application/javascript", headers=_NO_CACHE)
 
 
 @app.get("/config.js")
@@ -1103,10 +1145,10 @@ async def outcome_auto(side: Literal["yes", "no"] = "no", order_usd: float = 50,
     catalog = await public_catalogs.snapshot("hip4")
     await asyncio.to_thread(scanner.configure, catalog["outcomes"])
     result = await asyncio.to_thread(scanner.snapshot, side, order_usd, max_spread_bps)
-    # Collecting session state reads every journal; keep it off the event loop
-    # so the 10 s auto poll cannot delay market loads or WebSocket pushes.
-    worldcup = await asyncio.to_thread(manager.get_worldcup_stats)
-    busy = {b["market"] for b in worldcup.get("bots", [])
+    # Collecting session state reads every journal; use the shared cached
+    # snapshot so the auto poll never duplicates a WebSocket collection.
+    worldcup = await asyncio.to_thread(dashboard.read, "outcome")
+    busy = {b["market"] for b in worldcup.get("display_bots", worldcup.get("bots", []))
             if b.get("running") or not b.get("cleanup_confirmed")}
     result["candidates"] = [r for r in result["candidates"] if r["market"] not in busy]
     result["ready"] = bool(result["candidates"])
@@ -1168,17 +1210,12 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     manager.ws_clients.add(websocket)
     try:
+        # Send a warm frame immediately; the shared publisher then pushes
+        # only new revisions to every connected client.
+        await websocket.send_text(await asyncio.to_thread(dashboard.payload, "grid"))
+        await websocket.send_text(await asyncio.to_thread(dashboard.payload, "outcome"))
         while True:
-            grid_stats, wc_stats = await asyncio.gather(
-                asyncio.to_thread(dashboard.read, "grid"),
-                asyncio.to_thread(dashboard.read, "outcome"),
-            )
-            await websocket.send_json(grid_stats)
-            await websocket.send_json(wc_stats)
-            # Local clocks animate independently; all tabs share cached snapshots.
-            # One push per second halves payload bandwidth and collection work
-            # while staying far inside the frontend's 6 s freshness window.
-            await asyncio.sleep(1.0)
+            await websocket.receive_text()
     except WebSocketDisconnect:
         pass
     except Exception:

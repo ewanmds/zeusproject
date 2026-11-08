@@ -9,7 +9,7 @@ import threading
 import time
 
 from zeus.safety import atomic_json, safe_error
-from zeus.outcome_selection import no_fill_grace, candidate_rank
+from zeus.outcome_flow import no_fill_grace, candidate_rank
 
 
 class OutcomeRotation:

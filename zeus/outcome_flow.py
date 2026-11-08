@@ -14,7 +14,6 @@ import threading
 import time
 
 import requests
-from zeus.outcome_policy import blocked_outcome
 
 # Keep-alive per thread: one snapshot checks up to 24 order books, and a cold
 # TLS handshake per book would dominate the auto-selection latency.
@@ -407,3 +406,52 @@ class OutcomeFlowScanner:
 
 
 scanner = OutcomeFlowScanner()
+
+
+# --- merged from outcome_policy.py ---
+
+"""User exclusions shared by Outcome discovery and the final worker admission."""
+import re
+
+
+# All children of the currently listed FOMC rate-decision question, both sides.
+FED_RATE_OUTCOME_IDS = frozenset({19987, 19988, 19989, 19990})
+
+
+def blocked_outcome(row):
+    try:
+        outcome_id = int(row.get('id', row.get('outcome_id', 0)))
+    except (TypeError, ValueError):
+        outcome_id = 0
+    text = ' '.join(str(row.get(key) or '') for key in
+                    ('name', 'raw_name', 'question_title', 'question_description', 'description'))
+    fed = re.search(r'\b(?:fed|fomc|federal reserve|federal open market committee|federal funds)\b', text, re.I)
+    rates = re.search(r'\b(?:rate|rates|interest|policyRate\w*)\b', text, re.I)
+    return outcome_id in FED_RATE_OUTCOME_IDS or bool(fed and rates)
+
+
+def assert_coin_allowed(coin):
+    if coin.startswith('#') and coin[1:].isdigit() and int(coin[1:])//10 in FED_RATE_OUTCOME_IDS:
+        raise ValueError('Fed interest-rate markets are excluded')
+
+# --- merged from outcome_selection.py ---
+
+"""Pure, bounded Auto scheduling heuristics, separate from order execution."""
+import math
+
+
+def no_fill_grace(config, selection):
+    window = float(config.get('auto_rotation_after_sec', 180))
+    queue = float((selection or {}).get('queue_proxy_sec') or 0)
+    # Give a newly joined queue a reasonable chance; never extend the user's
+    # configured observation window. This remains an estimate, not a promise.
+    return min(window, max(60, queue*1.25))
+
+
+def candidate_rank(candidate, results, now):
+    previous = results.get(candidate['market'], {})
+    failures = min(3, previous.get('zero_fill_attempts', 0))
+    age = max(0, now-previous.get('updated_at', now))
+    penalty = 1+failures*math.exp(-age/1800)
+    return (float(candidate.get('queue_proxy_sec', math.inf))*penalty,
+            -float(candidate.get('score', 0)), -float(candidate.get('volume_usd_1m', 0)), candidate['market'])

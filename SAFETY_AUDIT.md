@@ -1,26 +1,26 @@
 # Zeus execution/stop audit
 
-Implemented for Outcome, BBO/MID, Freqtrade and their dashboard supervisor.
+Implemented for Outcome and BBO/MID and their dashboard supervisor.
 
 | Defect | Protection |
 | --- | --- |
 | Outcome could submit with `running=False` | Engine check plus serialized exchange gate |
 | Stop during initialization could be lost | Persistent stop event/sentinel; recheck before launch |
 | Exception skipped cleanup | Session `try/finally`; idempotent cleanup owner |
-| API error was cleared by the next successful request | BBO/MID/Freqtrade latch; Outcome verifies orders and inventory before automatic recovery |
+| API error was cleared by the next successful request | BBO/MID latch; Outcome verifies orders and inventory before automatic recovery |
 | Failed cancellation erased order tracking | Confirm acknowledgements; independent exchange reconciliation |
 | Timeout/process exit was reported as a clean stop | Separate cleanup confirmation and process termination |
 | Late order response could survive cancellation | Drain requests first; record session OIDs/client IDs |
 | Uncertain close was retried with stale size | Stop escalation; read fresh residual before known-result retry |
 | Restart forgot interrupted sessions | Atomic `.zeus-state` journals; Start remains blocked |
-| Orphan child kept quoting after its supervisor died | Python and Go parent-process monitors close the execution gate and trigger cleanup |
+| Orphan child kept quoting after its supervisor died | Python parent-process monitors close the execution gate and trigger cleanup |
 | Cached state displayed as current | Explicit stale/error states; preserve final statistics |
 | Outcome cost/million displayed the PnL sign | Costs are negative net PnL, normalized by executed volume |
 
 ## Operator behavior
 
 - Stop disables quoting, cancels session orders and attempts to close inventory.
-- BBO/MID/Freqtrade execution errors follow the same safety sequence and require manual Start.
+- BBO/MID execution errors follow the same safety sequence and require manual Start.
 - Outcome runtime errors keep the session alive in `recovering`, without automatic
   cancellation or liquidation. New execution is blocked until independent order
   and inventory reads succeed. Checks back off from 2 seconds up to 30 seconds;
@@ -137,20 +137,16 @@ new quote rather than another modification of the dead OID. This produces a
 warning, not a failed lifecycle or red failure border. Incomplete acknowledgements,
 other rejections and unverifiable exchange state still retain the interlock.
 
-```powershell
-python -m unittest discover -s tests -p 'test_*.py' -v
-python tests/check_outcome_ui.py
-npm.cmd --prefix frontend run build
-```
-
-From `integrations/freqtrade/engine`, using its bundled Go installation:
+This repository has no automated test suite (removed by design; the history is
+available under the `pre-cleanup` tag). Before deploying, verify:
 
 ```powershell
-& ../.build/go/bin/go.exe test ./...
-& ../.build/go/bin/go.exe vet ./...
-& ../.build/go/bin/go.exe test -race ./internal/execution ./cmd/bot ./internal/zeusbridge
+python -m py_compile zeus\*.py zeus\bots\*.py bot_server.py
+python -c "import zeus.server, zeus.dashboard, zeus.bots.order_book, zeus.bots.worldcup"
+node --check frontend/app.js
+node frontend/build.mjs
 ```
 
-The race detector additionally needs a supported C compiler/CGO environment.
-Source changes require rebuilding the platform binaries and their manifest via
-`python -m zeus.bots.freqtrade --build` before deploying the Go runtime.
+Then run the manual scenarios: cold start; Start/Stop BBO; Start/Stop MID;
+Outcome Manual; Outcome Auto; maker and taker; an unconfirmed stop; a network
+cut; two tabs; 390/768/1440 widths; zero console errors after ten minutes.
