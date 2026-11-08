@@ -4,14 +4,15 @@ set -euo pipefail
 umask 077
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 ORIGIN=${1:-https://3-113-242-142.sslip.io}
+PUBLIC_ORIGIN=${2:-$ORIGIN}
 cd "$ROOT"
 if [[ "$ROOT" != /home/ec2-user/zeusproject || $(id -un) != ec2-user ]]; then
   echo 'This deployment targets ec2-user and /home/ec2-user/zeusproject.' >&2; exit 1
 fi
 git diff --quiet && git diff --cached --quiet || { echo 'Commit or preserve local source changes first.' >&2; exit 1; }
-[[ -x .venv/bin/python ]] || { echo 'The existing .venv/bin/python is required.' >&2; exit 1; }
-.venv/bin/python -c 'import sys; assert sys.version_info >= (3,10), "Python 3.10+ required"'
 sudo -v
+source "$ROOT/deploy/workspace_python.sh"
+WORKSPACE_PYTHON=$(workspace_bootstrap_python)
 sudo systemctl is-active --quiet caddy || { echo 'Caddy must already serve the public HTTPS site.' >&2; exit 1; }
 STAMP=$(date -u +%Y%m%d-%H%M%S)
 BACKUP="$ROOT/output/deploy-$STAMP"
@@ -21,7 +22,7 @@ sudo cat /etc/caddy/Caddyfile > "$BACKUP/Caddyfile"
 if sudo test -f /etc/systemd/system/zeus-workspace.service; then
   sudo cat /etc/systemd/system/zeus-workspace.service > "$BACKUP/zeus-workspace.service"
 fi
-.venv/bin/python deploy/workspace_config.py caddy --origin "$ORIGIN" --input "$BACKUP/Caddyfile" --output "$BACKUP/Caddyfile.next"
+"$WORKSPACE_PYTHON" deploy/workspace_config.py caddy --origin "$ORIGIN" --input "$BACKUP/Caddyfile" --output "$BACKUP/Caddyfile.next"
 sudo caddy validate --adapter caddyfile --config "$BACKUP/Caddyfile.next"
 
 node_supported() {
@@ -40,7 +41,14 @@ if ! node_supported; then
   fi
   node_supported || { echo 'Select Node 22.12+ and npm in PATH, then rerun.' >&2; exit 1; }
 fi
-[[ -x .venv-workspace/bin/python ]] || .venv/bin/python -m venv .venv-workspace
+if [[ -e .venv-workspace ]] && ! workspace_python_supported .venv-workspace/bin/python; then
+  if sudo systemctl is-active --quiet zeus-workspace; then
+    echo 'The running workspace uses an incompatible environment. Stop its sessions/service before upgrading Python.' >&2
+    exit 1
+  fi
+  mv -- .venv-workspace "$BACKUP/venv-workspace"
+fi
+[[ -x .venv-workspace/bin/python ]] || "$WORKSPACE_PYTHON" -m venv .venv-workspace
 .venv-workspace/bin/python -m pip install -r requirements.txt
 npm ci --prefix frontend/workspace --no-audit --no-fund
 npm run build --prefix frontend/workspace
@@ -57,7 +65,7 @@ if [[ "$LOCAL_DB" == yes ]]; then
   fi
   sudo systemctl enable --now postgresql
 fi
-.venv-workspace/bin/python deploy/workspace_config.py configure --origin "$ORIGIN"
+.venv-workspace/bin/python deploy/workspace_config.py configure --origin "$PUBLIC_ORIGIN"
 
 echo 'Build and configuration ready. Stopping the old service invokes its existing order/inventory cleanup.'
 sudo systemctl stop zeus-bot
@@ -103,5 +111,5 @@ if ! sudo systemctl reload caddy; then
 fi
 .venv-workspace/bin/python -c 'import sys,requests; r=requests.get(sys.argv[1]+"/api/v2/config",timeout=15);r.raise_for_status();assert r.json()["version"]=="workspace-1";print("Public HTTPS workspace verified")' "$ORIGIN"
 sudo systemctl disable zeus-bot
-printf 'Deployed %s at %s\nBackup: %s\n' "$(git rev-parse --short HEAD)" "$ORIGIN" "$BACKUP"
+printf 'Deployed %s; browser origin %s; API origin %s\nBackup: %s\n' "$(git rev-parse --short HEAD)" "$PUBLIC_ORIGIN" "$ORIGIN" "$BACKUP"
 echo 'No bot launched. Installed wallets are ready; WalletConnect QR requires a Reown project ID.'

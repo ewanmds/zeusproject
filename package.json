@@ -1,0 +1,6 @@
+{
+  "name": "zeusproject",
+  "private": true,
+  "engines": { "node": "22.x" },
+  "scripts": { "build": "npm run build --prefix frontend/workspace" }
+}

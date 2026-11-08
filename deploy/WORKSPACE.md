@@ -27,7 +27,12 @@ HTTPS readiness must pass before the old service is disabled.
 
 On Amazon Linux 2023 it can install Node.js 22 and PostgreSQL 15 when missing.
 Other distributions need these prerequisites installed by their operator.
-An existing Python 3.10+ virtual environment and Caddy service are required.
+A running Caddy service is required. Python 3.9 in the old `.venv` is accepted:
+the script selects a newer interpreter, or installs `python3.11` and
+`python3.11-pip` on Amazon Linux 2023. It creates `.venv-workspace` from that
+interpreter without replacing `.venv` or the system Python. An incompatible
+stopped workspace environment is moved to the deployment backup before
+recreation. See [AWS's Python guide](https://docs.aws.amazon.com/linux/al2023/ug/python.html).
 Package names follow [AWS's Node guide](https://docs.aws.amazon.com/linux/al2023/ug/nodejs.html)
 and its [AL2023 package list](https://docs.aws.amazon.com/linux/al2023/release-notes/vercmp-AL2-AL2023.12.html).
 

@@ -1,5 +1,6 @@
 {
   "private": true,
+  "engines": { "node": "22.x" },
   "scripts": {
     "build": "node build.mjs"
   }
