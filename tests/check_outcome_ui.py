@@ -231,7 +231,7 @@ def main():
                                      "market": "#14881", "name": "Spurs", "volume_usd_1m": 500,
                                      "events_5m": 15, "spread_bps": .2, "queue_proxy_sec": 12}]}
                 # The scheduled scan must launch once using the frozen settings.
-                expect(page.locator("#outcome-auto-status")).to_contain_text("Top $/min", timeout=15000)
+                expect(page.locator("#outcome-auto-status")).to_contain_text("Shortest queue", timeout=15000)
                 expect(page.locator("#outcome-auto-candidates")).to_contain_text("500")
                 if page.locator("#outcome-selection-mode").input_value() == "auto":
                     image_dir = FRONTEND.parent / "output" / "playwright"
@@ -243,6 +243,7 @@ def main():
                 assert starts[-1]["selection_mode"] == "auto" and starts[-1]["auto_max_spread_bps"] == 5
                 assert starts[-1]["exec_mode"] == "maker" and starts[-1]["outcome_side"] == "no"
                 assert starts[-1]["two_sided"] is True and starts[-1]["auto_rotate"] is True
+                assert starts[-1]["auto_rotation_after_sec"] == 180
                 expect(first).to_contain_text("Bid + Ask")
                 page.locator("#outcome-selection-mode").select_option("manual")
                 page.locator("#outcome-side-yes").check()

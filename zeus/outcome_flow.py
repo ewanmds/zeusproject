@@ -346,14 +346,17 @@ class OutcomeFlowScanner:
                 candidates.append(item)
             except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
                 continue
-        candidates.sort(key=lambda r: (-r["volume_usd_1m"], -r["score"], r["market"]))
+        # Fills first: the shortest estimated touch queue wins. The balanced-flow
+        # score breaks ties so a dead or one-way book never leads on a stale quote.
+        candidates.sort(key=lambda r: (r["queue_proxy_sec"], -r["score"],
+                                       -r["volume_usd_1m"], r["market"]))
         with self.lock:
             if not self.connected or self.generation != generation or time.time()-self.catalog_at >= 120:
                 return {**status, "connected": False}
             candidates = [r for r in candidates if int(r["market"][1:])//10 in self.rows]
         candidates = [r for r in candidates if r["last_trade_age_sec"]+time.time()-now <= 20]
         return {**status, "ready": bool(candidates), "warming_up": False, "candidates": candidates,
-                "updated_at": time.time(), "ranking": "volume_usd_1m",
+                "updated_at": time.time(), "ranking": "queue_proxy_sec",
                 "flow_candidates": len(shortlist), "books_checked": len(books)}
 
     def close(self):

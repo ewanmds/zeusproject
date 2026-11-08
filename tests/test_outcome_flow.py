@@ -91,15 +91,25 @@ class OutcomeFlowTests(unittest.TestCase):
         self.assertEqual(snap["candidates"][0]["market"], "#101")
         self.assertFalse(scanner.snapshot("yes", 10, 10)["ready"])
 
-    def test_dollar_per_minute_is_primary_rank_even_with_a_larger_queue(self):
+    def test_shorter_queue_ranks_ahead_of_a_higher_volume_market(self):
         scanner = self.scanner()
         scanner.history["#201"].clear()
         scanner.ingest(tape(time.time(), "#201", size=300))
         scanner._book = lambda c: self.book(c, 100 if c == "#101" else 10000)
         snap = scanner.snapshot("no", 10, 10)
-        self.assertEqual(snap["ranking"], "volume_usd_1m")
-        self.assertEqual(snap["candidates"][0]["market"], "#201")
-        self.assertGreater(snap["candidates"][0]["volume_usd_1m"], snap["candidates"][1]["volume_usd_1m"])
+        self.assertEqual(snap["ranking"], "queue_proxy_sec")
+        # Fills first: a deep queue loses even when its public $/min is higher.
+        self.assertEqual(snap["candidates"][0]["market"], "#101")
+        self.assertGreater(snap["candidates"][1]["volume_usd_1m"],
+                           snap["candidates"][0]["volume_usd_1m"])
+        self.assertGreater(snap["candidates"][1]["queue_proxy_sec"],
+                           snap["candidates"][0]["queue_proxy_sec"])
+
+    def test_auto_defaults_use_documented_window_and_shorter_cooldown(self):
+        from zeus.server import WorldcupStartRequest
+        request = WorldcupStartRequest(selection_mode="auto", exec_mode="maker")
+        self.assertEqual(request.auto_rotation_after_sec, 180)
+        self.assertEqual(request.auto_market_cooldown_sec, 300)
 
     def test_stale_disconnected_warming_wide_and_thin_fail_closed(self):
         for kind in ("disconnected", "warming", "catalog", "book", "wide", "thin", "subscriptions"):

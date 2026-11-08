@@ -29,7 +29,7 @@ moins de 10 USD/min sur cette fenêtre rend le marché candidat à une rotation.
 Ce seuil est distinct du volume public du scanner.
 
 Quand le débit est insuffisant, le bot choisit le premier autre marché admissible
-du classement en dollars/minute. Le marché décevant est écarté dix minutes pour
+du classement. Le marché décevant est écarté cinq minutes pour
 éviter de revenir immédiatement sur la même file, même si son volume public
 reste élevé. En l'absence d'alternative admissible, il conserve le marché courant.
 
@@ -57,9 +57,11 @@ un redémarrage du serveur.
   minute, et deux secondes distinctes d'activité dans chaque sens.
 - Dernière transaction datant de 20 secondes au maximum ; intervalle médian
   entre passages de 30 secondes au maximum.
-- Classement principal par volume exécuté public sur une minute, en dollars.
-  Le flux équilibré, sa couverture, sa fraîcheur, le spread et la file servent
-  de filtres ou de départage. Jusqu'à 24 carnets candidats sont vérifiés par
+- Classement par temps de file estimé croissant : plus le meilleur niveau se
+  vide vite, plus le marché remplit tôt. Le score (flux équilibré, couverture,
+  fraîcheur) départage les files proches. Un marché très actif mais dont le
+  meilleur niveau est profond passe donc derrière un marché un peu plus calme
+  qui remplit beaucoup plus vite. Jusqu'à 24 carnets candidats sont vérifiés par
   lecture ; le résultat indique combien ont été examinés.
 - Carnet récent de cinq secondes au maximum, profondeur au meilleur prix de
   chaque côté au moins égale à la taille d'ordre ; spread maximal 10 bps par défaut.

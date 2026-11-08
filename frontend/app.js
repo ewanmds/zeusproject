@@ -356,14 +356,14 @@
                 const coin = document.createElement("small");
                 coin.textContent = candidate.market;
                 const metrics = document.createElement("span");
-                metrics.textContent = `${formatUSD(candidate.volume_usd_1m)}/min · ${candidate.spread_bps.toFixed(2)} bps`;
+                metrics.textContent = `${formatUSD(candidate.volume_usd_1m)}/min · queue ${Math.round(candidate.queue_proxy_sec)}s · ${candidate.spread_bps.toFixed(2)} bps`;
                 item.title = `${candidate.events_5m} trade events · estimated queue ${Math.round(candidate.queue_proxy_sec)}s`;
                 item.append(name, coin, metrics);
                 return item;
             }));
             setText("outcome-auto-status", !snapshot.connected ? "Connecting…"
                 : snapshot.warming_up ? `Observing · ${Math.floor(snapshot.observed_sec)} / 60s · ${snapshot.markets_observed}${snapshot.markets_total ? ` / ${snapshot.markets_total}` : ""} markets`
-                : candidates.length ? "Top $/min · updated live"
+                : candidates.length ? "Shortest queue · updated live"
                 : "Waiting for eligible flow…");
         } catch (error) {
             if (epoch === outcomeAutoEpoch) {
@@ -1620,7 +1620,7 @@
 
         if (auto && auto_max_spread_bps > 100) { setFormError("outcome", "Auto spread must be between 0.01 and 100 bps."); return; }
         const payload = { selection_mode, auto_max_spread_bps, two_sided: exec_mode === "maker", auto_rotate: auto,
-            ...(auto ? { auto_rotation_after_sec: 60 } : {}),
+            ...(auto ? { auto_rotation_after_sec: 180 } : {}),
             order_size_usd, ...(exec_mode === "taker" ? { max_spread_pct } : { maker_spread_pct }), max_position_usd, market, exec_mode, outcome_side };
         if (auto) {
             outcomeAutoPending = Object.freeze(payload);
