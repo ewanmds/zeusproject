@@ -1,0 +1,314 @@
+{
+  "model": "fake REST user_state and exchange ACK each sleep delay_ms; no matching or live network; fees/PnL unavailable",
+  "delay_ms": 1,
+  "source_sha256": "c02e3f915176f905f26ef968f1707415d4561e79ca3a19cde76c01fa52c6069a",
+  "scenarios": {
+    "unchanged": {
+      "cycles": 1000,
+      "cycle_ms": {
+        "p50": 0.0476,
+        "p95": 0.1021,
+        "p99": 0.1687
+      },
+      "decision_ms": {
+        "p50": 0.0254,
+        "p95": 0.051,
+        "p99": 0.0851
+      },
+      "event_to_decision_ms": {
+        "p50": 0.0265,
+        "p95": 0.0538,
+        "p99": 0.0913
+      },
+      "book_age_at_submit_ms": null,
+      "api_lock_wait_ms": null,
+      "api_lock_hold_ms": null,
+      "event_to_submit_ms": null,
+      "event_to_ack_ms": null,
+      "preflight_read_ms": null,
+      "account_read_requests": 0,
+      "placements": 0,
+      "modifications": 0,
+      "cancellations": 0,
+      "exchange_requests": 0,
+      "stale_price_submissions": 0,
+      "fills": null,
+      "maker_ratio": null,
+      "fees": null,
+      "net_pnl": null,
+      "cost_per_million": null,
+      "runtime_metrics": {
+        "elapsed_seconds": 0.06655909999994947,
+        "unit": "ms",
+        "window_capacity": 1024,
+        "timings": {
+          "decision": {
+            "samples": 1000,
+            "p50": 0.0271,
+            "p95": 0.055,
+            "p99": 0.0941
+          },
+          "event_queue_delay": {
+            "samples": 1000,
+            "p50": 0.0012,
+            "p95": 0.0022,
+            "p99": 0.0028
+          },
+          "event_to_decision": {
+            "samples": 1000,
+            "p50": 0.0368,
+            "p95": 0.078,
+            "p99": 0.1251
+          }
+        },
+        "counts": {
+          "decisions": 1000,
+          "coalesced_book_events": 0
+        }
+      },
+      "live_signing_lock_wait_ms": null
+    },
+    "ro_reprice": {
+      "cycles": 1000,
+      "cycle_ms": {
+        "p50": 3.2498,
+        "p95": 4.1168,
+        "p99": 4.7892
+      },
+      "decision_ms": {
+        "p50": 0.0498,
+        "p95": 0.0784,
+        "p99": 0.1542
+      },
+      "event_to_decision_ms": {
+        "p50": 0.0525,
+        "p95": 0.0829,
+        "p99": 0.1563
+      },
+      "book_age_at_submit_ms": {
+        "p50": 1.7964,
+        "p95": 2.3908,
+        "p99": 2.9738
+      },
+      "api_lock_wait_ms": {
+        "p50": 0.0008,
+        "p95": 0.0015,
+        "p99": 0.0021
+      },
+      "api_lock_hold_ms": {
+        "p50": 3.0288,
+        "p95": 3.8189,
+        "p99": 4.4974
+      },
+      "event_to_submit_ms": {
+        "p50": 1.7942,
+        "p95": 2.3885,
+        "p99": 2.971
+      },
+      "event_to_ack_ms": {
+        "p50": 3.0855,
+        "p95": 3.885,
+        "p99": 4.5913
+      },
+      "preflight_read_ms": {
+        "p50": 1.1573,
+        "p95": 1.5875,
+        "p99": 1.8769
+      },
+      "account_read_requests": 2000,
+      "placements": 0,
+      "modifications": 1000,
+      "cancellations": 0,
+      "exchange_requests": 1000,
+      "stale_price_submissions": 0,
+      "fills": null,
+      "maker_ratio": null,
+      "fees": null,
+      "net_pnl": null,
+      "cost_per_million": null,
+      "runtime_metrics": {
+        "elapsed_seconds": 3.3754754000001412,
+        "unit": "ms",
+        "window_capacity": 1024,
+        "timings": {
+          "decision": {
+            "samples": 1000,
+            "p50": 0.0539,
+            "p95": 0.085,
+            "p99": 0.16
+          },
+          "event_queue_delay": {
+            "samples": 1000,
+            "p50": 0.0021,
+            "p95": 0.0032,
+            "p99": 0.0038
+          },
+          "event_to_decision": {
+            "samples": 1000,
+            "p50": 0.071,
+            "p95": 0.113,
+            "p99": 0.2027
+          },
+          "api_lock_wait": {
+            "samples": 1000,
+            "p50": 0.0035,
+            "p95": 0.0064,
+            "p99": 0.012
+          },
+          "position_preflight": {
+            "samples": 1000,
+            "p50": 1.3752,
+            "p95": 1.859,
+            "p99": 2.2144
+          },
+          "book_age_at_submit": {
+            "samples": 1000,
+            "p50": 1.6835,
+            "p95": 2.2683,
+            "p99": 2.6807
+          },
+          "event_to_submit": {
+            "samples": 1000,
+            "p50": 1.6835,
+            "p95": 2.2683,
+            "p99": 2.6807
+          },
+          "api_lock_hold": {
+            "samples": 1000,
+            "p50": 3.0098,
+            "p95": 3.7901,
+            "p99": 4.4731
+          }
+        },
+        "counts": {
+          "decisions": 1000,
+          "coalesced_book_events": 0,
+          "submitted_batches": 1000,
+          "accepted_quote_results": 1000
+        }
+      },
+      "live_signing_lock_wait_ms": null
+    },
+    "moving_preflight": {
+      "cycles": 1000,
+      "cycle_ms": {
+        "p50": 3.4058,
+        "p95": 4.1244,
+        "p99": 4.5694
+      },
+      "decision_ms": {
+        "p50": 0.0594,
+        "p95": 0.0782,
+        "p99": 0.1001
+      },
+      "event_to_decision_ms": {
+        "p50": 0.0625,
+        "p95": 0.0827,
+        "p99": 0.1071
+      },
+      "book_age_at_submit_ms": {
+        "p50": 0.4388,
+        "p95": 0.6388,
+        "p99": 0.8826
+      },
+      "api_lock_wait_ms": {
+        "p50": 0.001,
+        "p95": 0.0015,
+        "p99": 0.0017
+      },
+      "api_lock_hold_ms": {
+        "p50": 3.1779,
+        "p95": 3.8378,
+        "p99": 4.3069
+      },
+      "event_to_submit_ms": {
+        "p50": 1.9373,
+        "p95": 2.3747,
+        "p99": 2.7952
+      },
+      "event_to_ack_ms": {
+        "p50": 3.2531,
+        "p95": 3.8911,
+        "p99": 4.3185
+      },
+      "preflight_read_ms": {
+        "p50": 1.229,
+        "p95": 1.5785,
+        "p99": 1.7099
+      },
+      "account_read_requests": 2000,
+      "placements": 0,
+      "modifications": 1000,
+      "cancellations": 0,
+      "exchange_requests": 1000,
+      "stale_price_submissions": 0,
+      "fills": null,
+      "maker_ratio": null,
+      "fees": null,
+      "net_pnl": null,
+      "cost_per_million": null,
+      "runtime_metrics": {
+        "elapsed_seconds": 3.55451579999999,
+        "unit": "ms",
+        "window_capacity": 1024,
+        "timings": {
+          "decision": {
+            "samples": 1000,
+            "p50": 0.064,
+            "p95": 0.0847,
+            "p99": 0.1085
+          },
+          "event_queue_delay": {
+            "samples": 1000,
+            "p50": 0.0023,
+            "p95": 0.003,
+            "p99": 0.0035
+          },
+          "event_to_decision": {
+            "samples": 1000,
+            "p50": 0.0828,
+            "p95": 0.1075,
+            "p99": 0.1528
+          },
+          "api_lock_wait": {
+            "samples": 1000,
+            "p50": 0.004,
+            "p95": 0.0056,
+            "p99": 0.0111
+          },
+          "position_preflight": {
+            "samples": 1000,
+            "p50": 1.4617,
+            "p95": 1.8311,
+            "p99": 1.9677
+          },
+          "book_age_at_submit": {
+            "samples": 1000,
+            "p50": 0.3234,
+            "p95": 0.4968,
+            "p99": 0.7699
+          },
+          "event_to_submit": {
+            "samples": 1000,
+            "p50": 0.3234,
+            "p95": 0.4968,
+            "p99": 0.7699
+          },
+          "api_lock_hold": {
+            "samples": 1000,
+            "p50": 3.1583,
+            "p95": 3.8027,
+            "p99": 4.2787
+          }
+        },
+        "counts": {
+          "decisions": 1000,
+          "coalesced_book_events": 999,
+          "submitted_batches": 1000,
+          "accepted_quote_results": 1000
+        }
+      },
+      "live_signing_lock_wait_ms": null
+    }
+  }
+}

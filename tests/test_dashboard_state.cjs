@@ -56,3 +56,8 @@ const { errorText } = require('../frontend/state.js');
 assert.equal(errorText("HTTPSConnectionPool(host='api.hyperliquid.xyz'): Read timed out"),
     'Hyperliquid unavailable. Verify stop before restarting.');
 assert.equal(errorText('Residual position; stop unconfirmed'), 'Residual position; stop unconfirmed');
+const { quoteText } = require('../frontend/state.js');
+assert.equal(quoteText({bid_price: .34833, bid_size: 72, ask_price: .34834, ask_size: 72}),
+    'BID 72 × 0.34833 · ASK 72 × 0.34834');
+assert.equal(quoteText({bid_price: .34833, bid_size: 72}), 'BID 72 × 0.34833 · ASK —');
+assert.equal(quoteText(null), '');

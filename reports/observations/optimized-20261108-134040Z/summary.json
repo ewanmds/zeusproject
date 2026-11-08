@@ -1,0 +1,109 @@
+{
+  "root_session_id": "d91d4238b5d14717be35a1939a64c3dd",
+  "started_at": 1794145240.0201051,
+  "ended_at": 1794145426.6495757,
+  "observed_sec": 186.62947058677673,
+  "samples": 63,
+  "workers": [
+    {
+      "session_id": "d91d4238b5d14717be35a1939a64c3dd",
+      "worker_session_id": null,
+      "market": "#270391",
+      "market_name": "NBA Regular Season: Atlanta Hawks v Los Angeles Lakers",
+      "running": false,
+      "phase": "stopped",
+      "duration": "00:03:53",
+      "duration_sec": 233.59766697883606,
+      "volume_usd": 50.65562,
+      "net_pnl": -0.013973850000000001,
+      "fees": 0.01945385,
+      "fills": 3,
+      "orders_sent": 8,
+      "cancels_sent": 6,
+      "execution_state": "Waiting for book",
+      "blocked_reason": "",
+      "quotes": [
+        {
+          "market": "#270391",
+          "bid_price": null,
+          "bid_size": 0,
+          "bid_age_sec": null,
+          "ask_price": null,
+          "ask_size": 0,
+          "ask_age_sec": null,
+          "book_age_ms": 2295.8266735076904,
+          "book_source": "ws"
+        }
+      ],
+      "account_sync_ms": 511.447799999587,
+      "account_age_ms": 5270.063161849976,
+      "last_fill_at": 1794145396.99,
+      "position_usd": 0.0,
+      "cleanup_confirmed": true,
+      "error": "",
+      "auto_rotation_state": "observing",
+      "auto_rotation_reason": "",
+      "auto_rotations": 1,
+      "auto_fill_usd_per_min": 13.067806043346998,
+      "auto_evaluate_in_sec": 0
+    },
+    {
+      "session_id": "eac1a56f621044a7bfd22eb394876016",
+      "worker_session_id": null,
+      "market": "#270411",
+      "market_name": "NBA Regular Season: Charlotte Hornets v Cleveland Cavaliers",
+      "running": true,
+      "phase": "failed",
+      "duration": "00:00:16",
+      "duration_sec": 16.405267477035522,
+      "volume_usd": 0.0,
+      "net_pnl": 0.0,
+      "fees": 0.0,
+      "fills": 0,
+      "orders_sent": 0,
+      "cancels_sent": 0,
+      "execution_state": "Waiting for book",
+      "blocked_reason": "",
+      "quotes": [
+        {
+          "market": "#270411",
+          "bid_price": null,
+          "bid_size": 0,
+          "bid_age_sec": null,
+          "ask_price": null,
+          "ask_size": 0,
+          "ask_age_sec": null,
+          "book_age_ms": 2592.398166656494,
+          "book_source": "l2"
+        }
+      ],
+      "account_sync_ms": 516.1521999998513,
+      "account_age_ms": 3072.7014541625977,
+      "last_fill_at": 0.0,
+      "position_usd": 0.0,
+      "cleanup_confirmed": false,
+      "error": "Snapshot publication failed: [WinError 5] Acc\u00e8s refus\u00e9: 'C:\\\\Users\\\\ewanm\\\\Desktop\\\\zeusproject-main\\\\.zeus-state\\\\runtime\\\\eac1a56f621044a7bfd22eb394876016\\\\stats.json.a82951e02a95454fb55d988049b17111.tmp' -> 'C:\\\\Users\\\\ewanm\\\\Desktop\\\\ze",
+      "auto_rotation_state": "observing",
+      "auto_rotation_reason": "",
+      "auto_rotations": 1,
+      "auto_fill_usd_per_min": 13.067806043346998,
+      "auto_evaluate_in_sec": 0
+    }
+  ],
+  "order_events": {},
+  "fills": [
+    {
+      "coin": "#270391",
+      "side": "A",
+      "oid": 598440571579,
+      "tid": 495663433266486,
+      "time": 1794145227839,
+      "px": "0.4967",
+      "sz": "28.0",
+      "fee": "0.01068103",
+      "feeToken": "USDC",
+      "closedPnl": "0.00364",
+      "crossed": false
+    }
+  ]
+}

@@ -212,7 +212,7 @@ class SafetyLatch:
         self.path = Path(path) if path else None
         self.metadata = {}
         if self.path and self.path.exists():
-            self.metadata = json.loads(self.path.read_text(encoding="utf-8"))
+            self.metadata = read_json(self.path)
         self.session_id = self.metadata.get("session_id") or uuid.uuid4().hex
         self.owned.update(self.metadata.get("owned_oids", []))
         self.cloids.update(self.metadata.get("cloids", []))

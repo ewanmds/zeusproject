@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+import threading
 from unittest.mock import Mock, patch
 
 from zeus.outcome_rotation import OutcomeRotation
@@ -41,6 +42,51 @@ class RotationTests(unittest.TestCase):
         self.owner.start.assert_not_called()
         self.rotation.tick(1005)
         self.owner.start.assert_not_called()  # Even a flat snapshot is insufficient while alive.
+
+    def test_catalog_refresh_does_not_hold_lifecycle_lock(self):
+        entered, release = threading.Event(), threading.Event()
+        def blocked_refresh():
+            entered.set()
+            release.wait(2)
+        self.rotation.refresh_catalog = Mock(side_effect=blocked_refresh)
+        try:
+            self.rotation.request_catalog_refresh()
+            self.assertTrue(entered.wait(1))
+            self.rotation.request_catalog_refresh()
+            self.assertEqual(self.rotation.refresh_catalog.call_count, 1)
+            self.assertEqual(self.rotation.cancel('old'), {'old'})
+        finally:
+            release.set()
+
+    def test_stop_remains_available_during_replacement_metadata_resolution(self):
+        self.group['state'] = 'draining'
+        self.current.update(running=False, cleanup_confirmed=True)
+        finished = threading.Event()
+        def launch(*args, **kwargs):
+            def stop():
+                self.rotation.cancel('old')
+                finished.set()
+            thread = threading.Thread(target=stop)
+            thread.start()
+            self.assertTrue(finished.wait(1), 'Controller lock blocked Stop during metadata resolution')
+            thread.join(1)
+            self.rotation.assert_admission('group')
+        self.owner.start.side_effect = launch
+        self.rotation.tick(1000)
+        self.assertTrue(self.group['cancelled'])
+
+    def test_early_zero_fill_rotation_and_progressive_cooldown(self):
+        self.group.update(started=930, samples=deque([(930, 0)]), current_selection={'queue_proxy_sec': 40})
+        self.rotation.tick(1000)
+        self.assertEqual(self.group['state'], 'draining')
+        self.assertEqual(self.group['market_results']['#101']['zero_fill_attempts'], 1)
+        self.assertGreaterEqual(self.group['cooldown']['#101']-1000, 600)
+
+    def test_recent_real_fill_preserves_current_queue(self):
+        self.current.update(volume_usd=1, fills=1, last_fill_at=995)
+        self.rotation.tick(1000)
+        self.scan.assert_not_called()
+        self.assertEqual(self.group['state'], 'observing')
 
     def test_one_minute_underfilling_window_drains_without_waiting_three_minutes(self):
         self.config['auto_rotation_after_sec'] = 60

@@ -52,6 +52,9 @@ def main():
                                    "volume_usd": 100, "fees": 0.1, "net_pnl": -0.1, "fills": 2,
                                    "duration": "00:01:00", "position_usd": 0, "position_known": True,
                                    "cost_per_1m": 1000, "accounting_complete": True}
+                            if payload['exec_mode'] == 'maker':
+                                bot.update(execution_state='Bid working', account_sync_ms=45,
+                                    quotes=[{'bid_price': .34833, 'bid_size': 72, 'ask_price': None, 'ask_size': 0}])
                             bots[:] = [b for b in bots if b["market"] != bot["market"]] + [bot]
                             result = {"status": "ok", "session_id": bot["session_id"], "market": bot["market"], "pid": bot["pid"]}
                         elif path == "/api/outcomes/stop":
@@ -127,6 +130,8 @@ def main():
                 fail_start[0] = False
                 start.click()
                 first = page.locator("#outcome-bots-list .bot-card").filter(has_text="Spurs")
+                expect(first.locator('[data-f="quotes"]')).to_contain_text('BID 72 × 0.34833')
+                expect(first.locator('[data-f="state"]')).to_have_text('Bid working')
                 expect(first).to_contain_text("Limit / Maker")
                 expect(first).to_contain_text("0.007%")
                 expect(first.locator('[data-f="title"]')).to_have_text("Spurs · No")

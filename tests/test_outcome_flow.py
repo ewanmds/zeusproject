@@ -91,6 +91,44 @@ class OutcomeFlowTests(unittest.TestCase):
         self.assertEqual(snap["candidates"][0]["market"], "#101")
         self.assertFalse(scanner.snapshot("yes", 10, 10)["ready"])
 
+    def test_concurrent_previews_share_scan_and_cannot_mutate_cached_result(self):
+        from concurrent.futures import ThreadPoolExecutor
+        scanner = self.scanner()
+        scanner._book = Mock(side_effect=lambda c: self.book(c))
+        try:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                snapshots = list(pool.map(lambda _: scanner.snapshot('no', 10, 10), range(8)))
+            self.assertEqual(scanner._book.call_count, 2)
+            snapshots[0]['candidates'].clear()
+            self.assertEqual(len(scanner.snapshot('no', 10, 10)['candidates']), 2)
+            scanner.connected = False
+            self.assertFalse(scanner.snapshot('no', 10, 10)['ready'])
+        finally:
+            scanner.close()
+
+    def test_reconnect_invalidates_snapshot_cache(self):
+        scanner = self.scanner()
+        scanner._book = Mock(side_effect=lambda c: self.book(c))
+        try:
+            scanner.snapshot('no', 10, 10)
+            scanner.generation += 1
+            scanner.snapshot('no', 10, 10)
+            self.assertEqual(scanner._book.call_count, 4)
+        finally:
+            scanner.close()
+
+    def test_snapshot_cache_never_extends_book_freshness(self):
+        scanner = self.scanner()
+        now = time.time()
+        scanner._book = lambda c: {'coin': c, 'time': (now-4.9)*1000,
+            'levels': [[{'px': '.34833', 'sz': '100'}], [{'px': '.34834', 'sz': '100'}]]}
+        try:
+            self.assertTrue(scanner.snapshot('no', 10, 10)['ready'])
+            with patch('zeus.outcome_flow.time.time', return_value=now+.2):
+                self.assertFalse(scanner.snapshot('no', 10, 10)['ready'])
+        finally:
+            scanner.close()
+
     def test_shorter_queue_ranks_ahead_of_a_higher_volume_market(self):
         scanner = self.scanner()
         scanner.history["#201"].clear()

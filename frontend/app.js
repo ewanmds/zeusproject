@@ -38,7 +38,19 @@
     let gridTokens = [];
     let selectedGridToken = normalizeToken({ key: "SP500", symbol: "xyz:SP500" });
     const dashboardState = window.ZeusState.createStore();
+    // Older tabs may have cached state.js independently of app.js. Optional
+    // display helpers must never stop financial counters from rendering.
+    const quoteNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 });
+    const quoteText = window.ZeusState.quoteText || ((quote) => {
+        if (!quote) return "";
+        const side = (name) => Number.isFinite(quote[`${name}_price`]) && quote[`${name}_price`] > 0 &&
+            Number.isFinite(quote[`${name}_size`]) && quote[`${name}_size`] > 0
+            ? `${quoteNumber.format(quote[`${name}_size`])} × ${quoteNumber.format(quote[`${name}_price`])}` : "—";
+        return `BID ${side("bid")} · ASK ${side("ask")}`;
+    });
+    const displayError = window.ZeusState.errorText || ((value) => String(value || ""));
     const pendingRenders = new Map();
+    const renderFailures = new Set();
     let renderFrame = 0;
 
     function receiveDashboard(kind, data) {
@@ -63,9 +75,18 @@
             const renders = Array.from(pendingRenders);
             pendingRenders.clear();
             for (const [name, state] of renders) {
-                if (name === "outcome") renderOutcomeDashboard(state);
-                else renderGridDashboard(state);
+                try {
+                    if (name === "outcome") renderOutcomeDashboard(state);
+                    else renderGridDashboard(state);
+                    renderFailures.delete(name);
+                } catch (error) {
+                    // One card/source must not discard the other source's frame.
+                    console.error(`Dashboard render failed (${name})`, error);
+                    renderFailures.add(name);
+                    setFormError(name, "Display unavailable. Reconnecting…");
+                }
             }
+            updateFreshness();
         });
     }
 
@@ -335,6 +356,29 @@
     let outcomeAutoPending = null;
     const outcomeIsAuto = () => $("#outcome-selection-mode")?.value === "auto";
 
+    function renderOutcomeCandidates(candidates) {
+        const list = $("#outcome-auto-candidates");
+        const existing = new Map(Array.from(list.children, (item) => [item.dataset.market, item]));
+        const visible = candidates.slice(0, 3);
+        const keep = new Set(visible.map((item) => item.market));
+        for (const [index, candidate] of visible.entries()) {
+            let item = existing.get(candidate.market);
+            if (!item) {
+                item = document.createElement("li");
+                item.dataset.market = candidate.market;
+                item.innerHTML = "<strong></strong><small></small><span></span>";
+            }
+            const values = [candidate.name, candidate.market,
+                `${formatUSD(candidate.volume_usd_1m)}/min · queue ${Math.round(candidate.queue_proxy_sec)}s · ${candidate.spread_bps.toFixed(2)} bps`];
+            Array.from(item.children).forEach((child, i) => {
+                if (child.textContent !== values[i]) child.textContent = values[i];
+            });
+            item.title = `${candidate.events_5m} trade events · estimated queue ${Math.round(candidate.queue_proxy_sec)}s`;
+            if (list.children[index] !== item) list.insertBefore(item, list.children[index] || null);
+        }
+        for (const [market, item] of existing) if (!keep.has(market)) item.remove();
+    }
+
     async function refreshOutcomeAuto() {
         if (!outcomeIsAuto() || outcomeAutoBusy || document.hidden) return;
         outcomeAutoBusy = true;
@@ -348,20 +392,9 @@
             if (!outcomeIsAuto() || epoch !== outcomeAutoEpoch || side !== selectedOutcomeSide()) return;
             outcomeAutoSnapshot = snapshot;
             const candidates = snapshot.candidates || [];
-            const list = $("#outcome-auto-candidates");
-            list.replaceChildren(...candidates.slice(0, 3).map((candidate) => {
-                const item = document.createElement("li");
-                const name = document.createElement("strong");
-                name.textContent = candidate.name;
-                const coin = document.createElement("small");
-                coin.textContent = candidate.market;
-                const metrics = document.createElement("span");
-                metrics.textContent = `${formatUSD(candidate.volume_usd_1m)}/min · queue ${Math.round(candidate.queue_proxy_sec)}s · ${candidate.spread_bps.toFixed(2)} bps`;
-                item.title = `${candidate.events_5m} trade events · estimated queue ${Math.round(candidate.queue_proxy_sec)}s`;
-                item.append(name, coin, metrics);
-                return item;
-            }));
+            renderOutcomeCandidates(candidates);
             setText("outcome-auto-status", !snapshot.connected ? "Connecting…"
+                : snapshot.catalog_stale ? "Refreshing markets…"
                 : snapshot.warming_up ? `Observing · ${Math.floor(snapshot.observed_sec)} / 60s · ${snapshot.markets_observed}${snapshot.markets_total ? ` / ${snapshot.markets_total}` : ""} markets`
                 : candidates.length ? "Shortest queue · updated live"
                 : "Waiting for eligible flow…");
@@ -479,13 +512,14 @@
         const kind = $(".nav-tab.active")?.dataset.page === "outcome" ? "outcome" : "grid";
         const age = dashboardState.age(kind);
         const view = dashboardState.view(kind);
-        const fresh = age < 6000 && !view?.stale;
+        const displayFailed = renderFailures.has(kind);
+        const fresh = age < 6000 && !view?.stale && !displayFailed;
         const reachable = wsConnected || Math.min(dashboardState.age("grid"), dashboardState.age("outcome")) < 6000;
         const shell = $("#connection-status");
         shell?.classList.toggle("connected", reachable);
         const label = shell?.querySelector(".status-text");
         if (label) label.textContent = wsConnected ? "Connected" : reachable ? "Polling" : "Disconnected";
-        const text = !Number.isFinite(age) ? "Waiting for data" : fresh ? "Updated just now" : `Delayed · ${Math.round(age/1000)}s`;
+        const text = displayFailed ? "Display delayed" : !Number.isFinite(age) ? "Waiting for data" : fresh ? "Updated just now" : `Delayed · ${Math.round(age/1000)}s`;
         if (el.textContent !== text) el.textContent = text;
         el.classList.toggle("offline", !reachable);
         el.classList.toggle("stale", !fresh && Number.isFinite(age));
@@ -502,7 +536,7 @@
 
     function updateDashboardClocks() {
         const outcome = dashboardState.view("outcome");
-        if (outcome) {
+        if (outcome && !renderFailures.has("outcome")) {
             const text = dashboardState.elapsed("outcome", outcome);
             setText("outcome-duration", text);
             setText("outcome-run-duration", text);
@@ -514,7 +548,7 @@
             }
         }
         const grid = dashboardState.view("grid");
-        if (grid) setText("grid-run-duration", dashboardState.elapsed("grid", grid));
+        if (grid && !renderFailures.has("grid")) setText("grid-run-duration", dashboardState.elapsed("grid", grid));
     }
 
     function clearSkeleton(...ids) {
@@ -1203,7 +1237,8 @@
             fetchJson(`${API_BASE}/api/grid/status`).then(updateGridDashboard),
             fetchJson(`${API_BASE}/api/outcomes/status`).then(updateOutcomeDashboard),
         ]).then((results) => {
-            if (!silent && results.every((result) => result.status === "rejected")) {
+            if (!silent && results.every((result) => result.status === "rejected") &&
+                    Math.min(dashboardState.age("grid"), dashboardState.age("outcome")) >= 6000) {
                 showToast("error", "Status unavailable", results[0].reason.message);
             }
         }).finally(() => { statusRefreshPromise = null; });
@@ -1448,9 +1483,16 @@
                 container.append(card);
                 cards.set(bot.session_id, card);
             }
+            if (!card.querySelector('[data-f="quotes"]')) {
+                const quotes = document.createElement("p");
+                quotes.className = "bot-card-quotes";
+                quotes.dataset.f = "quotes";
+                quotes.hidden = true;
+                card.querySelector('[data-f="settings"]').after(quotes);
+            }
             const set = (key, value) => {
                 const element = card.querySelector(`[data-f="${key}"]`);
-                if (element.textContent !== String(value)) element.textContent = value;
+                if (element && element.textContent !== String(value)) element.textContent = value;
             };
             const config = bot.config || {};
             const name = bot.market_name || marketNameById.get(Math.floor(Number(String(bot.market || "").slice(1)) / 10)) || bot.market;
@@ -1459,12 +1501,18 @@
             set("duration", bot.duration || "00:00:00");
             const autoMode = config.selection_mode === "auto";
             set("settings", `${autoMode ? "Auto flow · " : ""}${config.exec_mode === "maker" ? "Limit / Maker" : "Market / Taker"}${config.two_sided ? " · Bid + Ask" : ""} · order ${formatUSD(config.order_size_usd)} · cap ${formatUSD(config.max_position_usd)} · ${autoMode ? `best bid / ask · rotate on low fills${bot.auto_rotations ? ` · ${bot.auto_rotations} switches` : ""}` : config.exec_mode === "maker" ? `target spread ${config.maker_spread_pct}%` : `max spread ${config.max_spread_pct ?? config.max_spread_bps / 100}%`}`);
-            set("state", bot.stale || outcomeState.stale ? "Stale data" : ({ connecting: "Starting", running: "Active", rotating: "Switching market", blocked: "Verification required", recovering: "Verifying · auto-recovery", stopping: "Stopping", stopped: "Stop confirmed", failed: bot.cleanup_confirmed ? "Error · flat" : "Stop unconfirmed" }[bot.phase] || bot.phase));
+            set("state", bot.stale || outcomeState.stale ? "Stale data" : ({ connecting: "Starting", running: bot.execution_state || "Active", rotating: "Switching market", blocked: "Verification required", recovering: "Verifying · auto-recovery", stopping: "Stopping", stopped: "Stop confirmed", failed: bot.cleanup_confirmed ? "Error · flat" : "Stop unconfirmed" }[bot.phase] || bot.phase));
+            const quote = !bot.stale && !outcomeState.stale && bot.running ? bot.quotes?.[0] : null;
+            const quoteLabel = card.querySelector('[data-f="quotes"]');
+            set("quotes", quoteText(quote));
+            quoteLabel.hidden = !quote;
+            card.querySelector('[data-f="state"]').title = Number.isFinite(bot.account_sync_ms)
+                ? `Account sync ${Math.round(bot.account_sync_ms)} ms${Number.isFinite(bot.orders_sent) ? ` · ${bot.orders_sent} orders · ${bot.cancels_sent} cancels` : ""}` : "";
             for (const key of ["volume_usd", "net_pnl", "fees", "cost_per_1m", "position_usd"]) set(key, bot.accounting_complete === false ? "—" : formatUSD(bot[key]));
             set("fills", bot.accounting_complete === false ? "—" : String(bot.fills || 0));
             const errors = [bot.error, bot.recovery_error, bot.cleanup_error].filter(Boolean);
-            set("error", [...new Set(errors.map(window.ZeusState.errorText)), bot.auto_rotation_reason,
-                !bot.error && !bot.recovery_error ? bot.last_action || bot.status : ""].filter(Boolean).join(" · "));
+            set("error", [...new Set(errors.map(displayError)), bot.auto_rotation_reason,
+                !bot.error && !bot.recovery_error ? bot.blocked_reason || (bot.execution_state ? "" : bot.last_action || bot.status) : ""].filter(Boolean).join(" · "));
             card.querySelector('[data-f="error"]').title = errors.join(" · ");
             card.classList.toggle("stopped", !bot.running);
             card.classList.toggle("failed", bot.phase === "failed");
@@ -1505,7 +1553,7 @@
             outcomeRunning = data.running;
             updateOutcomeButtons();
         }
-        const incident = [...new Set([data.error, data.recovery_error, data.cleanup_error].filter(Boolean).map(window.ZeusState.errorText)), data.stale ? "Live data delayed." : ""].filter(Boolean).join(" · ");
+        const incident = [...new Set([data.error, data.recovery_error, data.cleanup_error].filter(Boolean).map(displayError)), data.stale ? "Live data delayed." : ""].filter(Boolean).join(" · ");
         setFormError("outcome", incident);
         const banner = $("#outcome-run-banner");
         const stateLabel = data.stale ? "Stale data" : `${data.active_markets || 0} active Outcome bot(s)`;

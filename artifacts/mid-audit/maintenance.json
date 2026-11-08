@@ -1,0 +1,38 @@
+{
+  "model": "Each of the same three fake info reads sleeps delay_ms; no live exchange, order or fill.",
+  "delay_ms": 10,
+  "inline_control": {
+    "samples": 50,
+    "decision_cycle_ms": {
+      "p50": 31.7809,
+      "p95": 32.4744,
+      "p99": 33.0114
+    },
+    "all_reads_completed_ms": {
+      "p50": 31.7827,
+      "p95": 32.4756,
+      "p99": 33.0131
+    },
+    "read_counts": [
+      3
+    ],
+    "trading_requests": 0
+  },
+  "worker": {
+    "samples": 50,
+    "decision_cycle_ms": {
+      "p50": 0.1512,
+      "p95": 0.3869,
+      "p99": 0.4861
+    },
+    "all_reads_completed_ms": {
+      "p50": 31.7805,
+      "p95": 32.2792,
+      "p99": 32.3335
+    },
+    "read_counts": [
+      3
+    ],
+    "trading_requests": 0
+  }
+}

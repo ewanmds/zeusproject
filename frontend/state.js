@@ -105,5 +105,13 @@
         return /HTTPSConnectionPool|Read timed out|Hyperliquid unreachable|ConnectTimeout|ReadTimeout/.test(text)
             ? "Hyperliquid unavailable. Verify stop before restarting." : text;
     }
-    return { createStore, currency, clock, errorText };
+    const quoteFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 });
+    function quoteText(quote) {
+        if (!quote) return "";
+        const side = (name) => finite(quote[`${name}_price`]) && quote[`${name}_price`] > 0 &&
+            finite(quote[`${name}_size`]) && quote[`${name}_size`] > 0
+            ? `${quoteFormat.format(quote[`${name}_size`])} × ${quoteFormat.format(quote[`${name}_price`])}` : "—";
+        return `BID ${side("bid")} · ASK ${side("ask")}`;
+    }
+    return { createStore, currency, clock, errorText, quoteText };
 });

@@ -1,4 +1,5 @@
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, rm, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -17,6 +18,15 @@ for (const file of ["index.html", "index.css", "state.js", "app.js", "favicon.sv
 }
 // Match the Python server's canonical module URL, including older running servers.
 await cp(new URL("state.js", source), new URL("frontend/state.js", output));
+
+// A single content version keeps state helpers and the renderer in sync across
+// static deployments and browser caches. No API credentials enter this hash.
+const version = createHash("sha256")
+    .update(await readFile(new URL("state.js", source)))
+    .update(await readFile(new URL("app.js", source))).digest("hex").slice(0, 12);
+const html = await readFile(new URL("index.html", output), "utf8");
+await writeFile(new URL("index.html", output), html.replace(
+    /((?:state|app)\.js)\?v=[^"\s]+/g, `$1?v=${version}`), "utf8");
 
 // Static assets (HIP-3 market icons downloaded from Hyperliquid).
 await cp(new URL("assets", source), new URL("assets", output), { recursive: true });

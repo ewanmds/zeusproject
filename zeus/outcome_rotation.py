@@ -9,6 +9,7 @@ import threading
 import time
 
 from zeus.safety import atomic_json, safe_error
+from zeus.outcome_selection import no_fill_grace, candidate_rank
 
 
 class OutcomeRotation:
@@ -19,6 +20,8 @@ class OutcomeRotation:
         self.closed = threading.Event()
         self.thread = None
         self.catalog_refreshed = 0.0
+        self.catalog_thread = None
+        self.catalog_retry_at = 0.0
 
     def register(self, session, config, group_id=None):
         if config.get("selection_mode") != "auto" or not config.get("auto_rotate", True):
@@ -32,8 +35,10 @@ class OutcomeRotation:
                 group = self.groups[group_id] = {"id": group_id, "config": dict(config),
                     "members": set(), "cancelled": False, "rotations": 0, "cooldown": {},
                     "pnl_carry": 0.0, "accounted": set()}
-            group.update(current=session["session_id"], started=time.time(), state="observing",
-                         samples=deque(maxlen=2000), reason="", retry_at=0.0)
+            now = time.time()
+            group.update(current=session["session_id"], started=now, state="observing",
+                         samples=deque([(now, 0.0)], maxlen=2000), reason="", retry_at=0.0,
+                         current_selection=config.get("auto_selection", {}))
             group["members"].add(session["session_id"])
             if self.thread is None or not self.thread.is_alive():
                 self.thread = threading.Thread(target=self._loop, name="outcome-auto-rotation", daemon=True)
@@ -57,7 +62,7 @@ class OutcomeRotation:
             return current
 
     def assert_admission(self, group_id):
-        if group_id is not None and (self.closed.is_set() or self.groups[group_id]["cancelled"]):
+        if self.closed.is_set() or group_id is not None and self.groups[group_id]["cancelled"]:
             raise RuntimeError("Auto rotation cancelled by Stop")
 
     def candidate_allowed(self, group_id, market, now=None):
@@ -72,7 +77,9 @@ class OutcomeRotation:
                 if session_id in group["members"]:
                     return {"auto_group_id": group["id"], "auto_rotations": group["rotations"],
                             "auto_rotation_state": group["state"], "auto_rotation_reason": group["reason"],
-                            "auto_fill_usd_per_min": group.get("fill_rate", 0)}
+                            "auto_fill_usd_per_min": group.get("fill_rate", 0),
+                            "auto_evaluate_after_sec": group.get("evaluate_after_sec"),
+                            "auto_evaluate_in_sec": max(0, group.get("evaluate_at", time.time())-time.time())}
         return {}
 
     def display_intents(self):
@@ -82,19 +89,36 @@ class OutcomeRotation:
                     for group in self.groups.values()]
 
     def _loop(self):
-        while not self.closed.wait(5):
+        while not self.closed.wait(2):
             try:
                 with self.lock:
                     active = any(not g["cancelled"] for g in self.groups.values())
                 if not active:
                     continue
-                self.refresh_catalog()
+                self.request_catalog_refresh()
                 self.tick()
             except Exception as exc:
                 with self.lock:
                     for group in self.groups.values():
                         if not group["cancelled"]:
                             group["reason"] = "Auto waiting: " + safe_error(exc)
+
+    def request_catalog_refresh(self):
+        # Metadata reads may take tens of seconds. They must not stop lifecycle
+        # checks, drain completion or Stop admission for existing sessions.
+        with self.lock:
+            if (self.closed.is_set() or time.time()-self.catalog_refreshed < 60
+                    or time.time() < self.catalog_retry_at
+                    or self.catalog_thread and self.catalog_thread.is_alive()):
+                return
+            self.catalog_retry_at = time.time()+10
+            def refresh():
+                try:
+                    self.refresh_catalog()
+                except Exception:
+                    pass  # Existing catalog still expires normally in the scanner.
+            self.catalog_thread = threading.Thread(target=refresh, name="outcome-auto-catalog", daemon=True)
+            self.catalog_thread.start()
 
     def refresh_catalog(self):
         # Dedicated background thread: network reads cannot occupy the API loop.
@@ -159,7 +183,16 @@ class OutcomeRotation:
                     first_time, first_volume = group["samples"][0]
                     elapsed = now-first_time
                     group["fill_rate"] = max(0, volume-first_volume)*60/max(1, elapsed)
-                    if now-group["started"] < window or elapsed < window-10:
+                    zero_fills = volume <= 0 and not current.get("fills", 0)
+                    deadline = no_fill_grace(config, group.get("current_selection")) if zero_fills else window
+                    group.update(evaluate_after_sec=deadline, evaluate_at=group['started']+deadline)
+                    if now-group["started"] < deadline or elapsed < deadline-10:
+                        continue
+                    if current.get("execution_state") == "Insufficient USDC":
+                        group["reason"] = "Available USDC below full order size"
+                        continue
+                    if current.get("last_fill_at") and now-current['last_fill_at'] < min(30, window/3):
+                        group["reason"] = ""
                         continue
                     threshold = config.get("auto_min_fill_usd_per_min")
                     threshold = config["order_size_usd"] if threshold is None else float(threshold)
@@ -171,7 +204,8 @@ class OutcomeRotation:
             if not snapshot.get("ready") or now-float(snapshot.get("updated_at", now)) > 20:
                 continue
             busy = {b["market"] for b in status["bots"] if b["running"] or not b.get("cleanup_confirmed")}
-            top = next((r for r in snapshot["candidates"] if r["market"] not in busy
+            ranked = sorted(snapshot["candidates"], key=lambda r: candidate_rank(r, group.get('market_results', {}), now))
+            top = next((r for r in ranked if r["market"] not in busy
                         and r["market"] != current["market"]
                         and self.candidate_allowed(group_id, r["market"], now)), None)
             with self.lock:
@@ -188,7 +222,12 @@ class OutcomeRotation:
                     atomic_json(Path(info["stop_file"]).with_name("drain.json"), {
                         "requested_at": now, "reason": "low executed $/min", "next_market": top["market"]})
                     group.update(state="draining", reason="Rotation: draining current market")
-                    group.setdefault("cooldown", {})[current["market"]] = now+config.get("auto_market_cooldown_sec", 600)
+                    previous = group.setdefault('market_results', {}).get(current['market'], {})
+                    failures = previous.get('zero_fill_attempts', 0)+1 if float(current.get('volume_usd', 0)) <= 0 else 0
+                    group['market_results'][current['market']] = dict(zero_fill_attempts=failures, updated_at=now,
+                        executed_usd_per_min=float(current.get('volume_usd', 0))*60/max(1, now-group['started']))
+                    cooldown = config.get("auto_market_cooldown_sec", 300)*min(8, 2**failures)
+                    group.setdefault("cooldown", {})[current["market"]] = now+cooldown
                     continue
                 # Old worker is dead and exchange cleanup is confirmed. start()
                 # reselects from a fresh scanner snapshot and preserves budgets.
@@ -200,16 +239,26 @@ class OutcomeRotation:
                 if values.get("maker_spread_pct") is None:
                     values.pop("maker_spread_pct", None)
                 values.update(market=top["market"], two_sided=True)
-                group.setdefault("cooldown", {})[current["market"]] = now+config.get("auto_market_cooldown_sec", 600)
-                try:
-                    self.owner.start(WorldcupStartRequest(**values), rotation_group=group_id)
+                cooldowns = group.setdefault("cooldown", {})
+                cooldowns[current["market"]] = max(cooldowns.get(current["market"], 0), now+config.get("auto_market_cooldown_sec", 300))
+                group.update(state="launching", retry_at=now+15)
+                request = WorldcupStartRequest(**values)
+            # Metadata resolution can block. Stop remains immediate; the
+            # supervisor rechecks cancellation under the final admission lock.
+            try:
+                self.owner.start(request, rotation_group=group_id)
+                with self.lock:
                     group["rotations"] += 1
-                except Exception as exc:
-                    group["retry_at"] = now+15
-                    group["reason"] = "Rotation waiting: " + safe_error(exc)
+            except Exception as exc:
+                with self.lock:
+                    if not group['cancelled']:
+                        group.update(state="draining", retry_at=now+15,
+                                     reason="Rotation waiting: " + safe_error(exc))
 
     def close(self):
         self.closed.set()
         self.cancel()
         if self.thread:
             self.thread.join(timeout=2)
+        if self.catalog_thread:
+            self.catalog_thread.join(timeout=2)

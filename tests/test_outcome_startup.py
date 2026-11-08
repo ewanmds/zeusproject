@@ -87,6 +87,46 @@ class OutcomeStartupTests(unittest.TestCase):
         exchange.order.assert_not_called()
         exchange.bulk_orders.assert_not_called()
 
+    def test_live_sdk_metadata_is_loaded_once_and_reused_by_all_clients(self):
+        cfg = build_config(dict(market='#101', order_size_usd=25, max_position_usd=200), None)
+        cfg.private_key, cfg.account_address = 'dummy', 'offline'
+        meta, spot = {'universe': []}, {'tokens': [], 'universe': []}
+        info, exchange = Mock(), Mock()
+        info.post.return_value = {'outcomes': []}
+        with patch('zeus.outcome_reads.read_info', side_effect=[meta, spot]) as reads, \
+                patch('zeus.bots.worldcup.Info', return_value=info) as sdk, \
+                patch('zeus.bots.worldcup.Exchange', return_value=exchange) as exchange_sdk, \
+                patch('eth_account.Account.from_key', return_value=Mock()), \
+                patch.object(HyperliquidSpreadBot, 'discover_markets', return_value=[]), \
+                patch('zeus.bots.worldcup.signal.signal'), \
+                patch('zeus.bots.worldcup.supervisor_alive', return_value=True):
+            bot = HyperliquidSpreadBot(cfg)
+            try:
+                bot.start_ws()
+                self.assertEqual(reads.call_count, 2)
+                self.assertEqual(sdk.call_count, 2)
+                for call in sdk.call_args_list + exchange_sdk.call_args_list:
+                    self.assertIs(call.kwargs['meta'], meta)
+                    self.assertIs(call.kwargs['spot_meta'], spot)
+            finally:
+                bot.account_reader.close()
+
+    def test_exact_outcome_startup_does_not_refetch_global_catalog(self):
+        bot = self.bare()
+        bot.cfg = build_config(dict(market='#101', order_size_usd=25, max_position_usd=200,
+            auto_selection={'name': 'Pinned market'}), None)
+        bot.outcome_meta = {'outcomes': [{'outcome': 10, 'venue': 'out'}]}
+        with patch('zeus.outcomes.catalog_snapshot', side_effect=AssertionError('Duplicate catalog fetch')):
+            spec, = bot.discover_worldcup_markets()
+        self.assertEqual((spec.symbol, spec.balance_coin, spec.display_name), ('#101', '+101', 'Pinned market'))
+
+    def test_delisted_exact_outcome_fails_before_trading(self):
+        bot = self.bare()
+        bot.cfg = build_config(dict(market='#101', order_size_usd=25, max_position_usd=200), None)
+        bot.outcome_meta = {'outcomes': [{'outcome': 99, 'venue': 'out'}]}
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            bot.discover_worldcup_markets()
+
 
 if __name__ == '__main__':
     unittest.main()

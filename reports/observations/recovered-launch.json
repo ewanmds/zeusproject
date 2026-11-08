@@ -1,0 +1,19 @@
+{
+  "session_id": "3f1da440d094422bbd4472e76c5469b8",
+  "started": 1794146278.1957297,
+  "market": "#270391",
+  "pid": 8404,
+  "config": {
+    "selection_mode": "auto",
+    "outcome_side": "no",
+    "exec_mode": "maker",
+    "order_size_usd": 25,
+    "max_position_usd": 200,
+    "two_sided": true,
+    "full_size_quotes": true,
+    "auto_rotate": true,
+    "auto_rotation_after_sec": 180,
+    "auto_market_cooldown_sec": 300,
+    "auto_max_spread_bps": 10
+  }
+}

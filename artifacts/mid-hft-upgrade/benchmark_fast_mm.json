@@ -1,0 +1,93 @@
+{
+  "source_sha256": "b8ea3fc7fcedbc93e2960d3425b58d499cb089654b8037f10ce1d6751818c4da",
+  "delay_ms": 1,
+  "model": "fake REST/SDK sleeps; no HTTP, signing, constructor or matching; OS scheduling uncontrolled",
+  "scenarios": {
+    "mid_conversion": {
+      "cycles": 500,
+      "cycle_ms": {
+        "p50": 1.5508,
+        "p90": 1.8295,
+        "p95": 1.8807,
+        "p99": 2.7893
+      },
+      "event_to_final_execution_ack_ms": {
+        "p50": 1.4444,
+        "p90": 1.7171,
+        "p95": 1.8002,
+        "p99": 2.685
+      },
+      "execution_requests": 500,
+      "modifications": 500,
+      "placements": 0,
+      "cancellations": 0,
+      "account_reads": 2,
+      "event_latency_samples_for_one_event_100_wakes": 1,
+      "live_signing": false,
+      "fees": null,
+      "net_pnl": null
+    },
+    "mid_unchanged": {
+      "cycles": 500,
+      "cycle_ms": {
+        "p50": 0.04,
+        "p90": 0.043,
+        "p95": 0.0484,
+        "p99": 0.0686
+      },
+      "event_to_final_execution_ack_ms": null,
+      "execution_requests": 0,
+      "modifications": 0,
+      "placements": 0,
+      "cancellations": 0,
+      "account_reads": 0,
+      "event_latency_samples_for_one_event_100_wakes": 1,
+      "live_signing": false,
+      "fees": null,
+      "net_pnl": null
+    },
+    "bbo_conversion": {
+      "cycles": 500,
+      "cycle_ms": {
+        "p50": 1.7217,
+        "p90": 1.8079,
+        "p95": 1.9433,
+        "p99": 3.2204
+      },
+      "event_to_final_execution_ack_ms": {
+        "p50": 1.6373,
+        "p90": 1.7074,
+        "p95": 1.8139,
+        "p99": 3.1255
+      },
+      "execution_requests": 500,
+      "modifications": 500,
+      "placements": 0,
+      "cancellations": 0,
+      "account_reads": 2,
+      "event_latency_samples_for_one_event_100_wakes": 1,
+      "live_signing": false,
+      "fees": null,
+      "net_pnl": null
+    },
+    "bbo_unchanged": {
+      "cycles": 500,
+      "cycle_ms": {
+        "p50": 0.0196,
+        "p90": 0.0207,
+        "p95": 0.0249,
+        "p99": 0.0354
+      },
+      "event_to_final_execution_ack_ms": null,
+      "execution_requests": 0,
+      "modifications": 0,
+      "placements": 0,
+      "cancellations": 0,
+      "account_reads": 0,
+      "event_latency_samples_for_one_event_100_wakes": 1,
+      "live_signing": false,
+      "fees": null,
+      "net_pnl": null
+    }
+  }
+}

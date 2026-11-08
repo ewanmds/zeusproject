@@ -1,0 +1,31 @@
+{
+  "files": [
+    {
+      "path": "frontend/app.js",
+      "before_sha256": "ac5fe30ba4f09e41dc5c605456444fe36dd9cda048d27172546f5809ed0b0a75",
+      "after_sha256": "7b6d854f8f876dbe18ab4149207174b658749a716f0ed58b60a0f4c89ac5c8f1"
+    },
+    {
+      "path": "frontend/state.js",
+      "before_sha256": "d878d21ca2f88b8341c1973885586fc7c41eb7b1d41ef57f766e54e9e0b8ec57",
+      "after_sha256": "d878d21ca2f88b8341c1973885586fc7c41eb7b1d41ef57f766e54e9e0b8ec57"
+    },
+    {
+      "path": "frontend/index.html",
+      "before_sha256": "8b5bf5935bcc851c28afdb0a4fbb157822a2dd4cf21f4e5a4e093cd9d7f43b9a",
+      "after_sha256": "ad4a20ca1c4458bc5a26aaf4debbca9453699e6913e7cf27d0548539f68ccc76"
+    },
+    {
+      "path": "frontend/build.mjs",
+      "before_sha256": "00625408318ec4885830cbf7d0a2a4f590a298173ca33feb5ca6fd416e0c150c",
+      "after_sha256": "9c5430caac6074b589fd077f224ff6927dd95d706fffca21f971cbf9fa48ff6b"
+    }
+  ],
+  "validation": [
+    "cached helper reproduction failed before fix and passed after fix at 1440/390px",
+    "real live read-only dashboard: two WebSocket frames, 5 fills, $101.90 in overview and card, no JS/render errors",
+    "Outcome UI and MID UI desktop/mobile passed",
+    "7 dashboard Python tests and Node snapshot contracts passed",
+    "frontend build and JavaScript syntax passed"
+  ]
+}

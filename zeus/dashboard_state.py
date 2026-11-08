@@ -35,7 +35,7 @@ def outcome_projection(entries, intents=(), *, now=None):
         row = dict(current)
         started = min((m["started"] for m in members if number(m.get("started"))), default=now)
         logical_running = bool(any(m.get("running") for m in active)
-                               or intent and intent["state"] in ("observing", "draining"))
+                               or intent and intent["state"] in ("observing", "draining", "launching"))
         live_stale = any(m.get("stale") for m in active if m.get("running"))
         complete = all(m.get("accounting_complete") is True
                        and all(number(m.get(field)) for field in ("volume_usd", "net_pnl", "fees", "fills"))
@@ -50,6 +50,10 @@ def outcome_projection(entries, intents=(), *, now=None):
                    sampled_at=now, cleanup_confirmed=not logical_running and all(m.get("cleanup_confirmed") for m in members))
         row["duration"] = clock_text(row["duration_sec"])
         row["market_duration_sec"] = max(0, now-current.get("started", now)) if current.get("running") else current.get("duration_sec", 0)
+        for field in ("orders_sent", "cancels_sent", "rejected"):
+            row[field] = sum(m[field] for m in members) if all(number(m.get(field)) for m in members) else None
+        if not current.get("running"):
+            row['quotes'] = []
         for field in ("volume_usd", "net_pnl", "fees", "fills"):
             row[field] = sum(m[field] for m in members) if complete and all(number(m.get(field)) for m in members) else None
         row["cost_per_1m"] = -row["net_pnl"]*1e6/row["volume_usd"] if complete and row["volume_usd"] and row["net_pnl"] is not None else None

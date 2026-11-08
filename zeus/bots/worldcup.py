@@ -245,10 +245,12 @@ class BotConfig:
     exec_mode: str = "taker"   # "taker" = IOC croise le spread | "maker" = limit post-only
     maker_offset_pct: float = 0.0  # % derrière le touch, même convention que max_spread_pct (0.02 = 0.02%)
     maker_opening_rest_sec: float = 2.0  # Preserve opening queue; risk pulls/exits bypass.
+    maker_requote_delay_sec: float = .05  # Confirmed normal cancels still require fresh account reconciliation.
     maker_spread_pct: Optional[float] = None  # Total quote spread in percent; None keeps CLI offset pricing.
     auto_max_spread_bps: Optional[float] = None
     two_sided: bool = False
     full_size_quotes: bool = False
+    market_label: str = ""
     rotation_file: Optional[str] = None
     risk_pnl_carry: float = 0.0
     safety_file: Optional[str] = None
@@ -283,6 +285,7 @@ class MarketState:
     mid: float = 0.0
     spread_bps: float = math.inf
     last_book_ts: float = 0.0
+    book_revision: int = 0
     bid_oid: Optional[int] = None
     ask_oid: Optional[int] = None
     quoted_bid: float = 0.0
@@ -314,12 +317,22 @@ class MarketState:
     def position_usd(self) -> float:
         return self.position * self.mid if self.mid > 0 else 0.0
 
-    def update_bbo(self, bid: float, ask: float, ts_ms: Optional[int] = None) -> None:
+    def update_bbo(self, bid: float, ask: float, ts_ms: Optional[int] = None) -> bool:
+        stamp = ts_ms/1000.0 if ts_ms else time.time()
+        if not math.isfinite(stamp) or stamp < self.last_book_ts or stamp > time.time()+1:
+            return False
+        self.book_revision += 1
+        if not all(math.isfinite(value) for value in (bid, ask)) or bid <= 0 or ask < bid:
+            self.bid = self.ask = self.mid = 0.0
+            self.spread_bps = math.inf
+            self.last_book_ts = stamp
+            return False
         self.bid = bid
         self.ask = ask
         self.mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else 0.0
         self.spread_bps = ((ask - bid) / self.mid * 10_000.0) if self.mid > 0 else math.inf
-        self.last_book_ts = (ts_ms / 1000.0) if ts_ms else time.time()
+        self.last_book_ts = stamp
+        return True
 
 
 @dataclass
@@ -385,8 +398,9 @@ class HyperliquidSpreadBot:
         self.recovery_delay = 2.0
 
         perp_dexs = [cfg.perp_dex] if cfg.perp_dex and not cfg.worldcup else None
+        self._sdk_metadata = self._load_sdk_metadata() if cfg.worldcup and cfg.live else {}
         self.info = self._startup_read("SDK metadata", lambda: Info(
-            cfg.base_url, skip_ws=True, perp_dexs=perp_dexs, timeout=10))
+            cfg.base_url, skip_ws=True, perp_dexs=perp_dexs, timeout=10, **self._sdk_metadata))
         self.outcome_meta: Optional[Dict[str, Any]] = None
         if cfg.worldcup:
             self.outcome_meta = self._startup_read("Outcome metadata", lambda: self.info.post(
@@ -405,6 +419,14 @@ class HyperliquidSpreadBot:
         self.specs = self.discover_markets()
         self.states: Dict[str, MarketState] = {spec.symbol: MarketState(spec) for spec in self.specs}
         self.ws_info: Optional[Info] = None
+        self.rest_pool = None
+        self.account_reader = None
+        self.account_sync_ms = 0.0
+        self.account_synced_at = 0.0
+        self.last_fill_at = 0.0
+        if cfg.worldcup:
+            from zeus.outcome_reads import OutcomeAccountReads
+            self.account_reader = OutcomeAccountReads(cfg.base_url, cfg.account_address)
 
         try:
             signal.signal(signal.SIGINT, self.shutdown)
@@ -428,6 +450,16 @@ class HyperliquidSpreadBot:
         # A trading acknowledgement is never resent through this path.
         return retry_read(label, operation, cancelled=self._startup_cancelled, sleep=self._startup_retry_wait)
 
+    def _load_sdk_metadata(self):
+        from zeus.outcome_reads import read_info
+        meta = self._startup_read("Native SDK metadata", lambda: read_info(self.cfg.base_url, {"type": "meta"}))
+        spot = self._startup_read("Spot SDK metadata", lambda: read_info(self.cfg.base_url, {"type": "spotMeta"}))
+        if (not isinstance(meta, dict) or not isinstance(meta.get('universe'), list)
+                or not isinstance(spot, dict) or not isinstance(spot.get('tokens'), list)
+                or not isinstance(spot.get('universe'), list)):
+            raise ValueError('Invalid SDK metadata')
+        return dict(meta=meta, spot_meta=spot)
+
     def _init_exchange(self, perp_dexs: Optional[List[str]]) -> None:
         if not self.cfg.private_key or not self.cfg.account_address:
             raise SystemExit(
@@ -445,6 +477,7 @@ class HyperliquidSpreadBot:
                 account_address=self.cfg.account_address,
                 perp_dexs=perp_dexs,
                 timeout=10,
+                **getattr(self, "_sdk_metadata", {}),
             ))
             if self.cfg.worldcup and self.outcome_meta:
                 self.patch_outcome_assets(self.exchange.info, self.outcome_meta)
@@ -636,6 +669,14 @@ class HyperliquidSpreadBot:
         except Exception:
             pass
 
+        reader = getattr(self, "account_reader", None)
+        if reader:
+            reader.close()
+        pool = getattr(self, "rest_pool", None)
+        if pool:
+            pool.shutdown(wait=False, cancel_futures=True)
+            self.rest_pool = None
+
     # ------------------------------------------------------------------ setup
     def discover_markets(self) -> List[MarketSpec]:
         if self.cfg.worldcup:
@@ -699,6 +740,21 @@ class HyperliquidSpreadBot:
         if not self.outcome_meta:
             self.outcome_meta = self.info.post("/info", {"type": "outcomeMeta"})
             self.patch_outcome_assets(self.info, self.outcome_meta)
+
+        # The supervisor resolved an exact #coin already. Do not refetch the
+        # global catalog/templates/mids for each new Auto worker.
+        if self.cfg.symbols and all(symbol.startswith('#') and symbol[1:].isdigit() for symbol in self.cfg.symbols):
+            available = {int(row['outcome']) for row in self.outcome_meta.get('outcomes', [])
+                         if str(row.get('outcome', '')).isdigit() and row.get('venue', 'out') == 'out'}
+            specs = []
+            for symbol in self.cfg.symbols:
+                outcome_id, side = divmod(int(symbol[1:]), 10)
+                if outcome_id not in available or side not in (0, 1):
+                    raise ValueError('Selected Outcome is unavailable in fresh metadata')
+                specs.append(MarketSpec(symbol, 0, display_name=self.cfg.market_label or symbol,
+                    outcome_id=outcome_id, outcome_side='yes' if side == 0 else 'no',
+                    balance_coin=outcome_balance_coin(outcome_id, side)))
+            return specs
 
         outcomes = self.outcome_meta.get("outcomes", []) if isinstance(self.outcome_meta, dict) else []
 
@@ -831,9 +887,10 @@ class HyperliquidSpreadBot:
         return table
 
     def start_ws(self) -> None:
-        perp_dexs = [self.cfg.perp_dex] if self.cfg.perp_dex else None
+        perp_dexs = [self.cfg.perp_dex] if self.cfg.perp_dex and not self.cfg.worldcup else None
         self.status = "connecting ws"
-        self.ws_info = Info(self.cfg.base_url, skip_ws=False, perp_dexs=perp_dexs, timeout=10)
+        self.ws_info = Info(self.cfg.base_url, skip_ws=False, perp_dexs=perp_dexs, timeout=10,
+                            **getattr(self, "_sdk_metadata", {}))
         if self.cfg.worldcup and self.outcome_meta:
             self.patch_outcome_assets(self.ws_info, self.outcome_meta)
         for symbol in self.states:
@@ -879,8 +936,8 @@ class HyperliquidSpreadBot:
             with self.lock:
                 for local_symbol, st in self.states.items():
                     if coin_matches(local_symbol, symbol):
-                        st.update_bbo(bid, ask, int(payload.get("time", 0) or 0))
-                        st.book_source = "ws"
+                        if st.update_bbo(bid, ask, int(payload.get("time", 0) or 0)):
+                            st.book_source = "ws"
                         break
             self.wake.set()
         except Exception:
@@ -900,7 +957,8 @@ class HyperliquidSpreadBot:
             with self.lock:
                 for local_symbol, st in self.states.items():
                     if coin_matches(local_symbol, symbol):
-                        st.update_bbo(bid, ask, int(payload.get("time", 0) or 0))
+                        if not st.update_bbo(bid, ask, int(payload.get("time", 0) or 0)):
+                            return
                         st.book_source = "l2"
                         if st.last_error.startswith("REST bbo"):
                             st.last_error = ""
@@ -951,7 +1009,13 @@ class HyperliquidSpreadBot:
 
         workers = max(1, min(self.cfg.rest_workers, len(symbols)))
         updated = 0
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        if getattr(self, "rest_pool", None) is None:
+            self.rest_pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="outcome-bbo")
+        requested_at = time.time()
+        with self.lock:
+            requested_versions = {symbol: self.states[symbol].book_revision for symbol in symbols}
+        if self.rest_pool:
+            pool = self.rest_pool
             futures = {pool.submit(self.fetch_rest_bbo, symbol): symbol for symbol in symbols}
             for future in as_completed(futures):
                 symbol = futures[future]
@@ -974,8 +1038,10 @@ class HyperliquidSpreadBot:
                     st = self.states.get(symbol)
                     if st is None:
                         continue
-                    st.update_bbo(bid, ask)
                     st.last_rest_book_ts = time.time()
+                    if (st.book_revision != requested_versions[symbol] or st.last_book_ts > requested_at
+                            or not st.update_bbo(bid, ask)):
+                        continue  # A newer WS/L2 message won while REST was in flight.
                     st.book_source = "rest"
                     if st.last_error.startswith("REST bbo"):
                         st.last_error = ""
@@ -985,15 +1051,13 @@ class HyperliquidSpreadBot:
             self.wake.set()
 
     def fetch_rest_bbo(self, symbol: str) -> Tuple[float, float]:
-        response = requests.post(
-            self.cfg.base_url + "/info",
-            json={"type": "l2Book", "coin": symbol},
-            timeout=1.5,
-        )
-        if response.status_code == 429:
-            raise RateLimited("429 backoff")
-        response.raise_for_status()
-        book = response.json()
+        from zeus.outcome_reads import read_info
+        try:
+            book = read_info(self.cfg.base_url, {"type": "l2Book", "coin": symbol}, timeout=1.5)
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 429:
+                raise RateLimited("429 backoff") from exc
+            raise
         levels = book.get("levels", [[], []]) if isinstance(book, dict) else [[], []]
         bids = levels[0] if len(levels) > 0 else []
         asks = levels[1] if len(levels) > 1 else []
@@ -1119,6 +1183,7 @@ class HyperliquidSpreadBot:
                 self.stats.fees_paid += fee
                 self.stats.gross_closed_pnl += closed
                 self.stats.fills += 1
+                self.last_fill_at = max(getattr(self, "last_fill_at", 0), safe_float(fill.get("time"))/1000 or time.time())
                 self.stats.best_net_pnl = max(self.stats.best_net_pnl, self.stats.net_pnl)
 
                 side = str(fill.get("side", "")).upper()
@@ -1141,10 +1206,18 @@ class HyperliquidSpreadBot:
             return False
         with self.lock:
             revision = getattr(self, "account_revision", 0)
+        sync_started = time.perf_counter()
+        parallel_orders = None
+        parallel_read = False
         balances = None
         if self.cfg.worldcup:
             try:
-                spot_state = self.info.spot_user_state(self.cfg.account_address)
+                reader = getattr(self, "account_reader", None)
+                if reader is not None:
+                    spot_state, parallel_orders = reader.snapshot()
+                    parallel_read = True
+                else:
+                    spot_state = self.info.spot_user_state(self.cfg.account_address)
                 if not isinstance(spot_state, dict) or not isinstance(spot_state.get("balances"), list):
                     raise ValueError("Invalid spot account response")
                 balances = {
@@ -1168,7 +1241,7 @@ class HyperliquidSpreadBot:
                 pass
         try:
             dex = "" if self.cfg.worldcup else self.cfg.perp_dex
-            orders = self.info.open_orders(self.cfg.account_address, dex=dex)
+            orders = parallel_orders if parallel_read else self.info.open_orders(self.cfg.account_address, dex=dex)
             if not isinstance(orders, list) or any(
                     not isinstance(order, dict) or not order.get("coin")
                     or int(order.get("oid", 0)) <= 0 or order.get("side") not in {"A", "B"}
@@ -1216,6 +1289,8 @@ class HyperliquidSpreadBot:
                             state.ask_quantity = safe_float(order.get("sz"))
                             old_oid, old_ts = previous[(state.spec.symbol, "ask")]
                             state.ask_order_ts = old_ts if old_oid == oid else time.time()
+            self.account_synced_at = time.time()
+            self.account_sync_ms = (time.perf_counter()-sync_started)*1000
         return True
 
     def risk_block_reason(self, st: MarketState, closing_inventory: bool = False) -> Optional[str]:
@@ -1397,9 +1472,11 @@ class HyperliquidSpreadBot:
                         setattr(st, f"{side}_oid", None)
                         setattr(st, f"{side}_quantity", 0.0)
                     st.cancel_retry_until = 0
-                    st.pending_until = time.time()+.35
+                    fast_requote = self.cfg.auto_max_spread_bps is not None and reason == "requote"
+                    st.pending_until = time.time()+(self.cfg.maker_requote_delay_sec if fast_requote else .35)
                     if buy:
-                        st.opening_rearm_until = time.time()+self.cfg.maker_opening_rest_sec
+                        delay = self.cfg.maker_requote_delay_sec if fast_requote else self.cfg.maker_opening_rest_sec
+                        st.opening_rearm_until = time.time()+delay
                 st.reconcile_required = True
                 self.account_revision += 1
                 st.last_action = f"{side} cancel: {reason}"
@@ -1436,7 +1513,7 @@ class HyperliquidSpreadBot:
                 if req and passive and time.time()-getattr(st, f"{side}_order_ts") < self.cfg.maker_opening_rest_sec:
                     continue
                 if self.cfg.live:
-                    self.cancel_bilateral_side(st, buy, "drain" if self.rotation_requested() else "requote / limit")
+                    self.cancel_bilateral_side(st, buy, "drain" if self.rotation_requested() else "requote" if req else "limit")
                 return
             if not req or buy and time.time() < st.opening_rearm_until:
                 continue
@@ -1474,7 +1551,8 @@ class HyperliquidSpreadBot:
                 return
         st.last_action = ("rotation: draining inventory" if self.rotation_requested()
                           else "maker BID + ASK" if st.bid_oid and st.ask_oid
-                          else "bootstrap inventory: BID" if st.bid_oid else "await funds / inventory")
+                          else "bootstrap inventory: BID" if st.bid_oid
+                          else "maker inventory: ASK" if st.ask_oid else "await funds / inventory")
 
     def finish_rotation_if_flat(self) -> None:
         if not self.rotation_requested() or not self.running or self.safety.phase != "running":
@@ -1850,7 +1928,8 @@ class HyperliquidSpreadBot:
                 if self.safety.phase == "recovering":
                     self._try_recovery()
                 else:
-                    if time.time() - last_sync > self.cfg.account_sync_sec:
+                    needs_sync = any(st.reconcile_required and time.time() >= st.pending_until for st in self.states.values())
+                    if needs_sync or time.time() - last_sync > self.cfg.account_sync_sec:
                         self.sync_account()
                         last_sync = time.time()
                     self.restart_ws_if_needed()
@@ -1932,6 +2011,18 @@ class HyperliquidSpreadBot:
 
             avg_mid = sum(mid_prices) / len(mid_prices) if mid_prices else 0.0
             avg_spread = sum(spreads) / len(spreads) if spreads else 0.0
+            now = time.time()
+            quotes = [{"market": st.spec.symbol,
+                       "bid_price": st.quoted_bid if st.bid_oid else None,
+                       "bid_size": st.bid_quantity if st.bid_oid else 0,
+                       "bid_age_sec": max(0, now-st.bid_order_ts) if st.bid_oid else None,
+                       "ask_price": st.quoted_ask if st.ask_oid else None,
+                       "ask_size": st.ask_quantity if st.ask_oid else 0,
+                       "ask_age_sec": max(0, now-st.ask_order_ts) if st.ask_oid else None,
+                       "book_age_ms": max(0, now-st.last_book_ts)*1000 if st.last_book_ts else None,
+                       "book_source": st.book_source} for st in self.states.values()]
+            active_state = next(iter(self.states.values()), None)
+            execution_state, blocked_reason = self.execution_status(active_state)
 
             return {
                 "status": self.status,
@@ -1941,6 +2032,15 @@ class HyperliquidSpreadBot:
                 "bid_open": any(s.bid_oid for s in self.states.values()),
                 "ask_open": any(s.ask_oid for s in self.states.values()),
                 "last_action": "; ".join(state.last_action for state in self.states.values() if state.last_action),
+                "execution_state": execution_state,
+                "blocked_reason": blocked_reason,
+                "quotes": quotes,
+                "orders_sent": stats.orders_sent,
+                "cancels_sent": stats.cancels_sent,
+                "rejected": stats.rejected,
+                "last_fill_at": getattr(self, "last_fill_at", 0),
+                "account_sync_ms": getattr(self, "account_sync_ms", 0),
+                "account_age_ms": max(0, now-self.account_synced_at)*1000 if getattr(self, "account_synced_at", 0) else None,
                 "duration_sec": stats.elapsed_min * 60,
                 "volume_usd": stats.volume_usd,
                 "net_pnl": stats.net_pnl,
@@ -1956,6 +2056,31 @@ class HyperliquidSpreadBot:
             self.lock.release()
 
     # ------------------------------------------------------------- dashboard
+    def execution_status(self, st):
+        if st is None:
+            return "Starting", ""
+        if self.safety.phase == "recovering" or st.reconcile_required:
+            return "Reconciling", ""
+        if not st.has_bbo or time.time()-st.last_book_ts > self.cfg.stale_sec:
+            return "Waiting for book", ""
+        if self.rotation_requested():
+            return ("Draining inventory", "Selling remaining tokens before switching markets") if st.ask_oid else (
+                "Rotating", "Waiting for verified flat account")
+        risk = self.risk_block_reason(st, closing_inventory=False)
+        if st.bid_oid and st.ask_oid:
+            return "Bid + Ask", risk or ""
+        if st.bid_oid:
+            return "Bid working", risk or ""
+        if st.ask_oid:
+            return "Ask working", risk or ""
+        if risk:
+            return "Spread too wide" if risk.startswith(("auto spread", "spread ")) else "Risk paused", risk
+        if st.position > 0 and self.cfg.full_size_quotes and st.position*st.ask < self.cfg.min_order_usd:
+            return "Building inventory", "Waiting for enough tokens for a full-size ask"
+        if st.position <= 0 and getattr(self, "available_usdc", 0) < math.ceil(self.cfg.min_order_usd/st.bid)*st.bid:
+            return "Insufficient USDC", "Available USDC is below the rounded order value"
+        return "Waiting to quote", ""
+
     def render(self) -> Group:
         acquired = self.lock.acquire(timeout=1.0)
         if not acquired:

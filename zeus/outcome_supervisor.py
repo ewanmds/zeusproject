@@ -101,7 +101,9 @@ class OutcomeSupervisor:
         if self.root is None:
             self.temporary = tempfile.TemporaryDirectory(prefix="zeus-offline-")
             self.root = Path(self.temporary.name)
-        with ProcessLock(self.root / "admission" / f"{account_key(account)}-{market[1:]}.lock"), self.manager.lock:
+        # Resolve/read metadata above without holding the rotation/UI lock.
+        # Admission, spawn and registration below are atomic against Stop.
+        with ProcessLock(self.root / "admission" / f"{account_key(account)}-{market[1:]}.lock"), self.rotation.lock, self.manager.lock:
             for info in self.procs.values():
                 if info["market"] == market:
                     if info["proc"].poll() is None:
@@ -147,8 +149,8 @@ class OutcomeSupervisor:
             # racing first worker snapshot with the parent's connecting state.
             self.procs[session_id] = {**record, "proc": proc, "market": market, "pid": proc.pid,
                                       "safety_file": journal}
-        result = {"session_id": session_id, "market": market, "pid": proc.pid, "phase": "connecting"}
-        self.rotation.register(result, public, rotation_group)
+            result = {"session_id": session_id, "market": market, "pid": proc.pid, "phase": "connecting"}
+            self.rotation.register(result, public, rotation_group)
         return result
 
     def _entry(self, journal, record, info=None):

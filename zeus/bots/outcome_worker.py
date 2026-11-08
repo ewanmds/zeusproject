@@ -7,7 +7,8 @@ import threading
 import time
 
 from zeus.process_control import ProcessLock, account_key
-from zeus.safety import atomic_json, safe_error, supervisor_alive
+from zeus.safety import atomic_json, safe_error, supervisor_alive, read_json
+from zeus.outcome_telemetry import OutcomeTelemetry
 
 
 def build_config(public, safety_file, stop_file=None, funds_root=None):
@@ -40,6 +41,7 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         auto_max_spread_bps=public.get("auto_max_spread_bps", 10) if public.get("selection_mode") == "auto" else None,
         two_sided=public.get("two_sided", False),
         full_size_quotes=public.get("full_size_quotes", public.get("selection_mode") == "auto"),
+        market_label=(public.get('auto_selection') or {}).get('name', ''),
         rotation_file=str(Path(stop_file).with_name("drain.json")) if stop_file else None,
         risk_pnl_carry=public.get("rotation_pnl_carry", 0),
         stop_file=str(stop_file) if stop_file else None,
@@ -50,7 +52,7 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
 def run_worker(config_path, bot_factory=None):
     """bot_factory is injectable for offline process/lifecycle tests."""
     runtime = Path(config_path).resolve().parent
-    public = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    public = read_json(config_path)
     journal = Path(public["safety_file"])
     stop_file, stats_file = runtime / "stop", runtime / "stats.json"
     cfg = build_config(public["config"], journal, stop_file, public["funds_root"])
@@ -60,16 +62,18 @@ def run_worker(config_path, bot_factory=None):
     finished = threading.Event()
     bot = None
     started = time.time()
-    metadata = json.loads(journal.read_text(encoding="utf-8"))
+    metadata = read_json(journal)
+    telemetry = OutcomeTelemetry(stats_file)
 
-    def publish():
+    def publish(final=False):
         snap = bot.export_dashboard_stats() if bot is not None else {}
         if snap is None:
             return  # never refresh the timestamp of stale data
         lifecycle = bot.safety.snapshot() if bot is not None else metadata
-        atomic_json(stats_file, {**snap, **lifecycle, "session_id": metadata["session_id"],
+        payload = {**snap, **lifecycle, "session_id": metadata["session_id"],
                     "market": cfg.symbols[0], "pid": os.getpid(), "started": started,
-                    "ts": time.time(), "config": public["config"]})
+                    "ts": time.time(), "config": public["config"]}
+        return telemetry.final(payload) if final else telemetry.write(payload)
 
     def monitor():
         while not finished.wait(0.25):
@@ -116,7 +120,7 @@ def run_worker(config_path, bot_factory=None):
                 finished.set()
                 if watcher:
                     watcher.join(2)
-                publish()
+                publish(final=True)
         finally:
             if acquired:
                 instance_lock.__exit__(None, None, None)

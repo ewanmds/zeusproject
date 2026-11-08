@@ -4,6 +4,7 @@ Rank repeated two-way *executed* flow, not resting orders or claimed bots.
 One shared websocket, bounded history, bounded REST shortlist. Never signs.
 """
 from collections import defaultdict, deque
+import copy
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
@@ -113,6 +114,9 @@ class OutcomeFlowScanner:
         self.error = ""
         self.books = {}
         self.book_lock = threading.Lock()
+        self.snapshot_lock = threading.Lock()
+        self.snapshot_cache = {}
+        self.catalog_revision = 0
         # Persistent pool: worker threads keep their keep-alive HTTP session,
         # so only the first book read per thread pays the TLS handshake.
         self.book_pool = None
@@ -137,6 +141,8 @@ class OutcomeFlowScanner:
             # scanner thread after close().
             if self.stop.is_set():
                 return
+            if rows != self.rows:
+                self.catalog_revision += 1
             self.rows, self.catalog_at = rows, now
             for coin in list(self.history):
                 if int(coin[1:])//10 not in rows:
@@ -266,7 +272,7 @@ class OutcomeFlowScanner:
     def _book(self, coin):
         with self.lock:
             cached = self.books.get(coin)
-        if cached and time.time()-cached[0] < 5:
+        if cached and time.time()-cached[0] < 1:
             return cached[1]
         try:
             r = _http().post("https://api.hyperliquid.xyz/info", json={"type": "l2Book", "coin": coin}, timeout=3)
@@ -279,6 +285,28 @@ class OutcomeFlowScanner:
             return None
 
     def snapshot(self, side="no", order_usd=50, max_spread_bps=10):
+        # Share concurrent previews/rotation scans without extending freshness.
+        with self.snapshot_lock:
+            with self.lock:
+                key = (side, order_usd, max_spread_bps, self.generation, self.catalog_revision)
+                reusable = (self.connected and time.time()-self.catalog_at < 120
+                            and len(self.subscribed) == 2*len(self.rows))
+            entry = self.snapshot_cache.get(key)
+            cached_fresh = entry and all(
+                time.time()-r['book_updated_at'] <= 5 and
+                r['last_trade_age_sec']+time.time()-entry[1]['updated_at'] <= 20
+                for r in entry[1].get('candidates', []))
+            if reusable and entry and cached_fresh and time.monotonic()-entry[0] < .4:
+                return copy.deepcopy(entry[1])
+            started = time.perf_counter()
+            result = self._snapshot(side, order_usd, max_spread_bps)
+            result['scan_ms'] = (time.perf_counter()-started)*1000
+            if len(self.snapshot_cache) >= 16:
+                self.snapshot_cache.clear()
+            self.snapshot_cache[key] = (time.monotonic(), result)
+            return copy.deepcopy(result)
+
+    def _snapshot(self, side="no", order_usd=50, max_spread_bps=10):
         if side not in ("yes", "no"):
             raise ValueError("Invalid Outcome side")
         now = time.time()
@@ -286,7 +314,9 @@ class OutcomeFlowScanner:
             ready = (self.connected and bool(self.rows) and len(self.subscribed) == 2*len(self.rows)
                      and now-self.connected_at >= 60 and now-self.catalog_at < 120)
             generation = self.generation
-            status = {"ready": False, "connected": self.connected, "warming_up": self.connected and not ready,
+            status = {"ready": False, "connected": self.connected,
+                      "warming_up": self.connected and (now-self.connected_at < 60 or len(self.subscribed) != 2*len(self.rows)),
+                      "catalog_stale": now-self.catalog_at >= 120,
                       "observed_sec": max(0, now-self.connected_at) if self.connected else 0,
                       "markets_observed": len(self.subscribed)//2, "markets_total": len(self.rows), "updated_at": now,
                       "error": self.error, "candidates": [], "side": side}
@@ -341,6 +371,7 @@ class OutcomeFlowScanner:
                 wait_sell = 60*(aq+order_usd/ask)/item["buy_tokens_1m"]
                 item.update(bid=bid, ask=ask, spread_bps=spread,
                     depth_bid_usd=bq*bid, depth_ask_usd=aq*ask,
+                    book_updated_at=float(book['time'])/1000,
                     queue_proxy_sec=max(wait_buy, wait_sell))
                 item["score"] /= (1+max(wait_buy, wait_sell)/60)*(1+spread/10)
                 candidates.append(item)
@@ -355,8 +386,11 @@ class OutcomeFlowScanner:
                 return {**status, "connected": False}
             candidates = [r for r in candidates if int(r["market"][1:])//10 in self.rows]
         candidates = [r for r in candidates if r["last_trade_age_sec"]+time.time()-now <= 20]
+        completed = time.time()
+        for row in candidates:
+            row['last_trade_age_sec'] += completed-now
         return {**status, "ready": bool(candidates), "warming_up": False, "candidates": candidates,
-                "updated_at": time.time(), "ranking": "queue_proxy_sec",
+                "updated_at": completed, "ranking": "queue_proxy_sec",
                 "flow_candidates": len(shortlist), "books_checked": len(books)}
 
     def close(self):

@@ -1,0 +1,18 @@
+{
+  "outcome_tests": 121,
+  "ui_widths": [
+    1440,
+    390
+  ],
+  "live_orders_sent_by_validation": false,
+  "features": [
+    "inventory_backed_bid_ask",
+    "dollars_per_minute_rank",
+    "passive_drain_before_rotation",
+    "three_minute_fill_window",
+    "ten_minute_underfilled_market_cooldown",
+    "original_loss_budget_carried",
+    "stop_cancels_replacement_chain"
+  ],
+  "activation": "server restart required: running API lacks auto_market_cooldown_sec"
+}

@@ -66,9 +66,12 @@ class OutcomeProcessTests(unittest.TestCase):
         self.catalog.start()
         self.spawn_patch = patch("zeus.outcome_supervisor.subprocess.Popen", side_effect=self.fake_spawn)
         self.spawn = self.spawn_patch.start()
+        self.catalog_refresh_patch = patch('zeus.outcome_rotation.OutcomeRotation.request_catalog_refresh')
+        self.catalog_refresh_patch.start()
 
     def tearDown(self):
         self.manager.outcome.rotation.close()
+        self.catalog_refresh_patch.stop()
         for info in self.manager.outcome.procs.values():
             Path(info["stop_file"]).touch()
             (Path(info["stop_file"]).parent / "release").touch()
@@ -142,6 +145,38 @@ class OutcomeProcessTests(unittest.TestCase):
         from zeus.bots.outcome_worker import build_config
         self.assertIsNone(build_config(bot["config"], None).maker_spread_pct)
         self.manager.stop_worldcup(result["session_id"])
+
+    def test_stop_during_replacement_resolution_prevents_child_spawn(self):
+        with patch('zeus.outcome_rotation.OutcomeRotation._loop'), \
+                patch('zeus.outcome_flow.scanner.snapshot', return_value={'ready': True, 'candidates': [{'market': '#14881'}]}):
+            first = self.start(selection_mode='auto', exec_mode='maker')
+        self.ready()
+        entered, release = threading.Event(), threading.Event()
+        errors = []
+        def resolve(value):
+            entered.set()
+            release.wait(3)
+            return {'key': value, 'name': 'Replacement'}
+        def replace():
+            try:
+                self.manager.outcome.start(server.WorldcupStartRequest(selection_mode='auto', exec_mode='maker'),
+                                           rotation_group=first['session_id'])
+            except Exception as error:
+                errors.append(error)
+        with patch('zeus.outcomes.resolve_market', side_effect=resolve), \
+                patch('zeus.outcome_flow.scanner.snapshot', return_value={'ready': True, 'candidates': [{'market': '#14751'}]}):
+            thread = threading.Thread(target=replace)
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                self.manager.outcome.rotation.cancel(first['session_id'])
+            finally:
+                release.set()
+                thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(errors)
+        self.assertEqual(self.spawn.call_count, 1)
+        self.manager.stop_worldcup(first['session_id'])
 
     def test_auto_rotation_replaces_only_after_old_worker_stops_and_stop_tracks_chain(self):
         from collections import deque

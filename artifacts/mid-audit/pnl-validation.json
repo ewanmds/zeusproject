@@ -1,0 +1,21 @@
+{
+  "python_tests": 278,
+  "adapter_tests": 19,
+  "pnl_tests": 24,
+  "browser_widths": [
+    1440,
+    390
+  ],
+  "no_live_test_orders": true,
+  "no_server_restart": true,
+  "sha256": {
+    "zeus/bots/order_book.py": "107cdbbb6a4471ed7aea63faf45728449c35003f99f6bf6d80d088c580008fde",
+    "zeus/safety.py": "2206437aa1f973a7c5bc91a9a972fb98a4ab21c58cd6ee9ee2c25578107d00d8",
+    "zeus/server.py": "eb84b73d822b78324bd15c8aba64e6b4038a2452e4db79164c5043b8d1685123",
+    "zeus/maker_exit.py": "d1fbc7c7abbea75b5e169eaf27b54ccf92ac6f45691068b9a5bbff12de5516d7",
+    "zeus/session_accounting.py": "ac8621f90988b10d91d8b927a46989529b85e23813c9e62d8cccc1d3b34c4887",
+    "frontend/app.js": "c19c26d9e1b7f1484d3115aa6f25a7fc2d1cbc974f87a41bece3129d63b8128a",
+    "frontend/index.html": "be79059e3628e618ea61664d03bca23cecbc5ad6beb09af5074b7756ac060b7f",
+    "frontend/index.css": "6c53da76e691cdbbe91d09c90167e231ba0e05601d90e5cb1f91ae1002359a68"
+  }
+}
