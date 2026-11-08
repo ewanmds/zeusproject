@@ -388,7 +388,7 @@ class BotManager:
 
     def _verify_session_flat(self, record):
         from hyperliquid.info import Info
-        from zeus.safety import confirmed_client_order, legacy_nonce_rejection
+        from zeus.safety import confirmed_client_order
         kind = record["account_kind"]
         account = os.getenv("WALLET_ADDRESS_OUTCOME" if kind == "outcome" else "WALLET_ADDRESS", "").strip()
         if not account:
@@ -397,20 +397,25 @@ class BotManager:
             raise RuntimeError("Session account changed; manual verification required")
         info = Info("https://api.hyperliquid.xyz", skip_ws=True, timeout=5)
         symbols = record["symbols"]
-        for cloid in record.get("pending_cloids", []):
-            if legacy_nonce_rejection(record):
-                result = info.post("/info", {"type": "orderStatus", "user": account, "oid": cloid})
-                if isinstance(result, dict) and result.get("status") == "unknownOid":
-                    # A legacy explicit nonce rejection created no order. The
-                    # independent account/order snapshot below must ALSO be flat.
-                    continue
-            _, status = confirmed_client_order(info, account, cloid, symbols)
-            if status == "open":
-                raise RuntimeError("Placement still open; stop not confirmed")
+        # The account snapshot is the authority on residual risk. It must be
+        # read before the client ids: an order that never reached the exchange
+        # (429/timeout) can never resolve via orderStatus, and a flat snapshot
+        # proves there is no order or position left to worry about.
         rows = account_snapshot(info, account, symbols, spot=kind == "outcome",
                                 balances={s: "+" + s.lstrip("#") for s in symbols})
         if any(position or orders for _, position, orders in rows):
             raise RuntimeError("Residual orders/position; manual reconciliation required")
+        for cloid in record.get("pending_cloids", []):
+            try:
+                _, status = confirmed_client_order(info, account, cloid, symbols)
+            except RuntimeError as exc:
+                if "Placement still unconfirmed" in str(exc):
+                    # orderStatus has no record of this client id; the flat
+                    # snapshot above shows the placement never rested or filled.
+                    continue
+                raise
+            if status == "open":
+                raise RuntimeError("Placement still open; stop not confirmed")
         if record.get("funds_root"):
             from zeus.process_control import OutcomeFunds
             OutcomeFunds(record["funds_root"], account, record["session_id"]).resolve(record.get("pending_cloids", []))
