@@ -10,7 +10,12 @@ if [[ "$ROOT" != /home/ec2-user/zeusproject || $(id -un) != ec2-user ]]; then
   echo 'This deployment targets ec2-user and /home/ec2-user/zeusproject.' >&2; exit 1
 fi
 git diff --quiet && git diff --cached --quiet || { echo 'Commit or preserve local source changes first.' >&2; exit 1; }
-sudo -v
+# Validate an actual permitted command: sudo -v can prompt despite NOPASSWD
+# when the user's sudoers entries have different authentication tags.
+if ! sudo -n true; then
+  echo 'Administrator access is required. Run sudo -n id to diagnose access; no EC2 password is provided by this script.' >&2
+  exit 1
+fi
 source "$ROOT/deploy/workspace_python.sh"
 WORKSPACE_PYTHON=$(workspace_bootstrap_python)
 sudo systemctl is-active --quiet caddy || { echo 'Caddy must already serve the public HTTPS site.' >&2; exit 1; }
