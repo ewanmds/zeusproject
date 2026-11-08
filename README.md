@@ -9,7 +9,7 @@ On Windows, double-click [START-WORKSPACE.bat](START-WORKSPACE.bat).
 
 ```sh
 pip install -r requirements.txt
-npm install --prefix frontend/workspace
+npm ci --prefix frontend/workspace
 npm run build --prefix frontend/workspace
 python -m zeus.workspace
 ```

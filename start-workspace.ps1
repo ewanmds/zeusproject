@@ -4,7 +4,7 @@ Set-Location -LiteralPath $workspaceRoot
 $workspacePython = (Get-Command python -ErrorAction Stop).Source
 $workspaceOrigin = (& $workspacePython -c "import os; from dotenv import dotenv_values; c=dotenv_values('.env'); print(os.getenv('ZEUS_WORKSPACE_ORIGIN') or c.get('ZEUS_WORKSPACE_ORIGIN') or 'http://127.0.0.1:8081')").TrimEnd('/')
 if (-not (Test-Path -LiteralPath (Join-Path $workspaceRoot 'frontend/workspace/node_modules'))) {
-    & npm.cmd install --prefix frontend/workspace --no-fund --no-audit
+    & npm.cmd ci --prefix frontend/workspace --no-fund --no-audit
     if ($LASTEXITCODE -ne 0) { throw 'Workspace dependency installation failed.' }
 }
 & npm.cmd run build --prefix frontend/workspace
