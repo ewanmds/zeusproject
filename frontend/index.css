@@ -1369,7 +1369,7 @@ p { text-wrap: pretty; }
 button, input, select { -webkit-tap-highlight-color: transparent; }
 button:disabled { cursor: not-allowed; }
 .deck-header { grid-template-columns: minmax(200px, 1fr) auto minmax(360px, 1fr); }
-.topbar-actions { gap: 8px; }
+.topbar-actions { gap: 8px; flex-wrap: wrap; min-width: 0; }
 .nav-tab, .backend-btn { min-height: 40px; }
 .connection-pill.connected { color: var(--green); }
 .workspace > *, .dashboard, .panel-copy, .bot-stat { min-width: 0; }
@@ -1437,7 +1437,10 @@ html[data-input=keyboard] button:active { transform: none; }
   .toast-close:hover { color: var(--text); background: rgba(255, 255, 255, .06); }
   .btn:active:not(:disabled), .backend-btn:active:not(:disabled), .nav-tab:active { transform: scale(.96); }
 }
-@media (max-width: 1199px) {
+/* Below ~1440 px the three-column header cannot hold every control without
+   clipping the connection pill and the Verify stop button. Put the actions on
+   their own row instead. */
+@media (max-width: 1439px) {
   .deck-header { grid-template-columns: auto 1fr; height: auto; min-height: 76px; padding-block: 14px; gap: 12px; }
   .strategy-tabs { justify-self: end; }
   .topbar-actions { grid-column: 1 / -1; justify-self: stretch; justify-content: flex-end; }

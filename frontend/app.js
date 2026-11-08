@@ -1665,7 +1665,11 @@
             for (const key of ["volume_usd", "net_pnl", "fees", "cost_per_1m", "position_usd"]) set(key, bot.accounting_complete === false ? "—" : formatUSD(bot[key]));
             set("fills", bot.accounting_complete === false ? "—" : String(bot.fills || 0));
             const errors = [bot.error, bot.recovery_error, bot.cleanup_error].filter(Boolean);
-            set("error", [...new Set(errors.map(displayError)), bot.auto_rotation_reason,
+            // The worker often repeats the same placement error in `error` and
+            // `cleanup_error`; keep only the longest copy.
+            const mapped = [...new Set(errors.map(displayError))];
+            const unique = mapped.filter((text) => !mapped.some((other) => other !== text && other.includes(text)));
+            set("error", [...unique, bot.auto_rotation_reason,
                 !bot.error && !bot.recovery_error ? bot.blocked_reason || (bot.execution_state ? "" : bot.last_action || bot.status) : ""].filter(Boolean).join(" · "));
             field(card, "error").title = errors.join(" · ");
             card.classList.toggle("stopped", !bot.running);
