@@ -308,6 +308,8 @@ class MarketState:
     available_position: float = 0.0
     unrealized_pnl: float = 0.0
     avg_entry_px: float = 0.0
+    entry_basis_source: str = "unknown"
+    last_inventory_exit: Dict[str, Any] = field(default_factory=dict)
     drain_started_at: float = 0.0
     inventory_stop_until: float = 0.0
     margin_used: float = 0.0
@@ -629,6 +631,13 @@ class HyperliquidSpreadBot:
                 if (not self.running or self.safety.stopped.is_set()
                         or st.reconcile_required or st.position < 1.0):
                     return True
+                st.last_inventory_exit = {
+                    "requested_at": time.time(), "reason": reason,
+                    "entry_px": st.avg_entry_px or None,
+                    "entry_basis_source": st.entry_basis_source,
+                    "bid": st.bid, "ask": st.ask, "quantity": qty,
+                    "limit_px": px, "book_age_ms": max(0, time.time()-st.last_book_ts)*1000,
+                    "submission": "started"}
                 try:
                     result = self.exchange.order(
                         name=st.spec.symbol, is_buy=False, sz=qty,
@@ -637,12 +646,14 @@ class HyperliquidSpreadBot:
                         reduce_only=not self.cfg.worldcup,
                     )
                 except Exception as exc:
+                    st.last_inventory_exit['submission'] = 'unconfirmed'
                     st.last_error = safe_error(exc)
                     st.last_action = f"{reason}: exit error"
                     st.reconcile_required = True
                     st.pending_until = time.time() + 2.0
                     st.inventory_stop_until = time.time() + 5.0
                     return True
+                st.last_inventory_exit['submission'] = 'response_received'
                 self.stats.orders_sent += 1
                 self.stats.forced_exits += 1
                 st.inventory_stop_until = time.time() + 5.0
@@ -1324,17 +1335,23 @@ class HyperliquidSpreadBot:
                 # startPosition is the exchange-authoritative balance before
                 # this fill, so the average entry survives a concurrent sync.
                 before = safe_float(fill.get("startPosition"), state.position)
+                same_position = abs(state.position-before) < 1e-9
                 if side == "B" or direction in ("open long", "close short"):
                     if self.cfg.worldcup:
-                        if before <= 0 or state.avg_entry_px <= 0:
+                        if same_position and before <= 0:
                             state.avg_entry_px = px
-                        else:
+                            state.entry_basis_source = 'fills'
+                        elif same_position and state.avg_entry_px > 0:
                             state.avg_entry_px = (state.avg_entry_px * before + px * sz) / (before + sz)
-                    state.position = round_size(state.position + sz, state.spec.sz_decimals)
+                            state.entry_basis_source = 'fills'
+                        # If REST already includes this fill, retain its newer
+                        # entry basis. Reconciliation below precedes new orders.
+                    state.position = round_size(before + sz, state.spec.sz_decimals)
                 elif side in ("A", "S") or direction in ("open short", "close long"):
-                    state.position = round_size(state.position - sz, state.spec.sz_decimals)
+                    state.position = round_size(before - sz, state.spec.sz_decimals)
                     if self.cfg.worldcup and before - sz < 1.0:
                         state.avg_entry_px = 0.0
+                        state.entry_basis_source = 'unknown'
                         state.drain_started_at = 0.0
                 state.last_action = f"fill {side or '?'} {sz:g} @ {px:g}"
                 state.reconcile_required = True
@@ -1354,6 +1371,7 @@ class HyperliquidSpreadBot:
         parallel_orders = None
         parallel_read = False
         balances = None
+        entry_notionals = {}
         if self.cfg.worldcup:
             try:
                 reader = getattr(self, "account_reader", None)
@@ -1374,6 +1392,11 @@ class HyperliquidSpreadBot:
                     if total < 0 or hold < 0 or hold > total + 1e-9:
                         raise ValueError("Invalid spot balance or reservation")
                     available[coin] = max(0.0, total - hold)
+                    if 'entryNtl' in balance:
+                        entry = finite(balance['entryNtl'])
+                        if entry < 0:
+                            raise ValueError('Invalid spot entry notional')
+                        entry_notionals[coin] = entry
             except Exception as exc:
                 self._pause_execution(f"Account synchronization failed: {exc}")
                 return False
@@ -1410,7 +1433,11 @@ class HyperliquidSpreadBot:
                     state.margin_used = 0.0
                     if state.position < 1.0:
                         state.avg_entry_px = 0.0
+                        state.entry_basis_source = 'unknown'
                         state.drain_started_at = 0.0
+                    elif entry_notionals.get(state.spec.balance_coin, 0) > 0:
+                        state.avg_entry_px = entry_notionals[state.spec.balance_coin] / state.position
+                        state.entry_basis_source = 'exchange'
                 state.bid_oid = None
                 state.ask_oid = None
                 state.quoted_bid = 0.0
@@ -1450,6 +1477,8 @@ class HyperliquidSpreadBot:
             return "waiting bbo"
         if time.time() - st.last_book_ts > self.cfg.stale_sec:
             return f"stale feed {fmt_age(st.last_book_ts)}"
+        if self.cfg.worldcup and not closing_inventory and time.time() < st.inventory_stop_until:
+            return 'Inventory stop cooldown; new bids paused'
         if (self.cfg.auto_max_spread_bps is not None and not closing_inventory
                 and st.spread_bps > self.cfg.auto_max_spread_bps):
             return f"auto spread {st.spread_bps:.3f}bps > {self.cfg.auto_max_spread_bps:.3f}bps"
@@ -2208,6 +2237,15 @@ class HyperliquidSpreadBot:
                 "execution_state": execution_state,
                 "blocked_reason": blocked_reason,
                 "quotes": quotes,
+                "inventory_risk_context": [{
+                    "market": st.spec.symbol,
+                    "entry_px": st.avg_entry_px if st.avg_entry_px > 0 else None,
+                    "entry_basis_source": st.entry_basis_source,
+                    "entry_basis_known": st.position < 1 or st.avg_entry_px > 0,
+                    "cooldown_remaining_sec": max(0, st.inventory_stop_until-now),
+                    "last_forced_exit": dict(st.last_inventory_exit) or None,
+                } for st in self.states.values()] if self.cfg.worldcup else [],
+                "gross_closed_pnl": stats.gross_closed_pnl,
                 "orders_sent": stats.orders_sent,
                 "cancels_sent": stats.cancels_sent,
                 "rejected": stats.rejected,
