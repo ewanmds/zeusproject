@@ -71,7 +71,7 @@ class OutcomeSupervisor:
             selection = next((r for r in snapshot["candidates"] if r["market"] not in busy
                               and self.rotation.candidate_allowed(rotation_group, r["market"])), None)
             if not snapshot["ready"] or selection is None:
-                raise ValueError(snapshot.get('error') or "No eligible recent two-way flow covering fees. Wait for observation.")
+                raise ValueError(snapshot.get('error') or "No eligible recent two-way flow within the spread and depth limits. Wait for observation.")
             selected = selection["market"]
         if not selected or selected.upper() == "ALL":
             raise ValueError("Select a specific Outcome market: one process per market")

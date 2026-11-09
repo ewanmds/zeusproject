@@ -418,14 +418,10 @@ class HyperliquidSpreadBot:
         self.info = self._startup_read("SDK metadata", lambda: Info(
             cfg.base_url, skip_ws=True, perp_dexs=perp_dexs, timeout=10, **self._sdk_metadata))
         self.outcome_meta: Optional[Dict[str, Any]] = None
-        self.outcome_fee_scales = {}
         if cfg.worldcup:
             self.outcome_meta = self._startup_read("Outcome metadata", lambda: self.info.post(
                 "/info", {"type": "outcomeMeta"}))
             self.patch_outcome_assets(self.info, self.outcome_meta)
-            self.outcome_fee_scales = {
-                int(row['outcome']): (self.outcome_meta.get('feeScale'), row.get('deployerFeeScale'))
-                for row in self.outcome_meta.get('outcomes', []) if row.get('outcome') is not None}
         self.exchange: Optional[Exchange] = None
         self.wallet = None
         if cfg.live:
@@ -1482,26 +1478,6 @@ class HyperliquidSpreadBot:
         if (self.cfg.auto_max_spread_bps is not None and not closing_inventory
                 and st.spread_bps > self.cfg.auto_max_spread_bps):
             return f"auto spread {st.spread_bps:.3f}bps > {self.cfg.auto_max_spread_bps:.3f}bps"
-        if self.cfg.worldcup and self.cfg.is_maker and self.cfg.auto_max_spread_bps is not None and not closing_inventory:
-            from zeus.outcome_costs import maker_profile, closing_rate, net_edge_bps, MIN_NET_EDGE_BPS
-            base = maker_profile(self.cfg.account_address)
-            if base is None:
-                return 'Account fees unavailable; new bids paused'
-            try:
-                scales = self.outcome_fee_scales[int(st.spec.symbol[1:])//10]
-                rate = closing_rate(base, *scales)
-                bid, ask = self.maker_quote_px(st, True), self.maker_quote_px(st, False)
-                # Queue-preserved residuals still execute at their accepted
-                # price. Never justify them using a more favorable new BBO.
-                if st.bid_oid and st.quoted_bid > 0:
-                    bid = max(bid, st.quoted_bid)
-                if st.ask_oid and st.quoted_ask > 0:
-                    ask = min(ask, st.quoted_ask)
-                edge = net_edge_bps(bid, ask, rate)
-            except (ValueError, TypeError, KeyError, AttributeError):
-                return 'Outcome fees unavailable; new bids paused'
-            if edge < MIN_NET_EDGE_BPS:
-                return f'Net touch edge {edge:.2f}bps < {MIN_NET_EDGE_BPS:g}bp after fees'
         # Le gate de spread protège le TAKER (croiser un spread large coûte cher).
         # En maker on ne croise jamais: un spread large est au contraire le
         # moment où la quote passive capture le plus.
@@ -2288,10 +2264,6 @@ class HyperliquidSpreadBot:
         if st.ask_oid:
             return "Ask working", risk or ""
         if risk:
-            if risk.startswith('Net touch edge'):
-                return 'Fees exceed spread', risk
-            if risk.startswith(('Account fees unavailable', 'Outcome fees unavailable')):
-                return 'Fees unavailable', risk
             return "Spread too wide" if risk.startswith(("auto spread", "spread ")) else "Risk paused", risk
         if st.position > 0 and self.cfg.full_size_quotes and st.position*st.ask < self.cfg.min_order_usd:
             return "Building inventory", "Waiting for enough tokens for a full-size ask"

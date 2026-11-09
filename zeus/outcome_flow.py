@@ -339,8 +339,6 @@ class OutcomeFlowScanner:
             rows = dict(self.rows)
         if not ready:
             return status
-        if base_rate is None:
-            return {**status, "error": "Account fees unavailable; new entries paused"}
         shortlist = []
         for coin, trades in history.items():
             row = rows.get(int(coin[1:])//10)
@@ -360,7 +358,8 @@ class OutcomeFlowScanner:
         with self.book_lock:
             books = list(pool.map(self._book, [r["market"] for r in targets]))
         candidates = []
-        cost_rejected = 0
+        fees_not_covered = 0
+        cost_unavailable = 0
         for item, book in zip(targets, books):
             try:
                 bids, asks = book["levels"]
@@ -383,11 +382,13 @@ class OutcomeFlowScanner:
                 try:
                     item.update(candidate_cost(item, base_rate))
                 except (ValueError, TypeError, KeyError):
-                    cost_rejected += 1
-                    continue
-                if not item['cost_eligible']:
-                    cost_rejected += 1
-                    continue
+                    item.update(maker_close_fee_bps=None, net_touch_edge_bps=None,
+                                fees_covered=None, cost_status='unavailable')
+                    cost_unavailable += 1
+                else:
+                    fees_not_covered += not item['fees_covered']
+                # Cost is informational in volume mode. Neither a negative
+                # estimate nor unavailable fee metadata rejects eligible flow.
                 item["score"] /= (1+max(wait_buy, wait_sell)/60)*(1+spread/10)
                 candidates.append(item)
             except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
@@ -405,8 +406,8 @@ class OutcomeFlowScanner:
         for row in candidates:
             row['last_trade_age_sec'] += completed-now
         return {**status, "ready": bool(candidates), "warming_up": False, "candidates": candidates,
-                "cost_rejected": cost_rejected,
-                "error": "Spreads do not cover fees + 1bp" if not candidates and cost_rejected else status['error'],
+                "fees_not_covered": fees_not_covered, "cost_unavailable": cost_unavailable,
+                "cost_policy": "informational",
                 "updated_at": completed, "ranking": "queue_proxy_sec",
                 "flow_candidates": len(shortlist), "books_checked": len(books)}
 

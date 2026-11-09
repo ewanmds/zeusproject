@@ -10,7 +10,6 @@ import time
 
 import requests
 
-MIN_NET_EDGE_BPS = 1.0
 _profiles = {}
 _pending = set()
 _retry_at = {}
@@ -62,7 +61,7 @@ def _refresh(account):
         with _lock:
             _profiles[account] = (time.monotonic(), rate)
     except (requests.RequestException, ValueError, KeyError, TypeError):
-        pass  # Expired/unknown fees block new entries, never position exits.
+        pass  # Expired/unknown fees make estimates unavailable, never block Auto.
     finally:
         with _lock:
             _pending.discard(account)
@@ -92,4 +91,4 @@ def candidate_cost(candidate, base_rate):
     rate = closing_rate(base_rate, candidate['fee_scale'], candidate['deployer_fee_scale'])
     edge = net_edge_bps(candidate['bid'], candidate['ask'], rate)
     return {'maker_close_fee_bps': rate*10000, 'net_touch_edge_bps': edge,
-            'cost_eligible': edge >= MIN_NET_EDGE_BPS}
+            'fees_covered': edge >= 0, 'cost_status': 'estimated'}

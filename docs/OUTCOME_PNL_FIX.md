@@ -1,5 +1,12 @@
 # Diagnostic Outcome — 9 novembre 2026
 
+**Révision du 9 novembre :** le seuil de frais + 1 bp décrit ci-dessous a
+été retiré à la demande de l'utilisateur, car il empêchait le mode volume de
+démarrer. Les frais et le net théorique restent informatifs dans le scanner,
+y compris lorsque les frais sont indisponibles. Les limites de spread,
+profondeur, fraîcheur, fonds, inventaire et les stops restent actifs.
+La partie « Correction » ci-dessous conserve l'historique du premier patch.
+
 Les 13 fills publics correspondant exactement à la capture ont été rapprochés
 avec les champs `px`, `sz`, `closedPnl`, `fee` et `crossed` de Hyperliquid.
 Le nom de la carte désigne le marché actif ; les chiffres couvrent aussi les

@@ -333,11 +333,7 @@ export function RunView({
               </div>
               {!scanner?.ready && scanner?.error && (
                 <InlineAlert tone="warning">
-                  {scanner.error === "Spreads do not cover fees + 1bp"
-                    ? "Aucun spread ne couvre les frais + 1 bp."
-                    : scanner.error === "Account fees unavailable; new entries paused"
-                      ? "Vérification des frais du compte…"
-                      : "Scanner indisponible."}
+                  Scanner indisponible.
                 </InlineAlert>
               )}
               {!!scanner?.candidates?.length && (
@@ -392,6 +388,7 @@ export function RunView({
                 estimation ; elle ne garantit pas l’exécution d’un ordre.
                 Le net estimé déduit les frais de clôture du spread ; il ne
                 prévoit pas les variations de prix après l’entrée.
+                Cette estimation ne bloque pas le lancement Auto.
               </RichPopover>
             </div>
           )}

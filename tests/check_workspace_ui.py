@@ -81,7 +81,7 @@ def main():
                         if call.request.url.startswith(origin+'/api/v2/markets'):
                             call.fulfill(json={'tokens':[{'key':'IO_SNDK','symbol':'io:SNDK'},{'key':'SP500','symbol':'xyz:SP500'}]});return
                         if call.request.url.startswith(origin+'/api/v2/scanner'):
-                            call.fulfill(json={'ready':True,'candidates':[{'market':'#101','name':'Test market','queue_proxy_sec':20,'spread_bps':9,'volume_usd_1m':550,'net_touch_edge_bps':1.2,'maker_close_fee_bps':7.68}]});return
+                            call.fulfill(json={'ready':True,'cost_policy':'informational','candidates':[{'market':'#101','name':'Test market','queue_proxy_sec':20,'spread_bps':.26,'volume_usd_1m':550,'net_touch_edge_bps':-7.42,'maker_close_fee_bps':7.68,'fees_covered':False}]});return
                         if not call.request.url.startswith(origin):call.abort();return
                         call.continue_()
                     page.route('**/*',route)
@@ -162,7 +162,7 @@ def main():
                     page.get_by_role('textbox',name='Rechercher un marché',exact=True).fill('')
                     page.locator('.strategy-card').filter(has_text='Auto Outcome').click()
                     expect(page.get_by_role('columnheader',name='Net estimé',exact=True)).to_be_visible()
-                    expect(page.get_by_role('cell',name='1.20 bps',exact=True)).to_be_visible()
+                    expect(page.get_by_role('cell',name='-7.42 bps',exact=True)).to_be_visible()
                     page.get_by_text('Options de session',exact=True).click()
                     page.get_by_role('button',name='Durée',exact=True).click()
                     page.get_by_label('Durée · minutes').fill('15')
