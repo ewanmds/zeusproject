@@ -257,6 +257,12 @@ class BotConfig:
     market_label: str = ""
     rotation_file: Optional[str] = None
     risk_pnl_carry: float = 0.0
+    # Hard inventory guards (Outcome): a position that moves against its
+    # average entry, or a drain that cannot go flat, is exited with a bounded
+    # IOC instead of waiting for a passive ask indefinitely.
+    inventory_stop_bps: float = 200.0
+    inventory_drain_timeout_sec: float = 90.0
+    inventory_exit_slippage_bps: float = 50.0
     safety_file: Optional[str] = None
     stop_file: Optional[str] = None
     funds_root: Optional[str] = None
@@ -301,6 +307,9 @@ class MarketState:
     position: float = 0.0
     available_position: float = 0.0
     unrealized_pnl: float = 0.0
+    avg_entry_px: float = 0.0
+    drain_started_at: float = 0.0
+    inventory_stop_until: float = 0.0
     margin_used: float = 0.0
     last_action: str = "waiting"
     last_error: str = ""
@@ -351,6 +360,7 @@ class SessionStats:
     rejected: int = 0
     orders_sent: int = 0
     cancels_sent: int = 0
+    forced_exits: int = 0
 
     @property
     def net_pnl(self) -> float:
@@ -535,6 +545,121 @@ class HyperliquidSpreadBot:
             except Exception as exc:
                 st.last_error = str(exc)[:120]
                 st.last_action = "liquidate error"
+
+    def inventory_risk_reason(self, st: MarketState, now: Optional[float] = None) -> Optional[str]:
+        """Hard-exit trigger for held Outcome inventory (long-only spot tokens).
+
+        Two independent guards:
+        - mark-to-market loss versus the average entry price (adverse move);
+        - a bounded drain timeout, so a rotation can never wait indefinitely
+          for a passive ask while the market runs away.
+        """
+        if not self.cfg.worldcup:
+            return None
+        if st.position < 1.0:
+            st.drain_started_at = 0.0
+            return None
+        if self.cfg.stop_file and os.path.exists(self.cfg.stop_file):
+            return None  # Stop/shutdown cleanup owns the close, including taker.
+        now = time.time() if now is None else now
+        if now < st.inventory_stop_until:
+            return None
+        if not st.has_bbo or now - st.last_book_ts > self.cfg.stale_sec:
+            return None
+        mark = st.mid if st.mid > 0 else st.bid
+        notional = st.position * mark
+        if notional >= 2.0 and st.avg_entry_px > 0 and mark > 0:
+            loss_bps = (st.avg_entry_px - mark) / st.avg_entry_px * 10_000.0
+            if loss_bps >= self.cfg.inventory_stop_bps:
+                return (f"inventory stop {loss_bps:.0f}bps >= "
+                        f"{self.cfg.inventory_stop_bps:.0f}bps")
+        if not self.rotation_requested():
+            st.drain_started_at = 0.0
+            return None
+        if st.drain_started_at <= 0:
+            st.drain_started_at = now
+        elif now - st.drain_started_at >= self.cfg.inventory_drain_timeout_sec:
+            return (f"drain timeout {now - st.drain_started_at:.0f}s >= "
+                    f"{self.cfg.inventory_drain_timeout_sec:.0f}s")
+        return None
+
+    def enforce_inventory_stop(self, st: MarketState) -> bool:
+        """Flatten Outcome inventory with a bounded IOC when the guard trips.
+
+        This is the deliberate risk exception to maker-only execution: cancel
+        the resting quotes, re-sync balances, then sell the whole position with
+        an IOC limit below the touch. Normal maker/drain paths are unchanged.
+        """
+        if not self.cfg.live or self.exchange is None or not self.running:
+            return False
+        if self.safety.stopped.is_set() or self.safety.phase == "recovering":
+            return False
+        reason = self.inventory_risk_reason(st)
+        if reason is None:
+            return False
+        if st.reconcile_required or time.time() < st.pending_until:
+            st.last_action = f"{reason}: waiting for reconciliation"
+            return True
+        with self.safety.lock, (self.funds.transaction() if getattr(self, "funds", None) else nullcontext()):
+            # An IOC must never race a resting ask: cancel both sides first.
+            self.cancel_all("inventory stop", [st.spec.symbol])
+            if st.bid_oid or st.ask_oid:
+                st.last_action = f"{reason}: cancel pending"
+                return True
+            if not self.sync_account():
+                st.last_action = f"{reason}: account sync failed"
+                return True
+            qty = float(math.floor(max(0.0, st.position)))
+            ref = st.bid if st.bid > 0 else st.mid
+            if qty < 1.0:
+                st.drain_started_at = 0.0
+                st.last_action = "inventory stop: already flat"
+                return True
+            if ref <= 0:
+                st.last_action = f"{reason}: no bid"
+                return True
+            slip = max(self.cfg.inventory_exit_slippage_bps / 10_000.0,
+                       self.cfg.market_slippage_bps / 10_000.0, 0.002)
+            px = round_outcome_sell_px(ref * (1.0 - slip))
+            with self.lock:
+                if (not self.running or self.safety.stopped.is_set()
+                        or st.reconcile_required or st.position < 1.0):
+                    return True
+                try:
+                    result = self.exchange.order(
+                        name=st.spec.symbol, is_buy=False, sz=qty,
+                        limit_px=round_px_wire(px),
+                        order_type={"limit": {"tif": "Ioc"}},
+                        reduce_only=not self.cfg.worldcup,
+                    )
+                except Exception as exc:
+                    st.last_error = safe_error(exc)
+                    st.last_action = f"{reason}: exit error"
+                    st.reconcile_required = True
+                    st.pending_until = time.time() + 2.0
+                    st.inventory_stop_until = time.time() + 5.0
+                    return True
+                self.stats.orders_sent += 1
+                self.stats.forced_exits += 1
+                st.inventory_stop_until = time.time() + 5.0
+                st.pending_until = time.time() + 0.35
+                st.reconcile_required = True
+                self.account_revision = getattr(self, "account_revision", 0) + 1
+                try:
+                    self._parse_order_response(
+                        st,
+                        [{"coin": st.spec.symbol, "is_buy": False, "sz": qty,
+                          "limit_px": px}],
+                        result,
+                    )
+                except Exception as exc:
+                    # The order is already on the wire; never report it as a
+                    # failed exit. The next account sync resolves the fill.
+                    st.last_error = safe_error(exc)
+                    st.last_action = f"{reason}: sent, awaiting sync"
+                else:
+                    st.last_action = f"{reason}: {st.last_action}"
+                return True
 
     def _halt(self):
         self.running = False
@@ -1192,10 +1317,21 @@ class HyperliquidSpreadBot:
 
                 side = str(fill.get("side", "")).upper()
                 direction = str(fill.get("dir", "")).lower()
+                # startPosition is the exchange-authoritative balance before
+                # this fill, so the average entry survives a concurrent sync.
+                before = safe_float(fill.get("startPosition"), state.position)
                 if side == "B" or direction in ("open long", "close short"):
+                    if self.cfg.worldcup:
+                        if before <= 0 or state.avg_entry_px <= 0:
+                            state.avg_entry_px = px
+                        else:
+                            state.avg_entry_px = (state.avg_entry_px * before + px * sz) / (before + sz)
                     state.position = round_size(state.position + sz, state.spec.sz_decimals)
                 elif side in ("A", "S") or direction in ("open short", "close long"):
                     state.position = round_size(state.position - sz, state.spec.sz_decimals)
+                    if self.cfg.worldcup and before - sz < 1.0:
+                        state.avg_entry_px = 0.0
+                        state.drain_started_at = 0.0
                 state.last_action = f"fill {side or '?'} {sz:g} @ {px:g}"
                 state.reconcile_required = True
                 changed = True
@@ -1268,6 +1404,9 @@ class HyperliquidSpreadBot:
                     state.position = finite(bal["total"]) if bal else 0.0
                     state.available_position = available.get(state.spec.balance_coin, 0.0)
                     state.margin_used = 0.0
+                    if state.position < 1.0:
+                        state.avg_entry_px = 0.0
+                        state.drain_started_at = 0.0
                 state.bid_oid = None
                 state.ask_oid = None
                 state.quoted_bid = 0.0
@@ -1949,6 +2088,8 @@ class HyperliquidSpreadBot:
                     for st in states:
                         if not self.running:
                             break
+                        if self.enforce_inventory_stop(st):
+                            continue
                         self.place_or_requote(st)
                     self.finish_rotation_if_flat()
                 if live is not None:
@@ -2046,6 +2187,7 @@ class HyperliquidSpreadBot:
                 "orders_sent": stats.orders_sent,
                 "cancels_sent": stats.cancels_sent,
                 "rejected": stats.rejected,
+                "forced_exits": stats.forced_exits,
                 "last_fill_at": getattr(self, "last_fill_at", 0),
                 "account_sync_ms": getattr(self, "account_sync_ms", 0),
                 "account_age_ms": max(0, now-self.account_synced_at)*1000 if getattr(self, "account_synced_at", 0) else None,
@@ -2067,6 +2209,8 @@ class HyperliquidSpreadBot:
     def execution_status(self, st):
         if st is None:
             return "Starting", ""
+        if st.inventory_stop_until > time.time():
+            return "Inventory stop", st.last_action
         if self.safety.phase == "recovering" or st.reconcile_required:
             return "Reconciling", ""
         if not st.has_bbo or time.time()-st.last_book_ts > self.cfg.stale_sec:

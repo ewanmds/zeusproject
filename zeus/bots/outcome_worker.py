@@ -1,6 +1,5 @@
 """One supervised Outcome market per OS process. Importing never starts a bot."""
 import argparse
-import json
 import os
 from pathlib import Path
 import threading
@@ -46,6 +45,9 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         market_label=(public.get('auto_selection') or {}).get('name', ''),
         rotation_file=str(Path(stop_file).with_name("drain.json")) if stop_file else None,
         risk_pnl_carry=public.get("rotation_pnl_carry", 0),
+        inventory_stop_bps=min(500.0, max(50.0, float(public.get("inventory_stop_bps") or 200))),
+        inventory_drain_timeout_sec=min(600.0, max(15.0, float(public.get("inventory_drain_timeout_sec") or 90))),
+        inventory_exit_slippage_bps=min(200.0, max(20.0, float(public.get("inventory_exit_slippage_bps") or 50))),
         stop_file=str(stop_file) if stop_file else None,
         funds_root=str(funds_root) if funds_root else None,
     )

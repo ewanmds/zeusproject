@@ -126,6 +126,9 @@ class WorldcupStartRequest(BaseModel):
     target_volume_usd: Optional[float] = Field(default=None, ge=10, allow_inf_nan=False)
     session_volume_carry: float = Field(default=0, ge=0, allow_inf_nan=False)
     session_stop_loss_usd: float = Field(default=50, gt=0, allow_inf_nan=False)
+    # Inventory guards: cut a losing position, or a drain that cannot go flat.
+    inventory_stop_bps: float = Field(default=200, ge=50, le=500, allow_inf_nan=False)
+    inventory_drain_timeout_sec: float = Field(default=90, ge=15, le=600, allow_inf_nan=False)
     selection_mode: Literal["manual", "auto"] = "manual"
     auto_max_spread_bps: float = Field(default=10, gt=0, le=100, allow_inf_nan=False)
     two_sided: bool = False

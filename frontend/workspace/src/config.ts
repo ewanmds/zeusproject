@@ -60,6 +60,7 @@ export const stateText: Record<string, string> = {
   "Waiting for book": "Attente du carnet",
   "Waiting to quote": "Attente de cotation",
   "Spread too wide": "Spread trop large",
+  "Inventory stop": "Stop inventaire",
   "Draining inventory": "Sortie de position",
   "Building inventory": "Inventaire en cours",
   Rotating: "Changement de marché",
