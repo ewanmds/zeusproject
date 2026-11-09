@@ -1,7 +1,6 @@
 """Targets preserve maker exits and survive rotations; no real orders."""
 import tempfile
 import time
-import threading
 from pathlib import Path
 from types import SimpleNamespace
 import unittest

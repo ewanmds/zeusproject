@@ -1,5 +1,4 @@
 """Tenant-owned managers and public read projections. No global env mutation."""
-import json
 import math
 import os
 from pathlib import Path

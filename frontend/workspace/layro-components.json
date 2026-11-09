@@ -1,0 +1,254 @@
+{
+  "date": "2026-11-09",
+  "components": [
+    {
+      "id": "magicuidesign/dock",
+      "url": "https://layro.dev/@magicuidesign/dock",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/layout.tsx",
+      "component": "NavDock"
+    },
+    {
+      "id": "preetsuthar17/tabs",
+      "url": "https://layro.dev/@preetsuthar17/tabs",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/layout.tsx",
+      "component": "DetailTabs"
+    },
+    {
+      "id": "educlopez/user-account-avatar",
+      "url": "https://layro.dev/@educlopez/user-account-avatar",
+      "version": "1.0.1",
+      "license": "MIT",
+      "file": "src/components/workspace/WalletPanel.tsx",
+      "component": "AccountAvatar"
+    },
+    {
+      "id": "educlopez/wallet-card",
+      "url": "https://layro.dev/@educlopez/wallet-card",
+      "version": "1.0.1",
+      "license": "MIT",
+      "file": "src/components/workspace/WalletPanel.tsx",
+      "component": "WalletCard"
+    },
+    {
+      "id": "kokonut-labs/profile-dropdown",
+      "url": "https://layro.dev/@kokonut-labs/profile-dropdown",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/workspace/WalletPanel.tsx",
+      "component": "ProfileDropdown"
+    },
+    {
+      "id": "preetsuthar17/button",
+      "url": "https://layro.dev/@preetsuthar17/button",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/FeedbackButton.tsx",
+      "component": "FeedbackButton"
+    },
+    {
+      "id": "nolly-studio/halo-input",
+      "url": "https://layro.dev/@nolly-studio/halo-input",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/fields.tsx",
+      "component": "HaloInput"
+    },
+    {
+      "id": "preetsuthar17/select",
+      "url": "https://layro.dev/@preetsuthar17/select",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/fields.tsx",
+      "component": "MarketSelect"
+    },
+    {
+      "id": "nolly-studio/halo-toggle-group",
+      "url": "https://layro.dev/@nolly-studio/halo-toggle-group",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/SegmentedControl.tsx",
+      "component": "SegmentedControl"
+    },
+    {
+      "id": "preetsuthar17/switch",
+      "url": "https://layro.dev/@preetsuthar17/switch",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/fields.tsx",
+      "component": "ViewSwitch"
+    },
+    {
+      "id": "educlopez/animated-stepper",
+      "url": "https://layro.dev/@educlopez/animated-stepper",
+      "version": "1.0.1",
+      "license": "MIT",
+      "file": "src/components/layout.tsx",
+      "component": "SessionStepper"
+    },
+    {
+      "id": "preetsuthar17/alert-dialog",
+      "url": "https://layro.dev/@preetsuthar17/alert-dialog",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/Dialog.tsx",
+      "component": "AlertDialog"
+    },
+    {
+      "id": "educlopez/dialog",
+      "url": "https://layro.dev/@educlopez/dialog",
+      "version": "1.0.1",
+      "license": "MIT",
+      "file": "src/components/Dialog.tsx",
+      "component": "Dialog"
+    },
+    {
+      "id": "preetsuthar17/sheet",
+      "url": "https://layro.dev/@preetsuthar17/sheet",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/Dialog.tsx",
+      "component": "Sheet"
+    },
+    {
+      "id": "ncdai/apple-accordion",
+      "url": "https://layro.dev/@ncdai/apple-accordion",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/Dialog.tsx",
+      "component": "ResponsiveOptions"
+    },
+    {
+      "id": "shadcnblocks/status",
+      "url": "https://layro.dev/@shadcnblocks/status",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/StatusBadge.tsx",
+      "component": "StatusBadge"
+    },
+    {
+      "id": "educlopez/alert",
+      "url": "https://layro.dev/@educlopez/alert",
+      "version": "1.0.1",
+      "license": "MIT",
+      "file": "src/components/feedback.tsx",
+      "component": "InlineAlert"
+    },
+    {
+      "id": "nolly-studio/halo-notification",
+      "url": "https://layro.dev/@nolly-studio/halo-notification",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/feedback.tsx",
+      "component": "Notification"
+    },
+    {
+      "id": "preetsuthar17/skeleton",
+      "url": "https://layro.dev/@preetsuthar17/skeleton",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/feedback.tsx",
+      "component": "Skeleton"
+    },
+    {
+      "id": "preetsuthar17/empty",
+      "url": "https://layro.dev/@preetsuthar17/empty",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/feedback.tsx",
+      "component": "Empty"
+    },
+    {
+      "id": "educlopez/stats-2",
+      "url": "https://layro.dev/@educlopez/stats-2",
+      "version": "1.0.1",
+      "license": "MIT",
+      "file": "src/components/feedback.tsx",
+      "component": "StatsGrid"
+    },
+    {
+      "id": "preetsuthar17/table",
+      "url": "https://layro.dev/@preetsuthar17/table",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/DataTable.tsx",
+      "component": "DataTable"
+    },
+    {
+      "id": "legions-developer/recharts-bar-chart",
+      "url": "https://layro.dev/@legions-developer/recharts-bar-chart",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/workspace/PerformanceCharts.tsx",
+      "component": "PerformanceCharts (bar)"
+    },
+    {
+      "id": "legions-developer/recharts-pie-chart",
+      "url": "https://layro.dev/@legions-developer/recharts-pie-chart",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/workspace/PerformanceCharts.tsx",
+      "component": "PerformanceCharts (pie)"
+    },
+    {
+      "id": "educlopez/rich-popover",
+      "url": "https://layro.dev/@educlopez/rich-popover",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/fields.tsx",
+      "component": "RichPopover"
+    },
+    {
+      "id": "xxtomm/keyboard-shortcuts",
+      "url": "https://layro.dev/@xxtomm/keyboard-shortcuts",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/fields.tsx",
+      "component": "Kbd"
+    },
+    {
+      "id": "preetsuthar17/scroll-area",
+      "url": "https://layro.dev/@preetsuthar17/scroll-area",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/layout.tsx",
+      "component": "ScrollArea"
+    },
+    {
+      "id": "nolly-studio/halo-progress",
+      "url": "https://layro.dev/@nolly-studio/halo-progress",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/SessionProgress.tsx",
+      "component": "SessionProgress"
+    },
+    {
+      "id": "turbostarter/fade-arc",
+      "url": "https://layro.dev/@turbostarter/fade-arc",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/feedback.tsx",
+      "component": "ArcLoader"
+    },
+    {
+      "id": "nolly-studio/halo-field",
+      "url": "https://layro.dev/@nolly-studio/halo-field",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/fields.tsx",
+      "component": "HaloField"
+    },
+    {
+      "id": "kokonut-labs/ai-input-search",
+      "url": "https://layro.dev/@kokonut-labs/ai-input-search",
+      "version": "1.0.0",
+      "license": "MIT",
+      "file": "src/components/workspace/GlobalSearch.tsx",
+      "component": "GlobalSearch"
+    }
+  ]
+}
+

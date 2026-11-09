@@ -1,15 +1,24 @@
 import { strategies, nav, initial } from "./config";
 import { RunView } from "./views/RunView";
 import { SessionsView } from "./views/SessionsView";
-import { PerformanceView } from "./views/PerformanceView";
+
 import { AccountView } from "./views/AccountView";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api, usd, short, clock } from "./data";
 import { useWorkspace } from "./useWorkspace";
 import { signAgentApproval } from "./authorization";
-import { Icon, Modal, Empty, Pending } from "./ui";
+import { Icon, Modal, Pending } from "./ui";
+import { FeedbackButton } from "./components/FeedbackButton";
 import type { Draft, View, Session, Agent, Operation } from "./types";
+import { NavDock } from "./components/layout";
+import { Kbd } from "./components/fields";
+import { AlertDialog, useMobile } from "./components/Dialog";
+import { InlineAlert, Notification, Skeleton } from "./components/feedback";
+import { ProfileDropdown } from "./components/workspace/WalletPanel";
+import { GlobalSearch } from "./components/workspace/GlobalSearch";
+import { SessionDetails } from "./components/workspace/SessionDetails";
 
+const PerformanceView = lazy(() => import("./views/PerformanceView").then((module) => ({ default: module.PerformanceView })));
 export default function App() {
   const w = useWorkspace();
   const [view, setView] = useState<View>(
@@ -31,6 +40,9 @@ export default function App() {
   const [filter, setFilter] = useState("active"),
     [period, setPeriod] = useState(7),
     [now, setNow] = useState(Date.now());
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [actionErrors, setActionErrors] = useState({ run: "", account: "", stop: "" });
+  const mobile = useMobile();
   const operation = useRef<string | null>(null);
   const [pendingOperation, setPendingOperation] = useState<Operation | null>(
     null,
@@ -66,6 +78,9 @@ export default function App() {
     });
   }
   useEffect(() => {
+    setSearchOpen(false);
+    setNotice("");
+    setActionErrors({ run: "", account: "", stop: "" });
     setReview(null);
     setSelected(null);
     setStop(null);
@@ -132,7 +147,23 @@ export default function App() {
       clearInterval(timer);
     };
   }, [owner, draft.strategy, draft.side, draft.order_usd, draft.spread_bps]);
+  useEffect(() => {
+    let prefix = 0;
+    const keyboard = (event: KeyboardEvent) => {
+      const element = event.target as HTMLElement;
+      if (element.closest("input, textarea, select, [contenteditable=true], [role=combobox]") || event.metaKey || event.ctrlKey || event.altKey || document.querySelector("dialog[open]")) return;
+      if (event.key === "/") { event.preventDefault(); setSearchOpen(true); }
+      if (Date.now() - prefix < 900) {
+        const target = ({ l: "run", s: "sessions", p: "performance", c: "account" } as Record<string, View>)[event.key];
+        if (target) { event.preventDefault(); navigate(target); }
+      }
+      prefix = event.key === "g" ? Date.now() : 0;
+    };
+    window.addEventListener("keydown", keyboard);
+    return () => window.removeEventListener("keydown", keyboard);
+  }, []);
   const update = (key: keyof Draft, value: string | number | null) => {
+    setActionErrors((old) => ({ ...old, run: "" }));
     setDraft((old) => ({ ...old, [key]: value }));
     setReview(null);
     setNotice("");
@@ -167,6 +198,7 @@ export default function App() {
       return;
     }
     setBusy("agent");
+    setActionErrors((old) => ({ ...old, account: "" }));
     setNotice("");
     try {
       let provider = w.provider.current;
@@ -194,11 +226,11 @@ export default function App() {
           : "Autorisation envoyée, confirmation en attente. Actualisez le statut du compte.",
       );
     } catch (e: any) {
-      setNotice(
+      setActionErrors((old) => ({ ...old, account: (
         e.code === 4001
           ? "Autorisation refusée. Aucun bot lancé."
-          : e.message || "Autorisation non confirmée. Vérifiez le compte.",
-      );
+          : e.message || "Autorisation non confirmée. Vérifiez le compte."
+      ) }));
     } finally {
       setBusy("");
     }
@@ -213,11 +245,12 @@ export default function App() {
       return;
     }
     setBusy("preview");
+    setActionErrors((old) => ({ ...old, run: "" }));
     setNotice("");
     try {
       setReview(await api("/sessions/preview", draft));
     } catch (e: any) {
-      setNotice(e.message);
+      setActionErrors((old) => ({ ...old, run: e.message }));
     } finally {
       setBusy("");
     }
@@ -283,6 +316,7 @@ export default function App() {
   const stopSession = async () => {
     if (!stop) return;
     setBusy("stop");
+    setActionErrors((old) => ({ ...old, stop: "" }));
     try {
       await api("/sessions/" + encodeURIComponent(stop.id) + "/stop", {});
       setStop(null);
@@ -290,7 +324,7 @@ export default function App() {
       setNotice("Arrêt vérifié.");
       w.refresh();
     } catch (e: any) {
-      setNotice(e.message);
+      setActionErrors((old) => ({ ...old, stop: e.message }));
       w.refresh();
     } finally {
       setBusy("");
@@ -313,7 +347,7 @@ export default function App() {
     (s) => s.started >= now / 1000 - period * 86400,
   );
   const sum = (field: "volume_usd" | "fees" | "net_pnl" | "fills") =>
-    history.every((s) => s.accounting_complete)
+    w.snapshot && history.every((s) => s.accounting_complete && s[field] != null)
       ? history.reduce((n, s) => n + (s[field] || 0), 0)
       : null;
   const volume = sum("volume_usd"),
@@ -336,6 +370,8 @@ export default function App() {
     busy,
     navigate,
     setShowHelp,
+    actionError: view === "account" ? actionErrors.account : actionErrors.run,
+    loading: !!owner && !w.snapshot,
     metrics,
     stale,
     filtered,
@@ -370,22 +406,7 @@ export default function App() {
             Zeus<span className="brand-sub">TRADING WORKSPACE</span>
           </span>
         </a>
-        <nav className="nav" aria-label="Navigation principale">
-          {nav.map((n) => (
-            <a
-              key={n.id}
-              href={"#" + n.id}
-              className={view === n.id ? "active" : ""}
-              aria-current={view === n.id ? "page" : undefined}
-            >
-              <Icon name={n.icon} size={17} />
-              {n.name}
-              {n.id === "sessions" && !!metrics?.active && (
-                <span className="count">{metrics.active}</span>
-              )}
-            </a>
-          ))}
-        </nav>
+        <NavDock view={view} active={metrics?.active || 0} />
         <div className="header-actions">
           <button
             className={"live " + (owner && !stale ? "is-live" : "")}
@@ -401,35 +422,14 @@ export default function App() {
                   : "Actualisation"
               : "Mainnet"}
           </button>
-          <button
-            className={
-              "button " + (owner ? "wallet-connected" : "primary compact")
-            }
-            onClick={() => (owner ? navigate("account") : setWalletModal(true))}
-          >
-            <Icon name="wallet" size={17} />
-            {owner ? short(owner) : "Connecter"}
-            {owner && <span className="wallet-dot" />}
-          </button>
+          <button className="icon-btn search-launch" aria-label="Ouvrir la recherche" onClick={() => setSearchOpen(true)}><Icon name="search" size={19} /><Kbd>/</Kbd></button>
+          {owner ? <ProfileDropdown address={owner} onAccount={() => navigate("account")} onLogout={w.logout} notify={setNotice} /> :
+            <button className="button primary compact" onClick={() => setWalletModal(true)}><Icon name="wallet" size={17} />Connecter</button>}
+
         </div>
       </header>
-      <main id="main" className="main">
-        {(w.error || notice) && (
-          <div className="message" role="status">
-            <Icon name="info" size={17} />
-            <span>{notice || w.error}</span>
-            <button
-              className="icon-btn"
-              aria-label="Fermer le message"
-              onClick={() => {
-                setNotice("");
-                w.setError("");
-              }}
-            >
-              <Icon name="close" size={15} />
-            </button>
-          </div>
-        )}
+      <main id="main" className={"main view-" + view}>
+        {w.error && <InlineAlert tone="warning" onClose={() => w.setError("")}>{w.error}</InlineAlert>}
         {pendingOperation && (
           <div className="command-alert">
             <div>
@@ -455,7 +455,7 @@ export default function App() {
         )}
         {view === "run" && <RunView {...viewProps} />}
         {view === "sessions" && <SessionsView {...viewProps} />}
-        {view === "performance" && <PerformanceView {...viewProps} />}
+        {view === "performance" && <Suspense fallback={<Skeleton />}><PerformanceView {...viewProps} /></Suspense>}
         {view === "account" && <AccountView {...viewProps} />}
         <footer className="page-footer">
           <span>
@@ -470,6 +470,14 @@ export default function App() {
           </button>
         </footer>
       </main>
+      {notice && <Notification message={notice} onClose={() => setNotice("")} />}
+      {searchOpen && <GlobalSearch key={owner || "public"} sessions={sessions} markets={draft.strategy === "outcome" ? [] : markets}
+        onClose={() => setSearchOpen(false)} onSelect={(result) => {
+          setSearchOpen(false);
+          if (result.session) { navigate("sessions"); setSelected(result.session); }
+          else if (result.market) { update("market", result.market); navigate("run"); }
+          else if (result.view) navigate(result.view);
+        }} />}
       {walletModal && (
         <Modal
           title="Votre wallet. Votre workspace."
@@ -545,9 +553,10 @@ export default function App() {
           </div>
         </Modal>
       )}
-      {owner && review && (
+      {owner && review && review.account?.toLowerCase() === owner.toLowerCase() && (
         <Modal
           title="Vérifiez votre session."
+          locked={!!busy}
           onClose={() => !busy && setReview(null)}
         >
           <div className="review-strategy">
@@ -618,91 +627,31 @@ export default function App() {
             Les quantités Outcome sont arrondies à des tokens entiers. Le
             montant réel peut légèrement dépasser la taille demandée.
           </p>
-          <button
-            className="button primary full"
-            onClick={launch}
-            disabled={!!busy}
-          >
-            {busy === "launch" ? (
-              <Pending label="Lancement en cours" />
-            ) : (
-              <>
-                Lancer la session
-                <Icon name="run" size={17} />
-              </>
-            )}
-          </button>
+          <FeedbackButton className="button primary full" onClick={launch} disabled={!!busy}
+            loading={busy === "launch"} loadingLabel="Lancement en cours">
+            Lancer la session<Icon name="run" size={17} />
+          </FeedbackButton>
         </Modal>
       )}
       {owner && detail && (
-        <Modal
-          title="Détail de la session"
-          onClose={() => setSelected(null)}
-          wide
-        >
-          <h3>{detail.name}</h3>
-          <dl className="summary-list">
-            <div>
-              <dt>Volume exécuté</dt>
-              <dd>{usd(detail.volume_usd)}</dd>
-            </div>
-            <div>
-              <dt>Fills</dt>
-              <dd>{detail.fills ?? "—"}</dd>
-            </div>
-            <div>
-              <dt>PnL réalisé net</dt>
-              <dd>{usd(detail.net_pnl)}</dd>
-            </div>
-            <div>
-              <dt>Frais</dt>
-              <dd>{usd(detail.fees)}</dd>
-            </div>
-            <div>
-              <dt>Position valorisée</dt>
-              <dd>{usd(detail.position_usd)}</dd>
-            </div>
-            <div>
-              <dt>Coût / 1M</dt>
-              <dd>{usd(detail.cost_per_1m)}</dd>
-            </div>
-          </dl>
-          <div className="quote-box">
-            {detail.quotes?.length ? (
-              detail.quotes.map((q: any, i: number) => (
-                <div key={i}>
-                  <span>
-                    BID{" "}
-                    <b>
-                      {q.bid_size > 0 ? `${q.bid_size} × ${q.bid_price}` : "—"}
-                    </b>
-                  </span>
-                  <span>
-                    ASK{" "}
-                    <b>
-                      {q.ask_size > 0 ? `${q.ask_size} × ${q.ask_price}` : "—"}
-                    </b>
-                  </span>
-                </div>
-              ))
-            ) : (
-              <p>Aucun ordre coté dans le dernier snapshot.</p>
-            )}
-          </div>
-          {detail.reason && <p className="hint">{detail.reason}</p>}
-          <p className="session-id">SESSION {detail.id}</p>
+        <Modal title="Détail de la session" variant={mobile ? "sheet" : "dialog"} onClose={() => setSelected(null)} wide>
+          {stale && <InlineAlert tone="warning">Données retardées. Les valeurs affichées sont le dernier état reçu.</InlineAlert>}
+          <SessionDetails key={detail.id} session={stale ? { ...detail, stale: true } : detail} />
         </Modal>
       )}
+
       {owner && stop && (
-        <Modal
+        <AlertDialog
           title="Arrêter cette session ?"
           onClose={() => !busy && setStop(null)}
+          locked={!!busy}
         >
           <p className="modal-description">{stop.name}</p>
           <p>
             Le moteur annule ses ordres et applique sa procédure de sortie.
             L’arrêt reste en cours jusqu’à sa vérification.
           </p>
+          {actionErrors.stop && <InlineAlert>{actionErrors.stop}</InlineAlert>}
           <div className="dialog-actions">
             <button
               className="button secondary"
@@ -711,25 +660,19 @@ export default function App() {
             >
               Continuer la session
             </button>
-            <button
-              className="button danger"
-              onClick={stopSession}
-              disabled={!!busy}
-            >
-              {busy === "stop" ? (
-                <Pending label="Arrêt en cours" />
-              ) : (
-                "Confirmer l’arrêt"
-              )}
-            </button>
+            <FeedbackButton className="button danger" onClick={stopSession} disabled={!!busy}
+              loading={busy === "stop"} loadingLabel="Arrêt en cours">
+              Confirmer l’arrêt
+            </FeedbackButton>
           </div>
-        </Modal>
+        </AlertDialog>
       )}
       {showHelp && (
         <Modal
           title="Trois étapes pour commencer."
           onClose={() => setShowHelp(false)}
         >
+          <p className="keyboard-help"><Kbd>/</Kbd> Recherche <Kbd>g</Kbd> puis <Kbd>s</Kbd> Sessions <Kbd>Échap</Kbd> Fermer</p>
           <div className="help-steps">
             {[
               [

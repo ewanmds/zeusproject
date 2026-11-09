@@ -1,8 +1,12 @@
-import { Icon, Empty, Pending } from "../ui";
-import { api, usd, short, clock } from "../data";
-import { strategies, phaseText, stateText } from "../config";
+import { Icon, Empty } from "../ui";
+import { FeedbackButton } from "../components/FeedbackButton";
+import { WalletCard } from "../components/workspace/WalletPanel";
+import { SessionStepper } from "../components/layout";
+import { InlineAlert } from "../components/feedback";
+import { short } from "../data";
 import type { AccountProps } from "../viewTypes";
 export function AccountView({
+  actionError,
   owner,
   w,
   ready,
@@ -22,30 +26,8 @@ export function AccountView({
       </div>
       {owner ? (
         <div className="account-grid">
-          <section className="panel account-card">
-            <div className="account-orb">
-              <Icon name="wallet" size={30} />
-            </div>
-            <h2>{short(owner)}</h2>
-            <p className="address">{owner}</p>
-            <span className="state-badge on">
-              <i />
-              Identité vérifiée
-            </span>
-            <dl className="summary-list">
-              <div>
-                <dt>Compte Hyperliquid</dt>
-                <dd>{short(w.identity!.account)}</dd>
-              </div>
-              <div>
-                <dt>Solde spot disponible</dt>
-                <dd>{usd(w.balance?.usdc_available)} USDC</dd>
-              </div>
-              <div>
-                <dt>Réseau</dt>
-                <dd>Mainnet</dd>
-              </div>
-            </dl>
+          <WalletCard key={owner} owner={owner} account={w.identity!.account} available={w.balance?.usdc_available}
+            loading={!w.balance} notify={setNotice}>
             <button
               className="button secondary full"
               onClick={async () => {
@@ -56,8 +38,9 @@ export function AccountView({
               <Icon name="logout" size={16} />
               Déconnecter le wallet
             </button>
-          </section>
+          </WalletCard>
           <section className="panel authorization">
+            <SessionStepper connected ready={ready} />
             <span className="eyebrow">AUTORISATION HYPERLIQUID</span>
             <h2>
               Connecté.
@@ -96,20 +79,13 @@ export function AccountView({
                 </span>
               </div>
             )}
-            <button
-              className="button primary full"
+            <FeedbackButton className="button primary full"
               onClick={ready ? () => navigate("run") : authorize}
-              disabled={!!busy}
-            >
-              {busy === "agent" ? (
-                <Pending label="Autorisation en cours" />
-              ) : (
-                <>
-                  {ready ? "Préparer une session" : "Autoriser le trading"}
-                  <Icon name="arrow" size={17} />
-                </>
-              )}
-            </button>
+              disabled={!!busy} loading={busy === "agent"} loadingLabel="Autorisation en cours">
+              {ready ? "Préparer une session" : "Autoriser le trading"}
+              <Icon name="arrow" size={17} />
+            </FeedbackButton>
+            {actionError && <InlineAlert>{actionError}</InlineAlert>}
             <button className="text-link" onClick={w.refresh}>
               Actualiser l’autorisation
               <Icon name="refresh" size={13} />

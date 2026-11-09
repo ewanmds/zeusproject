@@ -1,25 +1,3 @@
-:root {
-  color-scheme: dark;
-  --bg: #090d16;
-  --surface: #0f172a;
-  --raised: #1e293b;
-  --gold: #f59e0b;
-  --purple: #8b5cf6;
-  --purple-hover: #7c3aed;
-  --text: #f8fafc;
-  --muted: #94a3b8;
-  --subtle: #66748c;
-  --line: rgba(245, 158, 11, 0.12);
-  --green: #10b981;
-  --red: #ef4444;
-  --radius: 16px;
-  --ease: cubic-bezier(0.16, 1, 0.3, 1);
-  font-family: "Exo 2", system-ui, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  font-synthesis: none;
-  -webkit-font-smoothing: antialiased;
-}
 * {
   box-sizing: border-box;
 }
@@ -963,24 +941,6 @@ small {
 .summary-bottom {
   padding-top: 21px;
   border-top: 1px solid rgba(148, 163, 184, 0.1);
-}
-.onboarding {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  color: var(--subtle);
-  font-size: 9px;
-  margin-bottom: 16px;
-}
-.onboarding i {
-  flex: 1;
-  height: 1px;
-  background: rgba(148, 163, 184, 0.14);
-  max-width: 19px;
-}
-.onboarding .done {
-  color: var(--green);
 }
 .launch-button {
   width: 100%;
@@ -1966,9 +1926,6 @@ tbody tr:last-child td {
   .summary-list dd {
     font-size: 10px;
   }
-  .onboarding {
-    font-size: 8px;
-  }
   .selection-note {
     gap: 7px;
   }
@@ -2218,14 +2175,6 @@ tbody tr:last-child td {
   }
   .summary-bottom {
     padding-top: 18px;
-  }
-  .onboarding {
-    font-size: 10px;
-    max-width: 290px;
-    margin: 0 auto 17px;
-  }
-  .onboarding i {
-    max-width: 30px;
   }
   .summary .launch-button {
     font-size: 14px;

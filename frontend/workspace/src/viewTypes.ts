@@ -18,8 +18,8 @@ export interface RunProps {
   preview: () => Promise<void>;
   pendingOperation: Operation | null;
   busy: string;
-  navigate: (view: View) => void;
   setShowHelp: Setter<boolean>;
+  actionError: string;
 }
 export interface SessionsProps {
   owner?: string;
@@ -37,6 +37,7 @@ export interface SessionsProps {
   setWalletModal: Setter<boolean>;
 }
 export interface PerformanceProps {
+  loading: boolean;
   owner?: string;
   period: number;
   setPeriod: Setter<number>;
@@ -47,6 +48,7 @@ export interface PerformanceProps {
   setWalletModal: Setter<boolean>;
 }
 export interface AccountProps {
+  actionError: string;
   owner?: string;
   w: Workspace;
   ready: boolean;

@@ -1,6 +1,13 @@
-import { Icon, Empty, Pending } from "../ui";
-import { api, usd, short, clock } from "../data";
-import { strategies, phaseText, stateText } from "../config";
+import { Icon } from "../ui";
+import { HaloInput, HaloField, MarketSelect, RichPopover } from "../components/fields";
+import { ResponsiveOptions } from "../components/Dialog";
+import { SessionStepper } from "../components/layout";
+import { DataTable } from "../components/DataTable";
+import { InlineAlert } from "../components/feedback";
+import { SegmentedControl } from "../components/SegmentedControl";
+import { FeedbackButton } from "../components/FeedbackButton";
+import { usd, short } from "../data";
+import { strategies } from "../config";
 import type { RunProps } from "../viewTypes";
 export function RunView({
   w,
@@ -17,8 +24,8 @@ export function RunView({
   preview,
   pendingOperation,
   busy,
-  navigate,
   setShowHelp,
+  actionError,
 }: RunProps) {
   return (
     <>
@@ -82,7 +89,7 @@ export function RunView({
             <label htmlFor="order">Montant par ordre</label>
             <div className="amount-input">
               <span>$</span>
-              <input
+              <HaloInput
                 id="order"
                 type="number"
                 inputMode="decimal"
@@ -112,22 +119,9 @@ export function RunView({
             <div className="inline-fields">
               <div>
                 <span className="field-label">Côté Outcome</span>
-                <div className="segments">
-                  <button
-                    aria-pressed={draft.side === "yes"}
-                    className={draft.side === "yes" ? "active" : ""}
-                    onClick={() => update("side", "yes")}
-                  >
-                    Yes
-                  </button>
-                  <button
-                    aria-pressed={draft.side === "no"}
-                    className={draft.side === "no" ? "active" : ""}
-                    onClick={() => update("side", "no")}
-                  >
-                    No
-                  </button>
-                </div>
+                <SegmentedControl label="Côté Outcome" value={draft.side}
+                  options={[{ value: "yes", label: "Yes" }, { value: "no", label: "No" }]}
+                  onValueChange={(side) => update("side", side)} />
               </div>
               <div className="selection-note">
                 <Icon name="auto" />
@@ -140,30 +134,14 @@ export function RunView({
           ) : (
             <div className="field">
               <label htmlFor="market">Marché HIP-3</label>
-              <input
+              <HaloInput
                 aria-label="Rechercher un marché"
                 placeholder="Rechercher un marché…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
-              <select
-                id="market"
-                value={draft.market}
-                onChange={(e) => update("market", e.target.value)}
-              >
-                <option value="">Choisir un marché</option>
-                {markets
-                  .filter((m) =>
-                    String(m.name || m.symbol || m.key)
-                      .toLowerCase()
-                      .includes(search.toLowerCase()),
-                  )
-                  .map((m) => (
-                    <option key={m.key} value={m.key}>
-                      {m.symbol || m.name || m.key}
-                    </option>
-                  ))}
-              </select>
+              <MarketSelect value={draft.market} search={search} onChange={(value) => update("market", value)}
+                options={markets.map((m) => ({ value: m.key, label: m.symbol || m.name || m.key }))} />
               {!owner && (
                 <span className="field-hint">
                   Connectez votre wallet pour charger les marchés.
@@ -171,8 +149,7 @@ export function RunView({
               )}
             </div>
           )}
-          <details className="advanced">
-            <summary>
+          <ResponsiveOptions summary={<>
               <span>
                 <Icon name="target" size={17} />
                 Options de session
@@ -185,24 +162,19 @@ export function RunView({
                     : "Post-only"}
                 <Icon name="chevron" size={16} />
               </span>
-            </summary>
+</>}>
             <div className="advanced-body">
               {draft.strategy === "outcome" ? (
                 <div className="two-fields">
-                  <label>
-                    Plafond de position · USD
-                    <input
+                  <HaloField label="Plafond de position · USD"><HaloInput
                       type="number"
                       min={draft.order_usd}
                       value={draft.position_cap}
                       onChange={(e) =>
                         update("position_cap", Number(e.target.value))
                       }
-                    />
-                  </label>
-                  <label>
-                    Spread maximal · bps
-                    <input
+                    /></HaloField>
+                  <HaloField label="Spread maximal · bps"><HaloInput
                       type="number"
                       min="0.01"
                       max="100"
@@ -211,13 +183,10 @@ export function RunView({
                       onChange={(e) =>
                         update("spread_bps", Number(e.target.value))
                       }
-                    />
-                  </label>
+                    /></HaloField>
                 </div>
               ) : draft.strategy === "mid" ? (
-                <label>
-                  Distance au prix médian · bps
-                  <input
+                <HaloField label="Distance au prix médian · bps"><HaloInput
                     type="number"
                     min="0"
                     max="9999"
@@ -226,8 +195,7 @@ export function RunView({
                     onChange={(e) =>
                       update("offset_bps", Number(e.target.value))
                     }
-                  />
-                </label>
+                  /></HaloField>
               ) : (
                 <p>
                   Le moteur cote au meilleur bid et au meilleur ask. Chaque
@@ -237,52 +205,18 @@ export function RunView({
               {draft.strategy === "outcome" && (
                 <div className="session-target">
                   <span className="field-label">Fin de session</span>
-                  <div className="segments">
-                    <button
-                      className={
-                        !draft.duration_sec && !draft.target_volume_usd
-                          ? "active"
-                          : ""
-                      }
-                      onClick={() =>
-                        setDraft((d) => ({
-                          ...d,
-                          duration_sec: null,
-                          target_volume_usd: null,
-                        }))
-                      }
-                    >
-                      Manuelle
-                    </button>
-                    <button
-                      className={draft.duration_sec ? "active" : ""}
-                      onClick={() =>
-                        setDraft((d) => ({
-                          ...d,
-                          duration_sec: 14400,
-                          target_volume_usd: null,
-                        }))
-                      }
-                    >
-                      Durée
-                    </button>
-                    <button
-                      className={draft.target_volume_usd ? "active" : ""}
-                      onClick={() =>
-                        setDraft((d) => ({
-                          ...d,
-                          duration_sec: null,
-                          target_volume_usd: 1000,
-                        }))
-                      }
-                    >
-                      Volume
-                    </button>
-                  </div>
+                  <SegmentedControl label="Fin de session"
+                    value={draft.duration_sec !== null ? "duration" : draft.target_volume_usd !== null ? "volume" : "manual"}
+                    options={[{ value: "manual", label: "Manuelle" }, { value: "duration", label: "Durée" }, { value: "volume", label: "Volume" }]}
+                    onValueChange={(mode) => {
+                      setDraft((d) => ({ ...d,
+                        duration_sec: mode === "duration" ? 14400 : null,
+                        target_volume_usd: mode === "volume" ? 1000 : null,
+                      }));
+                      setReview(null);
+                    }} />
                   {draft.duration_sec !== null && (
-                    <label>
-                      Durée · minutes
-                      <input
+                    <HaloField label="Durée · minutes"><HaloInput
                         type="number"
                         min="1"
                         max="43200"
@@ -290,25 +224,19 @@ export function RunView({
                         onChange={(e) =>
                           update("duration_sec", Number(e.target.value) * 60)
                         }
-                      />
-                    </label>
+                      /></HaloField>
                   )}
                   {draft.target_volume_usd !== null && (
-                    <label>
-                      Volume exécuté cible · USD
-                      <input
+                    <HaloField label="Volume exécuté cible · USD"><HaloInput
                         type="number"
                         min="10"
                         value={draft.target_volume_usd}
                         onChange={(e) =>
                           update("target_volume_usd", Number(e.target.value))
                         }
-                      />
-                    </label>
+                      /></HaloField>
                   )}
-                  <label>
-                    Seuil de perte réalisée · USD
-                    <input
+                  <HaloField label="Seuil de perte réalisée · USD"><HaloInput
                       type="number"
                       min="0.01"
                       step="0.01"
@@ -316,8 +244,7 @@ export function RunView({
                       onChange={(e) =>
                         update("stop_loss_usd", Number(e.target.value))
                       }
-                    />
-                  </label>
+                    /></HaloField>
                   {draft.duration_sec || draft.target_volume_usd ? (
                     <p className="hint">
                       À l’objectif, les nouveaux achats cessent. La sortie reste
@@ -333,7 +260,7 @@ export function RunView({
                 </span>
               </div>
             </div>
-          </details>
+          </ResponsiveOptions>
           {draft.strategy === "outcome" && owner && (
             <div className="scanner">
               <div className="scanner-head">
@@ -349,22 +276,14 @@ export function RunView({
                       : "En attente de flux"}
                 </span>
               </div>
-              {scanner?.candidates?.slice(0, 2).map((m: any, i: number) => (
-                <div className="scanner-row" key={m.market}>
-                  <span className="rank">0{i + 1}</span>
-                  <div>
-                    <strong>{m.name}</strong>
-                    <span>
-                      File estimée {Math.round(m.queue_proxy_sec)} s ·{" "}
-                      {m.spread_bps.toFixed(2)} bps
-                    </span>
-                  </div>
-                  <span className="mono">
-                    {usd(m.volume_usd_1m)}
-                    <small>/min</small>
-                  </span>
-                </div>
-              ))}
+              {!!scanner?.candidates?.length && <DataTable<any> caption="Candidats observés · marché actif dans Sessions"
+                rows={scanner.candidates.slice(0, 8)} rowKey={(m) => m.market} columns={[
+                  { id: "name", label: "Marché", render: (m) => m.name, sort: (m) => m.name },
+                  { id: "volume", label: "USD/min", render: (m) => usd(m.volume_usd_1m), sort: (m) => m.volume_usd_1m },
+                  { id: "spread", label: "Spread", render: (m) => Number.isFinite(m.spread_bps) ? m.spread_bps.toFixed(2) + " bps" : "—", sort: (m) => m.spread_bps },
+                  { id: "queue", label: "File estimée", render: (m) => Number.isFinite(m.queue_proxy_sec) ? Math.round(m.queue_proxy_sec) + " s" : "—", sort: (m) => m.queue_proxy_sec },
+                ]} />}
+              <RichPopover label="Comprendre le scanner">Le débit est le volume observé en une minute. La file est une estimation ; elle ne garantit pas l’exécution d’un ordre.</RichPopover>
             </div>
           )}
         </section>
@@ -424,51 +343,29 @@ export function RunView({
             </div>
           </dl>
           <div className="summary-bottom">
-            <ol className="session-steps" aria-label="Étapes du lancement">
-              {[
-                { label: "Wallet", done: !!owner, current: !owner },
-                {
-                  label: "Autorisation",
-                  done: ready,
-                  current: !!owner && !ready,
-                },
-                { label: "Session", done: false, current: ready },
-              ].map((step, i) => (
-                <li
-                  key={step.label}
-                  className={step.done ? "done" : step.current ? "current" : ""}
-                  aria-current={step.current ? "step" : undefined}
-                >
-                  <span className="session-step-mark">
-                    {step.done ? <Icon name="check" size={11} /> : i + 1}
-                  </span>
-                  {step.label}
-                </li>
-              ))}
-            </ol>
-            <button
+            <SessionStepper connected={!!owner} ready={ready} />
+            <FeedbackButton
               className="button primary launch-button"
               onClick={preview}
+              loading={busy === "preview"}
+              loadingLabel="Vérification"
               disabled={
                 !!busy ||
                 !!pendingOperation ||
-                draft.order_usd < 10.5 ||
-                (draft.strategy !== "outcome" && !draft.market)
+                (!!owner && ready && (!Number.isFinite(draft.order_usd) || draft.order_usd < 10.5 ||
+                (draft.strategy !== "outcome" && !draft.market)))
               }
             >
-              {busy === "preview" ? (
-                <Pending label="Vérification" />
-              ) : (
-                <>
+              <>
                   {!owner
                     ? "Connecter mon wallet"
                     : !ready
                       ? "Autoriser le trading"
                       : "Vérifier et lancer"}
                   <Icon name="arrow" size={18} />
-                </>
-              )}
-            </button>
+              </>
+            </FeedbackButton>
+            {actionError && <InlineAlert>{actionError}</InlineAlert>}
             <p className="footnote">
               <Icon name="shield" size={13} />
               {owner

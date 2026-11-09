@@ -1,0 +1,22 @@
+:root {
+  color-scheme: dark;
+  --bg: #090d16;
+  --surface: #0f172a;
+  --raised: #1e293b;
+  --gold: #f59e0b;
+  --purple: #8b5cf6;
+  --purple-hover: #7c3aed;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --subtle: #66748c;
+  --line: rgba(245, 158, 11, 0.12);
+  --green: #10b981;
+  --red: #ef4444;
+  --radius: 16px;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: "Exo 2", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}

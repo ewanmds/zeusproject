@@ -1,4 +1,5 @@
 /* Interface polish using the existing Zeus color tokens. */
+/* Layro adaptations: keep the original page layout, surfaces, palette and typefaces. */
 h1,
 h2,
 h3 {
@@ -6,6 +7,128 @@ h3 {
 }
 p {
   text-wrap: pretty;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.segments.zeus-segmented {
+  position: relative;
+  isolation: isolate;
+}
+.zeus-segmented .segment-thumb {
+  position: absolute;
+  pointer-events: none;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: var(--thumb-width);
+  transform: translateX(var(--thumb-x));
+  border-radius: 6px;
+  background: rgba(139, 92, 246, 0.19);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
+}
+.zeus-segmented[data-interacted] .segment-thumb {
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1), width 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+.segments.zeus-segmented button {
+  position: relative;
+  z-index: 1;
+  min-height: 40px;
+  font-size: 12px;
+}
+.segments.zeus-segmented button.active {
+  background: transparent;
+}
+.segments.zeus-segmented button:focus-visible {
+  outline: 2px solid #c4b5fd;
+  outline-offset: -2px;
+}
+.feedback-button .feedback-content {
+  display: grid;
+  place-items: center;
+  width: 100%;
+}
+.feedback-idle,
+.feedback-loading {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  transition: opacity 120ms ease-out;
+}
+.feedback-loading {
+  opacity: 0;
+  visibility: hidden;
+}
+.feedback-button[data-loading] .feedback-idle {
+  opacity: 0;
+  visibility: hidden;
+}
+.feedback-button[data-loading] .feedback-loading {
+  opacity: 1;
+  visibility: visible;
+}
+.feedback-button[aria-busy=true] {
+  cursor: progress;
+}
+.state-badge.zeus-status {
+  gap: 7px;
+  font-size: 12px;
+}
+.zeus-status .status-indicator,
+.zeus-status .status-indicator > span {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.zeus-status .status-indicator {
+  display: inline-flex;
+}
+.zeus-status .status-indicator > span {
+  background: currentColor;
+}
+.state-badge.zeus-status.degraded,
+.state-badge.zeus-status.maintenance {
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.25);
+  background: rgba(245, 158, 11, 0.05);
+}
+.state-badge.zeus-status.offline {
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.05);
+}
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .feedback-button:not(:disabled):active .feedback-content {
+    transform: translateY(1px);
+  }
+}
+@media (max-width: 600px) {
+  .segments.zeus-segmented button {
+    min-height: 44px;
+  }
+  .icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zeus-segmented .segment-thumb,
+  .feedback-idle,
+  .feedback-loading {
+    transition: none !important;
+  }
 }
 .brand > span:last-child {
   font-family: "Orbitron", sans-serif;

@@ -8,14 +8,14 @@ import threading
 import time
 import unittest
 import uuid
-from unittest.mock import patch, Mock
+from unittest.mock import patch
 
 from eth_account import Account
 from eth_account.messages import encode_defunct, encode_typed_data
 from fastapi.testclient import TestClient
 
 from zeus.workspace.app import Settings, create_app
-from zeus.workspace.accounts import HyperliquidAccounts, typed_approval, AccountContext
+from zeus.workspace.accounts import HyperliquidAccounts
 
 
 class FakeAccounts(HyperliquidAccounts):

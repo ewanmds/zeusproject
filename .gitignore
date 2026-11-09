@@ -10,6 +10,7 @@ logs/
 ranking.json
 obi_fills_*.db
 __pycache__/
+.pytest_cache/
 *.pyc
 .venv/
 .venv-workspace/

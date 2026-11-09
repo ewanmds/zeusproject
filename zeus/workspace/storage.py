@@ -2,9 +2,7 @@
 import hashlib
 import json
 import secrets
-import threading
 import time
-from pathlib import Path
 
 from cryptography.fernet import Fernet
 from sqlalchemy import (create_engine, MetaData, Table, Column, String, Text, Float,

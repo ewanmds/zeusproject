@@ -1,6 +1,5 @@
 """Per-market Outcome process supervisor and durable snapshot reader."""
 from concurrent.futures import ThreadPoolExecutor
-import json
 import os
 from pathlib import Path
 import subprocess

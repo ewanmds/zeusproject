@@ -11,7 +11,6 @@ import time
 import math
 import signal
 import argparse
-import tempfile
 import threading
 from collections import deque
 from pathlib import Path
