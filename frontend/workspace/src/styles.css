@@ -119,8 +119,7 @@ code,
 .session-metrics strong,
 .available strong,
 .amount-input input,
-.summary-list dd,
-.bar-column > span {
+.summary-list dd {
   font-family: "JetBrains Mono", monospace;
   font-variant-numeric: tabular-nums;
 }
@@ -786,44 +785,6 @@ small {
 .gold-dot {
   background: var(--gold);
 }
-.scanner-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 0;
-  border-top: 1px solid rgba(148, 163, 184, 0.09);
-  min-width: 0;
-}
-.rank {
-  color: var(--subtle);
-  font-size: 10px;
-  font-family: "JetBrains Mono", monospace;
-}
-.scanner-row > div {
-  min-width: 0;
-  flex: 1;
-}
-.scanner-row strong {
-  display: block;
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.scanner-row > div > span {
-  font-size: 9px;
-  color: var(--subtle);
-}
-.scanner-row > .mono {
-  text-align: right;
-  font-size: 10px;
-  white-space: nowrap;
-}
-.scanner-row small {
-  display: block;
-  font-size: 9px;
-  color: var(--subtle);
-}
 .summary {
   padding: 28px 25px 22px;
   position: sticky;
@@ -1281,53 +1242,6 @@ small {
   background: transparent;
   padding: 40px 20px;
 }
-.bar-chart {
-  display: flex;
-  gap: 14px;
-  min-height: 260px;
-  height: 300px;
-  align-items: stretch;
-  padding: 25px 8px 0;
-  overflow-x: auto;
-}
-.bar-column {
-  min-width: 40px;
-  max-width: 150px;
-  flex: 1;
-  display: flex;
-  align-items: center;
-  flex-direction: column;
-}
-.bar-column > span {
-  font-size: 9px;
-  color: var(--muted);
-  margin-bottom: 10px;
-  white-space: nowrap;
-}
-.bar-track {
-  flex: 1;
-  display: flex;
-  align-items: end;
-  width: 100%;
-  max-width: 80px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-}
-.bar {
-  width: 100%;
-  background: linear-gradient(
-    0deg,
-    rgba(139, 92, 246, 0.2),
-    rgba(139, 92, 246, 0.9)
-  );
-  border-top: 1px solid #b79cf4;
-  border-radius: 5px 5px 0 0;
-  min-height: 2px;
-}
-.bar-column small {
-  font-size: 10px;
-  color: var(--subtle);
-  margin-top: 10px;
-}
 .chart-caption {
   font-size: 10px;
   color: var(--subtle);
@@ -1385,17 +1299,6 @@ tbody tr:last-child td {
 .account-card {
   padding: 29px;
   text-align: center;
-}
-.account-orb {
-  display: grid;
-  place-items: center;
-  width: 64px;
-  height: 64px;
-  border-radius: 18px;
-  margin: 2px auto 18px;
-  background: rgba(139, 92, 246, 0.1);
-  color: #b79cf4;
-  border: 1px solid rgba(139, 92, 246, 0.2);
 }
 .account-card h2 {
   font-family: "JetBrains Mono", monospace;
@@ -2311,17 +2214,6 @@ tbody tr:last-child td {
   }
   .chart-panel {
     padding: 20px 17px;
-  }
-  .bar-chart {
-    gap: 13px;
-    height: 250px;
-    min-height: 0;
-  }
-  .bar-column {
-    min-width: 45px;
-  }
-  .bar-column > span {
-    font-size: 8px;
   }
   .chart-caption {
     font-size: 9px;

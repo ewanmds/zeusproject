@@ -1,8 +1,6 @@
 import { strategies, nav, initial } from "./config";
 import { RunView } from "./views/RunView";
-import { SessionsView } from "./views/SessionsView";
 
-import { AccountView } from "./views/AccountView";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api, usd, short, clock } from "./data";
 import { useWorkspace } from "./useWorkspace";
@@ -14,11 +12,33 @@ import { NavDock } from "./components/layout";
 import { Kbd } from "./components/fields";
 import { AlertDialog, useMobile } from "./components/Dialog";
 import { InlineAlert, Notification, Skeleton } from "./components/feedback";
-import { ProfileDropdown } from "./components/workspace/WalletPanel";
-import { GlobalSearch } from "./components/workspace/GlobalSearch";
-import { SessionDetails } from "./components/workspace/SessionDetails";
 
-const PerformanceView = lazy(() => import("./views/PerformanceView").then((module) => ({ default: module.PerformanceView })));
+const SessionsView = lazy(() =>
+  import("./views/SessionsView").then((m) => ({ default: m.SessionsView })),
+);
+const AccountView = lazy(() =>
+  import("./views/AccountView").then((m) => ({ default: m.AccountView })),
+);
+const ProfileDropdown = lazy(() =>
+  import("./components/workspace/WalletPanel").then((m) => ({
+    default: m.ProfileDropdown,
+  })),
+);
+const GlobalSearch = lazy(() =>
+  import("./components/workspace/GlobalSearch").then((m) => ({
+    default: m.GlobalSearch,
+  })),
+);
+const SessionDetails = lazy(() =>
+  import("./components/workspace/SessionDetails").then((m) => ({
+    default: m.SessionDetails,
+  })),
+);
+const PerformanceView = lazy(() =>
+  import("./views/PerformanceView").then((module) => ({
+    default: module.PerformanceView,
+  })),
+);
 export default function App() {
   const w = useWorkspace();
   const [view, setView] = useState<View>(
@@ -41,7 +61,11 @@ export default function App() {
     [period, setPeriod] = useState(7),
     [now, setNow] = useState(Date.now());
   const [searchOpen, setSearchOpen] = useState(false);
-  const [actionErrors, setActionErrors] = useState({ run: "", account: "", stop: "" });
+  const [actionErrors, setActionErrors] = useState({
+    run: "",
+    account: "",
+    stop: "",
+  });
   const mobile = useMobile();
   const operation = useRef<string | null>(null);
   const [pendingOperation, setPendingOperation] = useState<Operation | null>(
@@ -151,11 +175,31 @@ export default function App() {
     let prefix = 0;
     const keyboard = (event: KeyboardEvent) => {
       const element = event.target as HTMLElement;
-      if (element.closest("input, textarea, select, [contenteditable=true], [role=combobox]") || event.metaKey || event.ctrlKey || event.altKey || document.querySelector("dialog[open]")) return;
-      if (event.key === "/") { event.preventDefault(); setSearchOpen(true); }
+      if (
+        element.closest(
+          "input, textarea, select, [contenteditable=true], [role=combobox]",
+        ) ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        document.querySelector("dialog[open]")
+      )
+        return;
+      if (event.key === "/") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
       if (Date.now() - prefix < 900) {
-        const target = ({ l: "run", s: "sessions", p: "performance", c: "account" } as Record<string, View>)[event.key];
-        if (target) { event.preventDefault(); navigate(target); }
+        const target = (
+          { l: "run", s: "sessions", p: "performance", c: "account" } as Record<
+            string,
+            View
+          >
+        )[event.key];
+        if (target) {
+          event.preventDefault();
+          navigate(target);
+        }
       }
       prefix = event.key === "g" ? Date.now() : 0;
     };
@@ -226,11 +270,13 @@ export default function App() {
           : "Autorisation envoyée, confirmation en attente. Actualisez le statut du compte.",
       );
     } catch (e: any) {
-      setActionErrors((old) => ({ ...old, account: (
-        e.code === 4001
-          ? "Autorisation refusée. Aucun bot lancé."
-          : e.message || "Autorisation non confirmée. Vérifiez le compte."
-      ) }));
+      setActionErrors((old) => ({
+        ...old,
+        account:
+          e.code === 4001
+            ? "Autorisation refusée. Aucun bot lancé."
+            : e.message || "Autorisation non confirmée. Vérifiez le compte.",
+      }));
     } finally {
       setBusy("");
     }
@@ -347,7 +393,8 @@ export default function App() {
     (s) => s.started >= now / 1000 - period * 86400,
   );
   const sum = (field: "volume_usd" | "fees" | "net_pnl" | "fills") =>
-    w.snapshot && history.every((s) => s.accounting_complete && s[field] != null)
+    w.snapshot &&
+    history.every((s) => s.accounting_complete && s[field] != null)
       ? history.reduce((n, s) => n + (s[field] || 0), 0)
       : null;
   const volume = sum("volume_usd"),
@@ -422,14 +469,49 @@ export default function App() {
                   : "Actualisation"
               : "Mainnet"}
           </button>
-          <button className="icon-btn search-launch" aria-label="Ouvrir la recherche" onClick={() => setSearchOpen(true)}><Icon name="search" size={19} /><Kbd>/</Kbd></button>
-          {owner ? <ProfileDropdown address={owner} onAccount={() => navigate("account")} onLogout={w.logout} notify={setNotice} /> :
-            <button className="button primary compact" onClick={() => setWalletModal(true)}><Icon name="wallet" size={17} />Connecter</button>}
-
+          <button
+            className="icon-btn search-launch"
+            aria-label="Ouvrir la recherche"
+            onClick={() => setSearchOpen(true)}
+          >
+            <Icon name="search" size={19} />
+            <Kbd>/</Kbd>
+          </button>
+          {owner ? (
+            <Suspense
+              fallback={
+                <button
+                  className="button wallet-connected"
+                  onClick={() => navigate("account")}
+                >
+                  {short(owner)}
+                </button>
+              }
+            >
+              <ProfileDropdown
+                address={owner}
+                onAccount={() => navigate("account")}
+                onLogout={w.logout}
+                notify={setNotice}
+              />
+            </Suspense>
+          ) : (
+            <button
+              className="button primary compact"
+              onClick={() => setWalletModal(true)}
+            >
+              <Icon name="wallet" size={17} />
+              Connecter
+            </button>
+          )}
         </div>
       </header>
       <main id="main" className={"main view-" + view}>
-        {w.error && <InlineAlert tone="warning" onClose={() => w.setError("")}>{w.error}</InlineAlert>}
+        {w.error && (
+          <InlineAlert tone="warning" onClose={() => w.setError("")}>
+            {w.error}
+          </InlineAlert>
+        )}
         {pendingOperation && (
           <div className="command-alert">
             <div>
@@ -454,9 +536,21 @@ export default function App() {
           </div>
         )}
         {view === "run" && <RunView {...viewProps} />}
-        {view === "sessions" && <SessionsView {...viewProps} />}
-        {view === "performance" && <Suspense fallback={<Skeleton />}><PerformanceView {...viewProps} /></Suspense>}
-        {view === "account" && <AccountView {...viewProps} />}
+        {view === "sessions" && (
+          <Suspense fallback={<Skeleton />}>
+            <SessionsView {...viewProps} />
+          </Suspense>
+        )}
+        {view === "performance" && (
+          <Suspense fallback={<Skeleton />}>
+            <PerformanceView {...viewProps} />
+          </Suspense>
+        )}
+        {view === "account" && (
+          <Suspense fallback={<Skeleton />}>
+            <AccountView {...viewProps} />
+          </Suspense>
+        )}
         <footer className="page-footer">
           <span>
             <span className="tiny-brand">Z</span>Zeus Workspace
@@ -470,14 +564,38 @@ export default function App() {
           </button>
         </footer>
       </main>
-      {notice && <Notification message={notice} onClose={() => setNotice("")} />}
-      {searchOpen && <GlobalSearch key={owner || "public"} sessions={sessions} markets={draft.strategy === "outcome" ? [] : markets}
-        onClose={() => setSearchOpen(false)} onSelect={(result) => {
-          setSearchOpen(false);
-          if (result.session) { navigate("sessions"); setSelected(result.session); }
-          else if (result.market) { update("market", result.market); navigate("run"); }
-          else if (result.view) navigate(result.view);
-        }} />}
+      {notice && (
+        <Notification message={notice} onClose={() => setNotice("")} />
+      )}
+      {searchOpen && (
+        <Suspense
+          fallback={
+            <Modal
+              title="Rechercher dans Zeus"
+              onClose={() => setSearchOpen(false)}
+            >
+              <Pending label="Chargement de la recherche" />
+            </Modal>
+          }
+        >
+          <GlobalSearch
+            key={owner || "public"}
+            sessions={sessions}
+            markets={draft.strategy === "outcome" ? [] : markets}
+            onClose={() => setSearchOpen(false)}
+            onSelect={(result) => {
+              setSearchOpen(false);
+              if (result.session) {
+                navigate("sessions");
+                setSelected(result.session);
+              } else if (result.market) {
+                update("market", result.market);
+                navigate("run");
+              } else if (result.view) navigate(result.view);
+            }}
+          />
+        </Suspense>
+      )}
       {walletModal && (
         <Modal
           title="Votre wallet. Votre workspace."
@@ -553,90 +671,116 @@ export default function App() {
           </div>
         </Modal>
       )}
-      {owner && review && review.account?.toLowerCase() === owner.toLowerCase() && (
-        <Modal
-          title="Vérifiez votre session."
-          locked={!!busy}
-          onClose={() => !busy && setReview(null)}
-        >
-          <div className="review-strategy">
-            <span className="strategy-icon">
-              <Icon
-                name={
-                  strategies.find((s) => s.id === review.config.strategy)
-                    ?.icon || "auto"
-                }
-              />
-            </span>
-            <div>
-              <h3>
-                {strategies.find((s) => s.id === review.config.strategy)?.name}
-              </h3>
-              <span>Hyperliquid Mainnet · Ordres réels</span>
+      {owner &&
+        review &&
+        review.account?.toLowerCase() === owner.toLowerCase() && (
+          <Modal
+            title="Vérifiez votre session."
+            locked={!!busy}
+            onClose={() => !busy && setReview(null)}
+          >
+            <div className="review-strategy">
+              <span className="strategy-icon">
+                <Icon
+                  name={
+                    strategies.find((s) => s.id === review.config.strategy)
+                      ?.icon || "auto"
+                  }
+                />
+              </span>
+              <div>
+                <h3>
+                  {
+                    strategies.find((s) => s.id === review.config.strategy)
+                      ?.name
+                  }
+                </h3>
+                <span>Hyperliquid Mainnet · Ordres réels</span>
+              </div>
             </div>
-          </div>
-          <dl className="summary-list">
-            <div>
-              <dt>Compte</dt>
-              <dd>{short(review.account)}</dd>
-            </div>
-            <div>
-              <dt>Montant par ordre</dt>
-              <dd>{usd(review.config.order_usd)}</dd>
-            </div>
-            <div>
-              <dt>Plafond de position</dt>
-              <dd>
-                {review.config.strategy === "outcome"
-                  ? usd(review.config.position_cap)
-                  : "Limites du moteur"}
-              </dd>
-            </div>
-            <div>
-              <dt>Marché</dt>
-              <dd>
-                {review.config.strategy === "outcome"
-                  ? "Scanner Auto · " + review.config.side
-                  : review.config.market}
-              </dd>
-            </div>
-            <div>
-              <dt>Solde spot disponible</dt>
-              <dd>{usd(review.usdc_available)}</dd>
-            </div>
-            {review.config.strategy === "outcome" && (
-              <>
-                <div>
-                  <dt>Arrêt des achats</dt>
-                  <dd>
-                    {review.config.duration_sec
-                      ? clock(review.config.duration_sec)
-                      : review.config.target_volume_usd
-                        ? usd(review.config.target_volume_usd) + " de volume"
-                        : "Manuel"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Seuil de perte réalisée</dt>
-                  <dd>{usd(review.config.stop_loss_usd)}</dd>
-                </div>
-              </>
-            )}
-          </dl>
-          <p className="hint">
-            Les quantités Outcome sont arrondies à des tokens entiers. Le
-            montant réel peut légèrement dépasser la taille demandée.
-          </p>
-          <FeedbackButton className="button primary full" onClick={launch} disabled={!!busy}
-            loading={busy === "launch"} loadingLabel="Lancement en cours">
-            Lancer la session<Icon name="run" size={17} />
-          </FeedbackButton>
-        </Modal>
-      )}
+            <dl className="summary-list">
+              <div>
+                <dt>Compte</dt>
+                <dd>{short(review.account)}</dd>
+              </div>
+              <div>
+                <dt>Montant par ordre</dt>
+                <dd>{usd(review.config.order_usd)}</dd>
+              </div>
+              <div>
+                <dt>Plafond de position</dt>
+                <dd>
+                  {review.config.strategy === "outcome"
+                    ? usd(review.config.position_cap)
+                    : "Limites du moteur"}
+                </dd>
+              </div>
+              <div>
+                <dt>Marché</dt>
+                <dd>
+                  {review.config.strategy === "outcome"
+                    ? "Scanner Auto · " + review.config.side
+                    : review.config.market}
+                </dd>
+              </div>
+              <div>
+                <dt>Solde spot disponible</dt>
+                <dd>{usd(review.usdc_available)}</dd>
+              </div>
+              {review.config.strategy === "outcome" && (
+                <>
+                  <div>
+                    <dt>Arrêt des achats</dt>
+                    <dd>
+                      {review.config.duration_sec
+                        ? clock(review.config.duration_sec)
+                        : review.config.target_volume_usd
+                          ? usd(review.config.target_volume_usd) + " de volume"
+                          : "Manuel"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Seuil de perte réalisée</dt>
+                    <dd>{usd(review.config.stop_loss_usd)}</dd>
+                  </div>
+                </>
+              )}
+            </dl>
+            <p className="hint">
+              Les quantités Outcome sont arrondies à des tokens entiers. Le
+              montant réel peut légèrement dépasser la taille demandée.
+            </p>
+            <FeedbackButton
+              className="button primary full"
+              onClick={launch}
+              disabled={!!busy}
+              loading={busy === "launch"}
+              loadingLabel="Lancement en cours"
+            >
+              Lancer la session
+              <Icon name="run" size={17} />
+            </FeedbackButton>
+          </Modal>
+        )}
       {owner && detail && (
-        <Modal title="Détail de la session" variant={mobile ? "sheet" : "dialog"} onClose={() => setSelected(null)} wide>
-          {stale && <InlineAlert tone="warning">Données retardées. Les valeurs affichées sont le dernier état reçu.</InlineAlert>}
-          <SessionDetails key={detail.id} session={stale ? { ...detail, stale: true } : detail} />
+        <Modal
+          title="Détail de la session"
+          variant={mobile ? "sheet" : "dialog"}
+          onClose={() => setSelected(null)}
+          wide
+        >
+          {stale && (
+            <InlineAlert tone="warning">
+              Données retardées. Les valeurs affichées sont le dernier état
+              reçu.
+            </InlineAlert>
+          )}
+          <Suspense fallback={<Pending label="Chargement du détail" />}>
+            <SessionDetails
+              key={detail.id}
+              session={stale ? { ...detail, stale: true } : detail}
+            />
+          </Suspense>
         </Modal>
       )}
 
@@ -660,8 +804,13 @@ export default function App() {
             >
               Continuer la session
             </button>
-            <FeedbackButton className="button danger" onClick={stopSession} disabled={!!busy}
-              loading={busy === "stop"} loadingLabel="Arrêt en cours">
+            <FeedbackButton
+              className="button danger"
+              onClick={stopSession}
+              disabled={!!busy}
+              loading={busy === "stop"}
+              loadingLabel="Arrêt en cours"
+            >
               Confirmer l’arrêt
             </FeedbackButton>
           </div>
@@ -672,7 +821,10 @@ export default function App() {
           title="Trois étapes pour commencer."
           onClose={() => setShowHelp(false)}
         >
-          <p className="keyboard-help"><Kbd>/</Kbd> Recherche <Kbd>g</Kbd> puis <Kbd>s</Kbd> Sessions <Kbd>Échap</Kbd> Fermer</p>
+          <p className="keyboard-help">
+            <Kbd>/</Kbd> Recherche <Kbd>g</Kbd> puis <Kbd>s</Kbd> Sessions{" "}
+            <Kbd>Échap</Kbd> Fermer
+          </p>
           <div className="help-steps">
             {[
               [

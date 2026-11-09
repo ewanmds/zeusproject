@@ -75,9 +75,13 @@ export interface Session {
   reason: string;
   rotations: number;
   config: Partial<Draft> & {
-    order_size_usd?: number; outcome_side?: string; max_position_usd?: number;
-    session_duration_sec?: number | null; session_expires_at?: number | null;
-    session_stop_loss_usd?: number; exec_mode?: string;
+    order_size_usd?: number;
+    outcome_side?: string;
+    max_position_usd?: number;
+    session_duration_sec?: number | null;
+    session_expires_at?: number | null;
+    session_stop_loss_usd?: number;
+    exec_mode?: string;
   };
   quotes: any[];
 }

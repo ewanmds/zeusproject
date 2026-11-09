@@ -26,8 +26,14 @@ export function AccountView({
       </div>
       {owner ? (
         <div className="account-grid">
-          <WalletCard key={owner} owner={owner} account={w.identity!.account} available={w.balance?.usdc_available}
-            loading={!w.balance} notify={setNotice}>
+          <WalletCard
+            key={owner}
+            owner={owner}
+            account={w.identity!.account}
+            available={w.balance?.usdc_available}
+            loading={!w.balance}
+            notify={setNotice}
+          >
             <button
               className="button secondary full"
               onClick={async () => {
@@ -79,9 +85,13 @@ export function AccountView({
                 </span>
               </div>
             )}
-            <FeedbackButton className="button primary full"
+            <FeedbackButton
+              className="button primary full"
               onClick={ready ? () => navigate("run") : authorize}
-              disabled={!!busy} loading={busy === "agent"} loadingLabel="Autorisation en cours">
+              disabled={!!busy}
+              loading={busy === "agent"}
+              loadingLabel="Autorisation en cours"
+            >
               {ready ? "Préparer une session" : "Autoriser le trading"}
               <Icon name="arrow" size={17} />
             </FeedbackButton>

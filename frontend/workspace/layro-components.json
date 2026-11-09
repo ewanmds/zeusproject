@@ -14,7 +14,7 @@
       "url": "https://layro.dev/@preetsuthar17/tabs",
       "version": "1.0.0",
       "license": "MIT",
-      "file": "src/components/layout.tsx",
+      "file": "src/components/DetailTabs.tsx",
       "component": "DetailTabs"
     },
     {
@@ -62,7 +62,7 @@
       "url": "https://layro.dev/@preetsuthar17/select",
       "version": "1.0.0",
       "license": "MIT",
-      "file": "src/components/fields.tsx",
+      "file": "src/components/MarketSelect.tsx",
       "component": "MarketSelect"
     },
     {
@@ -78,7 +78,7 @@
       "url": "https://layro.dev/@preetsuthar17/switch",
       "version": "1.0.0",
       "license": "MIT",
-      "file": "src/components/fields.tsx",
+      "file": "src/components/ViewSwitch.tsx",
       "component": "ViewSwitch"
     },
     {
@@ -251,4 +251,3 @@
     }
   ]
 }
-

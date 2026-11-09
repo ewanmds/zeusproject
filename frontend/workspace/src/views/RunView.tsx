@@ -1,5 +1,6 @@
+import { lazy, Suspense } from "react";
 import { Icon } from "../ui";
-import { HaloInput, HaloField, MarketSelect, RichPopover } from "../components/fields";
+import { HaloInput, HaloField, RichPopover } from "../components/fields";
 import { ResponsiveOptions } from "../components/Dialog";
 import { SessionStepper } from "../components/layout";
 import { DataTable } from "../components/DataTable";
@@ -9,6 +10,11 @@ import { FeedbackButton } from "../components/FeedbackButton";
 import { usd, short } from "../data";
 import { strategies } from "../config";
 import type { RunProps } from "../viewTypes";
+const MarketSelect = lazy(() =>
+  import("../components/MarketSelect").then((m) => ({
+    default: m.MarketSelect,
+  })),
+);
 export function RunView({
   w,
   draft,
@@ -34,7 +40,10 @@ export function RunView({
           <span className="eyebrow">VOTRE PROCHAINE SESSION</span>
           <h1>Lancer, simplement.</h1>
         </div>
-        <span className="environment"><i />Hyperliquid Mainnet</span>
+        <span className="environment">
+          <i />
+          Hyperliquid Mainnet
+        </span>
       </div>
       <div className="launch-grid">
         <section
@@ -119,9 +128,15 @@ export function RunView({
             <div className="inline-fields">
               <div>
                 <span className="field-label">Côté Outcome</span>
-                <SegmentedControl label="Côté Outcome" value={draft.side}
-                  options={[{ value: "yes", label: "Yes" }, { value: "no", label: "No" }]}
-                  onValueChange={(side) => update("side", side)} />
+                <SegmentedControl
+                  label="Côté Outcome"
+                  value={draft.side}
+                  options={[
+                    { value: "yes", label: "Yes" },
+                    { value: "no", label: "No" },
+                  ]}
+                  onValueChange={(side) => update("side", side)}
+                />
               </div>
               <div className="selection-note">
                 <Icon name="auto" />
@@ -140,8 +155,19 @@ export function RunView({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
-              <MarketSelect value={draft.market} search={search} onChange={(value) => update("market", value)}
-                options={markets.map((m) => ({ value: m.key, label: m.symbol || m.name || m.key }))} />
+              <Suspense
+                fallback={<p className="hint">Chargement de la sélection…</p>}
+              >
+                <MarketSelect
+                  value={draft.market}
+                  search={search}
+                  onChange={(value) => update("market", value)}
+                  options={markets.map((m) => ({
+                    value: m.key,
+                    label: m.symbol || m.name || m.key,
+                  }))}
+                />
+              </Suspense>
               {!owner && (
                 <span className="field-hint">
                   Connectez votre wallet pour charger les marchés.
@@ -149,32 +175,39 @@ export function RunView({
               )}
             </div>
           )}
-          <ResponsiveOptions summary={<>
-              <span>
-                <Icon name="target" size={17} />
-                Options de session
-              </span>
-              <span>
-                {draft.strategy === "outcome"
-                  ? usd(draft.position_cap) + " max."
-                  : draft.strategy === "mid"
-                    ? draft.offset_bps + " bps"
-                    : "Post-only"}
-                <Icon name="chevron" size={16} />
-              </span>
-</>}>
+          <ResponsiveOptions
+            summary={
+              <>
+                <span>
+                  <Icon name="target" size={17} />
+                  Options de session
+                </span>
+                <span>
+                  {draft.strategy === "outcome"
+                    ? usd(draft.position_cap) + " max."
+                    : draft.strategy === "mid"
+                      ? draft.offset_bps + " bps"
+                      : "Post-only"}
+                  <Icon name="chevron" size={16} />
+                </span>
+              </>
+            }
+          >
             <div className="advanced-body">
               {draft.strategy === "outcome" ? (
                 <div className="two-fields">
-                  <HaloField label="Plafond de position · USD"><HaloInput
+                  <HaloField label="Plafond de position · USD">
+                    <HaloInput
                       type="number"
                       min={draft.order_usd}
                       value={draft.position_cap}
                       onChange={(e) =>
                         update("position_cap", Number(e.target.value))
                       }
-                    /></HaloField>
-                  <HaloField label="Spread maximal · bps"><HaloInput
+                    />
+                  </HaloField>
+                  <HaloField label="Spread maximal · bps">
+                    <HaloInput
                       type="number"
                       min="0.01"
                       max="100"
@@ -183,10 +216,12 @@ export function RunView({
                       onChange={(e) =>
                         update("spread_bps", Number(e.target.value))
                       }
-                    /></HaloField>
+                    />
+                  </HaloField>
                 </div>
               ) : draft.strategy === "mid" ? (
-                <HaloField label="Distance au prix médian · bps"><HaloInput
+                <HaloField label="Distance au prix médian · bps">
+                  <HaloInput
                     type="number"
                     min="0"
                     max="9999"
@@ -195,7 +230,8 @@ export function RunView({
                     onChange={(e) =>
                       update("offset_bps", Number(e.target.value))
                     }
-                  /></HaloField>
+                  />
+                </HaloField>
               ) : (
                 <p>
                   Le moteur cote au meilleur bid et au meilleur ask. Chaque
@@ -205,18 +241,32 @@ export function RunView({
               {draft.strategy === "outcome" && (
                 <div className="session-target">
                   <span className="field-label">Fin de session</span>
-                  <SegmentedControl label="Fin de session"
-                    value={draft.duration_sec !== null ? "duration" : draft.target_volume_usd !== null ? "volume" : "manual"}
-                    options={[{ value: "manual", label: "Manuelle" }, { value: "duration", label: "Durée" }, { value: "volume", label: "Volume" }]}
+                  <SegmentedControl
+                    label="Fin de session"
+                    value={
+                      draft.duration_sec !== null
+                        ? "duration"
+                        : draft.target_volume_usd !== null
+                          ? "volume"
+                          : "manual"
+                    }
+                    options={[
+                      { value: "manual", label: "Manuelle" },
+                      { value: "duration", label: "Durée" },
+                      { value: "volume", label: "Volume" },
+                    ]}
                     onValueChange={(mode) => {
-                      setDraft((d) => ({ ...d,
+                      setDraft((d) => ({
+                        ...d,
                         duration_sec: mode === "duration" ? 14400 : null,
                         target_volume_usd: mode === "volume" ? 1000 : null,
                       }));
                       setReview(null);
-                    }} />
+                    }}
+                  />
                   {draft.duration_sec !== null && (
-                    <HaloField label="Durée · minutes"><HaloInput
+                    <HaloField label="Durée · minutes">
+                      <HaloInput
                         type="number"
                         min="1"
                         max="43200"
@@ -224,19 +274,23 @@ export function RunView({
                         onChange={(e) =>
                           update("duration_sec", Number(e.target.value) * 60)
                         }
-                      /></HaloField>
+                      />
+                    </HaloField>
                   )}
                   {draft.target_volume_usd !== null && (
-                    <HaloField label="Volume exécuté cible · USD"><HaloInput
+                    <HaloField label="Volume exécuté cible · USD">
+                      <HaloInput
                         type="number"
                         min="10"
                         value={draft.target_volume_usd}
                         onChange={(e) =>
                           update("target_volume_usd", Number(e.target.value))
                         }
-                      /></HaloField>
+                      />
+                    </HaloField>
                   )}
-                  <HaloField label="Seuil de perte réalisée · USD"><HaloInput
+                  <HaloField label="Seuil de perte réalisée · USD">
+                    <HaloInput
                       type="number"
                       min="0.01"
                       step="0.01"
@@ -244,7 +298,8 @@ export function RunView({
                       onChange={(e) =>
                         update("stop_loss_usd", Number(e.target.value))
                       }
-                    /></HaloField>
+                    />
+                  </HaloField>
                   {draft.duration_sec || draft.target_volume_usd ? (
                     <p className="hint">
                       À l’objectif, les nouveaux achats cessent. La sortie reste
@@ -276,14 +331,49 @@ export function RunView({
                       : "En attente de flux"}
                 </span>
               </div>
-              {!!scanner?.candidates?.length && <DataTable<any> caption="Candidats observés · marché actif dans Sessions"
-                rows={scanner.candidates.slice(0, 8)} rowKey={(m) => m.market} columns={[
-                  { id: "name", label: "Marché", render: (m) => m.name, sort: (m) => m.name },
-                  { id: "volume", label: "USD/min", render: (m) => usd(m.volume_usd_1m), sort: (m) => m.volume_usd_1m },
-                  { id: "spread", label: "Spread", render: (m) => Number.isFinite(m.spread_bps) ? m.spread_bps.toFixed(2) + " bps" : "—", sort: (m) => m.spread_bps },
-                  { id: "queue", label: "File estimée", render: (m) => Number.isFinite(m.queue_proxy_sec) ? Math.round(m.queue_proxy_sec) + " s" : "—", sort: (m) => m.queue_proxy_sec },
-                ]} />}
-              <RichPopover label="Comprendre le scanner">Le débit est le volume observé en une minute. La file est une estimation ; elle ne garantit pas l’exécution d’un ordre.</RichPopover>
+              {!!scanner?.candidates?.length && (
+                <DataTable<any>
+                  caption="Candidats observés · marché actif dans Sessions"
+                  rows={scanner.candidates.slice(0, 8)}
+                  rowKey={(m) => m.market}
+                  columns={[
+                    {
+                      id: "name",
+                      label: "Marché",
+                      render: (m) => m.name,
+                      sort: (m) => m.name,
+                    },
+                    {
+                      id: "volume",
+                      label: "USD/min",
+                      render: (m) => usd(m.volume_usd_1m),
+                      sort: (m) => m.volume_usd_1m,
+                    },
+                    {
+                      id: "spread",
+                      label: "Spread",
+                      render: (m) =>
+                        Number.isFinite(m.spread_bps)
+                          ? m.spread_bps.toFixed(2) + " bps"
+                          : "—",
+                      sort: (m) => m.spread_bps,
+                    },
+                    {
+                      id: "queue",
+                      label: "File estimée",
+                      render: (m) =>
+                        Number.isFinite(m.queue_proxy_sec)
+                          ? Math.round(m.queue_proxy_sec) + " s"
+                          : "—",
+                      sort: (m) => m.queue_proxy_sec,
+                    },
+                  ]}
+                />
+              )}
+              <RichPopover label="Comprendre le scanner">
+                Le débit est le volume observé en une minute. La file est une
+                estimation ; elle ne garantit pas l’exécution d’un ordre.
+              </RichPopover>
             </div>
           )}
         </section>
@@ -352,17 +442,20 @@ export function RunView({
               disabled={
                 !!busy ||
                 !!pendingOperation ||
-                (!!owner && ready && (!Number.isFinite(draft.order_usd) || draft.order_usd < 10.5 ||
-                (draft.strategy !== "outcome" && !draft.market)))
+                (!!owner &&
+                  ready &&
+                  (!Number.isFinite(draft.order_usd) ||
+                    draft.order_usd < 10.5 ||
+                    (draft.strategy !== "outcome" && !draft.market)))
               }
             >
               <>
-                  {!owner
-                    ? "Connecter mon wallet"
-                    : !ready
-                      ? "Autoriser le trading"
-                      : "Vérifier et lancer"}
-                  <Icon name="arrow" size={18} />
+                {!owner
+                  ? "Connecter mon wallet"
+                  : !ready
+                    ? "Autoriser le trading"
+                    : "Vérifier et lancer"}
+                <Icon name="arrow" size={18} />
               </>
             </FeedbackButton>
             {actionError && <InlineAlert>{actionError}</InlineAlert>}
