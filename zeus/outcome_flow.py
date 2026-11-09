@@ -283,11 +283,13 @@ class OutcomeFlowScanner:
         except (requests.RequestException, ValueError):
             return None
 
-    def snapshot(self, side="no", order_usd=50, max_spread_bps=10):
+    def snapshot(self, side="no", order_usd=50, max_spread_bps=10, *, account=None):
+        from zeus.outcome_costs import maker_profile
+        base_rate = maker_profile(account)
         # Share concurrent previews/rotation scans without extending freshness.
         with self.snapshot_lock:
             with self.lock:
-                key = (side, order_usd, max_spread_bps, self.generation, self.catalog_revision)
+                key = (side, order_usd, max_spread_bps, base_rate, self.generation, self.catalog_revision)
                 reusable = (self.connected and time.time()-self.catalog_at < 120
                             and len(self.subscribed) == 2*len(self.rows))
             entry = self.snapshot_cache.get(key)
@@ -298,14 +300,15 @@ class OutcomeFlowScanner:
             if reusable and entry and cached_fresh and time.monotonic()-entry[0] < .4:
                 return copy.deepcopy(entry[1])
             started = time.perf_counter()
-            result = self._snapshot(side, order_usd, max_spread_bps)
+            result = self._snapshot(side, order_usd, max_spread_bps, base_rate=base_rate)
             result['scan_ms'] = (time.perf_counter()-started)*1000
             if len(self.snapshot_cache) >= 16:
                 self.snapshot_cache.clear()
             self.snapshot_cache[key] = (time.monotonic(), result)
             return copy.deepcopy(result)
 
-    def _snapshot(self, side="no", order_usd=50, max_spread_bps=10):
+    def _snapshot(self, side="no", order_usd=50, max_spread_bps=10, *, base_rate=0.0004):
+        from zeus.outcome_costs import candidate_cost
         if side not in ("yes", "no"):
             raise ValueError("Invalid Outcome side")
         now = time.time()
@@ -336,6 +339,8 @@ class OutcomeFlowScanner:
             rows = dict(self.rows)
         if not ready:
             return status
+        if base_rate is None:
+            return {**status, "error": "Account fees unavailable; new entries paused"}
         shortlist = []
         for coin, trades in history.items():
             row = rows.get(int(coin[1:])//10)
@@ -343,7 +348,9 @@ class OutcomeFlowScanner:
                 continue
             metric = flow_metrics(trades, now)
             if metric and metric["eligible"]:
-                shortlist.append({**metric, "market": coin, "name": row["name"]})
+                shortlist.append({**metric, "market": coin, "name": row["name"],
+                                  "fee_scale": row.get("fee_scale"),
+                                  "deployer_fee_scale": row.get("deployer_fee_scale")})
         shortlist.sort(key=lambda r: (-r["volume_usd_1m"], -r["score"], r["market"]))
         # Dollar/minute first; retain freshness, spread, depth and two-way guards.
         targets = shortlist[:24]
@@ -353,6 +360,7 @@ class OutcomeFlowScanner:
         with self.book_lock:
             books = list(pool.map(self._book, [r["market"] for r in targets]))
         candidates = []
+        cost_rejected = 0
         for item, book in zip(targets, books):
             try:
                 bids, asks = book["levels"]
@@ -372,6 +380,14 @@ class OutcomeFlowScanner:
                     depth_bid_usd=bq*bid, depth_ask_usd=aq*ask,
                     book_updated_at=float(book['time'])/1000,
                     queue_proxy_sec=max(wait_buy, wait_sell))
+                try:
+                    item.update(candidate_cost(item, base_rate))
+                except (ValueError, TypeError, KeyError):
+                    cost_rejected += 1
+                    continue
+                if not item['cost_eligible']:
+                    cost_rejected += 1
+                    continue
                 item["score"] /= (1+max(wait_buy, wait_sell)/60)*(1+spread/10)
                 candidates.append(item)
             except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
@@ -389,6 +405,8 @@ class OutcomeFlowScanner:
         for row in candidates:
             row['last_trade_age_sec'] += completed-now
         return {**status, "ready": bool(candidates), "warming_up": False, "candidates": candidates,
+                "cost_rejected": cost_rejected,
+                "error": "Spreads do not cover fees + 1bp" if not candidates and cost_rejected else status['error'],
                 "updated_at": completed, "ranking": "queue_proxy_sec",
                 "flow_candidates": len(shortlist), "books_checked": len(books)}
 

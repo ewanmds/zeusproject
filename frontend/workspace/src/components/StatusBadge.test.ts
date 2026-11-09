@@ -6,6 +6,12 @@ describe("session status evidence", () => {
   it("only marks a fresh running session online", () => {
     expect(sessionStatus(active, false)).toEqual({ tone: "online", label: "Bid en place" });
   });
+  it("makes fee-blocked and risk-paused sessions amber", () => {
+    expect(sessionStatus({ ...active, state: "Fees exceed spread" }, false))
+      .toEqual({ tone: "degraded", label: "Frais non couverts" });
+    expect(sessionStatus({ ...active, state: "Fees unavailable" }, false).tone).toBe("degraded");
+    expect(sessionStatus({ ...active, state: "Risk paused" }, false).tone).toBe("degraded");
+  });
   it("lets workspace and worker staleness override a working bid", () => {
     for (const [session, stale] of [[active, true], [{ ...active, stale: true }, false]] as const)
       expect(sessionStatus(session, stale)).toEqual({ tone: "degraded", label: "Données retardées" });

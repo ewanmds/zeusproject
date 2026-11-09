@@ -58,18 +58,20 @@ class OutcomeSupervisor:
         from zeus import outcomes
         selected = str(request.market or "").strip()
         selection = None
+        context = getattr(self.manager, 'account_context', None)
+        account = context.account if context else os.getenv("WALLET_ADDRESS_OUTCOME", "").strip()
         if request.selection_mode == "auto":
             from zeus.outcome_flow import scanner
             if request.exec_mode != "maker":
                 raise ValueError("Automatic flow selection requires Maker / post-only")
             snapshot = scanner.snapshot(request.outcome_side or "no", request.order_size_usd,
-                                        request.auto_max_spread_bps)
+                                        request.auto_max_spread_bps, account=account)
             busy = {b["market"] for b in self.status()["bots"]
                     if b.get("running") or not b.get("cleanup_confirmed")}
             selection = next((r for r in snapshot["candidates"] if r["market"] not in busy
                               and self.rotation.candidate_allowed(rotation_group, r["market"])), None)
             if not snapshot["ready"] or selection is None:
-                raise ValueError("No eligible recent two-way taker flow. Open Auto and wait for observation.")
+                raise ValueError(snapshot.get('error') or "No eligible recent two-way flow covering fees. Wait for observation.")
             selected = selection["market"]
         if not selected or selected.upper() == "ALL":
             raise ValueError("Select a specific Outcome market: one process per market")
@@ -85,8 +87,6 @@ class OutcomeSupervisor:
         from zeus.outcome_flow import blocked_outcome
         if blocked_outcome(resolved):
             raise ValueError("Fed interest-rate markets are excluded")
-        context = getattr(self.manager, 'account_context', None)
-        account = context.account if context else os.getenv("WALLET_ADDRESS_OUTCOME", "").strip()
         if not account or not (context.private_key if context else os.getenv("PRIVATE_KEY_OUTCOME", "").strip()):
             raise ValueError("Outcome requires WALLET_ADDRESS_OUTCOME and PRIVATE_KEY_OUTCOME in .env")
         public = request.model_dump()

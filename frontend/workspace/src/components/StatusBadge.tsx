@@ -40,6 +40,8 @@ export function sessionStatus(
   )
     return { tone: "maintenance", label: phaseLabel };
   const label = stateText[session.state] || phaseLabel;
+  if (session.running && ["Fees exceed spread", "Fees unavailable", "Risk paused", "Spread too wide"].includes(session.state))
+    return { tone: "degraded", label };
   if (session.running && !["running", "active"].includes(session.phase))
     return { tone: "degraded", label };
   return { tone: session.running ? "online" : "neutral", label };

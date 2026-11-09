@@ -1,8 +1,9 @@
 # Plan Zeus : 31 composants Layro et icônes unifiées
 
 Date : 9 novembre 2026.
-Statut : plan uniquement. Aucune modification applicative ni installation effectuée dans ce tour.
-Les composants Layro déjà intégrés et les changements locaux précédents restent conservés.
+Statut : intégration réalisée dans le commit `f659964`.
+Les 31 références sont inventoriées dans `frontend/workspace/layro-components.json` ;
+les tests navigateur vérifient leur présence dans les parcours visibles.
 
 ## 1. Résultat attendu
 

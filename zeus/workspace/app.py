@@ -245,7 +245,7 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         from zeus.outcome_flow import scanner
         catalog = await public_catalogs.snapshot('hip4')
         await asyncio.to_thread(scanner.configure, catalog['outcomes'])
-        result = await asyncio.to_thread(scanner.snapshot, side, order_usd, spread_bps)
+        result = await asyncio.to_thread(scanner.snapshot, side, order_usd, spread_bps, account=who['wallet'])
         state = await asyncio.to_thread(runtimes.snapshot, who['wallet'])
         busy = {s['market'] for s in state['sessions'] if s['running'] or not s['cleanup_confirmed']}
         result['candidates'] = [m for m in result.get('candidates', []) if m['market'] not in busy]

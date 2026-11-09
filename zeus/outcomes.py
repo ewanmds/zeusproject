@@ -386,6 +386,8 @@ def _build_rows(
             "subcategory": subcategory or None,
             "description": description,
             "venue": VENUE,
+            "fee_scale": meta.get("feeScale"),
+            "deployer_fee_scale": raw.get("deployerFeeScale"),
             "underlying": underlying or None,
             "is_fallback": is_fallback,
             "sides": sides,

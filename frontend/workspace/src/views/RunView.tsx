@@ -331,6 +331,15 @@ export function RunView({
                       : "En attente de flux"}
                 </span>
               </div>
+              {!scanner?.ready && scanner?.error && (
+                <InlineAlert tone="warning">
+                  {scanner.error === "Spreads do not cover fees + 1bp"
+                    ? "Aucun spread ne couvre les frais + 1 bp."
+                    : scanner.error === "Account fees unavailable; new entries paused"
+                      ? "Vérification des frais du compte…"
+                      : "Scanner indisponible."}
+                </InlineAlert>
+              )}
               {!!scanner?.candidates?.length && (
                 <DataTable<any>
                   caption="Candidats observés · marché actif dans Sessions"
@@ -359,6 +368,14 @@ export function RunView({
                       sort: (m) => m.spread_bps,
                     },
                     {
+                      id: "net-edge",
+                      label: "Net estimé",
+                      render: (m) => Number.isFinite(m.net_touch_edge_bps)
+                        ? m.net_touch_edge_bps.toFixed(2) + " bps"
+                        : "—",
+                      sort: (m) => m.net_touch_edge_bps,
+                    },
+                    {
                       id: "queue",
                       label: "File estimée",
                       render: (m) =>
@@ -373,6 +390,8 @@ export function RunView({
               <RichPopover label="Comprendre le scanner">
                 Le débit est le volume observé en une minute. La file est une
                 estimation ; elle ne garantit pas l’exécution d’un ordre.
+                Le net estimé déduit les frais de clôture du spread ; il ne
+                prévoit pas les variations de prix après l’entrée.
               </RichPopover>
             </div>
           )}

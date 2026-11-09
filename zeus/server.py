@@ -1175,7 +1175,8 @@ async def outcome_auto(side: Literal["yes", "no"] = "no", order_usd: float = 50,
     # times against the current clock, so a <=60 s-old catalog stays safe.
     catalog = await public_catalogs.snapshot("hip4")
     await asyncio.to_thread(scanner.configure, catalog["outcomes"])
-    result = await asyncio.to_thread(scanner.snapshot, side, order_usd, max_spread_bps)
+    result = await asyncio.to_thread(scanner.snapshot, side, order_usd, max_spread_bps,
+                                     account=os.getenv('WALLET_ADDRESS_OUTCOME', '').strip())
     # Collecting session state reads every journal; use the shared cached
     # snapshot so the auto poll never duplicates a WebSocket collection.
     worldcup = await asyncio.to_thread(dashboard.read, "outcome")

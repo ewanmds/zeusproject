@@ -4,6 +4,7 @@ No order signing here. Stop cancels the complete rotation chain; a stopped
 server never resumes old groups implicitly. Public scanner is shared by all.
 """
 from collections import deque
+import os
 from pathlib import Path
 import threading
 import time
@@ -218,8 +219,11 @@ class OutcomeRotation:
                     if group["fill_rate"] >= threshold:
                         group["reason"] = ""
                         continue
+            context = getattr(getattr(self.owner, 'manager', None), 'account_context', None)
+            account = context.account if context else os.getenv('WALLET_ADDRESS_OUTCOME', '').strip()
             snapshot = scanner.snapshot(config["outcome_side"], config["order_size_usd"],
-                                        config.get("auto_max_spread_bps", 10))
+                                        config.get("auto_max_spread_bps", 10),
+                                        account=account)
             if not snapshot.get("ready") or now-float(snapshot.get("updated_at", now)) > 20:
                 continue
             busy = {b["market"] for b in status["bots"] if b["running"] or not b.get("cleanup_confirmed")}

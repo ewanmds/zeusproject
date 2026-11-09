@@ -65,6 +65,7 @@ export function SessionDetails({ session }: { session: Session }) {
             label: "Position",
             content: values([
               ["Position valorisée", usd(s.position_usd)],
+              ["PnL brut avant frais", usd(s.net_pnl !== null && s.fees !== null ? s.net_pnl + s.fees : null)],
               ["PnL réalisé net", usd(s.net_pnl)],
               ["Frais", usd(s.fees)],
             ]),
