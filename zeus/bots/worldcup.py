@@ -18,6 +18,7 @@ Install deps if needed:
 from __future__ import annotations
 
 from zeus import PROJECT_ROOT
+from zeus.builder import outcome_builder
 from zeus.safety import SafetyLatch, account_snapshot, finite, confirmed_client_order, safe_error, supervisor_alive
 from zeus.network import retry_read, StartupReadCancelled
 from contextlib import nullcontext
@@ -501,6 +502,17 @@ class HyperliquidSpreadBot:
         except Exception as exc:
             raise SystemExit(f"Could not initialize live Exchange: {exc}") from exc
 
+    def _submit_order(self, **order: Any) -> Any:
+        """Send an Outcome order carrying the campaign builder code.
+
+        Every campaign order must include Outcome's builder code to be
+        eligible for liquidity rewards; a zero fee is permitted, so this
+        adds attribution without changing what the trader pays.
+        """
+        if "builder" not in order:
+            order["builder"] = outcome_builder()
+        return self.exchange.order(**order)
+
     @staticmethod
     def patch_outcome_assets(info: Info, outcome_meta: Dict[str, Any]) -> None:
         """Teach the current SDK about HIP-4 #N outcome coins."""
@@ -535,7 +547,7 @@ class HyperliquidSpreadBot:
                 continue
             px = round_outcome_sell_px(ref * (1.0 - max(slip, 0.002)))
             try:
-                self.exchange.order(
+                self._submit_order(
                     name=st.spec.symbol,
                     is_buy=False,
                     sz=sell_size,
@@ -635,7 +647,7 @@ class HyperliquidSpreadBot:
                     "limit_px": px, "book_age_ms": max(0, time.time()-st.last_book_ts)*1000,
                     "submission": "started"}
                 try:
-                    result = self.exchange.order(
+                    result = self._submit_order(
                         name=st.spec.symbol, is_buy=False, sz=qty,
                         limit_px=round_px_wire(px),
                         order_type={"limit": {"tif": "Ioc"}},
@@ -791,7 +803,7 @@ class HyperliquidSpreadBot:
         slip = max(self.cfg.market_slippage_bps / 10000, 0.002)
         buy = position < 0
         px = round_outcome_buy_px(ask * (1 + slip)) if buy else round_outcome_sell_px(bid * (1 - slip))
-        self.exchange.order(name=symbol, is_buy=buy, sz=abs(position), limit_px=px,
+        self._submit_order(name=symbol, is_buy=buy, sz=abs(position), limit_px=px,
                             order_type={"limit": {"tif": "Ioc"}}, reduce_only=not self.cfg.worldcup)
 
     def shutdown(self, *_: Any) -> None:
@@ -1713,7 +1725,7 @@ class HyperliquidSpreadBot:
                         req = self.bilateral_requests(st).get(buy)
                         if req is None or buy and self.rotation_requested():
                             return
-                        result = self.exchange.order(name=req["coin"], is_buy=buy, sz=req["sz"],
+                        result = self._submit_order(name=req["coin"], is_buy=buy, sz=req["sz"],
                             limit_px=req["limit_px"], order_type=req["order_type"], reduce_only=False)
                         self.stats.orders_sent += 1
                         st.pending_until = time.time()+.35
@@ -1934,7 +1946,7 @@ class HyperliquidSpreadBot:
                 with self.lock:
                     if st.reconcile_required or not self.running or self.safety.stopped.is_set():
                         return
-                    res = self.exchange.order(
+                    res = self._submit_order(
                         name=req["coin"],
                         is_buy=bool(req["is_buy"]),
                         sz=float(req["sz"]),
