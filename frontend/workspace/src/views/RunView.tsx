@@ -331,10 +331,8 @@ export function RunView({
                       : "En attente de flux"}
                 </span>
               </div>
-              {!scanner?.ready && scanner?.error && (
-                <InlineAlert tone="warning">
-                  Scanner indisponible.
-                </InlineAlert>
+              {!scanner?.ready && scanner?.reason && (
+                <InlineAlert tone="warning">{scanner.reason}</InlineAlert>
               )}
               {!!scanner?.candidates?.length && (
                 <DataTable<any>

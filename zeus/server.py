@@ -138,7 +138,8 @@ class WorldcupStartRequest(BaseModel):
     auto_market_cooldown_sec: float = Field(default=300, ge=60, le=86400, allow_inf_nan=False)
     auto_min_fill_usd_per_min: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     outcome_side: Optional[Literal["yes", "no"]] = None
-    exec_mode: Literal["maker", "taker"] = "taker"
+    exec_mode: Literal["maker", "taker"] = "maker"
+    resume_exit: bool = False
     maker_spread_pct: float = Field(default=0.005, ge=0, allow_inf_nan=False)
     order_size_usd: float = Field(default=50, ge=10, allow_inf_nan=False)
     # En %, même convention que --max-spread-pct (0.02 = 0.02% = 2 bps).
@@ -830,6 +831,9 @@ class BotManager:
     def stop_worldcup(self, session_id=None):
         return self.outcome.stop(session_id)
 
+    def resume_worldcup_exit(self, session_id):
+        return self.outcome.resume_exit(session_id)
+
     def get_worldcup_stats(self):
         return self.outcome.status()
 
@@ -1209,12 +1213,15 @@ async def stop_outcome(req: Optional[OutcomeStopRequest] = None, _: None = Depen
         session_id = req.session_id if req else None
         stopped_ids = await asyncio.to_thread(manager.stop_worldcup, session_id)
         state = await asyncio.to_thread(dashboard.read, "outcome", fresh=True)
-        targets = [b for b in state.get("bots", []) if session_id is None or b["session_id"] in (stopped_ids or [session_id])]
-        if (any(b["running"] or b["cleanup_confirmed"] is not True for b in targets)
-                or not targets and not (session_id and stopped_ids)
-                and (state.get("running") or state.get("cleanup_confirmed") is not True)):
-            raise RuntimeError("Outcome stop not confirmed")
-        return {"status": "ok", "message": "Outcome stop verified", "state": state,
+        targets = [b for b in state.get("bots", [])
+                   if session_id is None or b["session_id"] in (stopped_ids or [session_id])]
+        confirmed = bool(targets) and all(
+            not b["running"] and b["cleanup_confirmed"] is True for b in targets)
+        # A normal passive exit can still be waiting for a counterparty. That
+        # is a recorded stop request, not an error.
+        return {"status": "ok" if confirmed else "draining",
+                "message": "Outcome stop verified" if confirmed else "Maker exit in progress",
+                "state": state,
                 "stopped_session_ids": stopped_ids or [b["session_id"] for b in targets]}
     except Exception as e:
         return JSONResponse(

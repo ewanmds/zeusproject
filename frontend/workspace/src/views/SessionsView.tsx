@@ -9,6 +9,7 @@ import { ViewSwitch } from "../components/ViewSwitch";
 import { DataTable } from "../components/DataTable";
 import { SessionProgress } from "../components/SessionProgress";
 import type { Session } from "../types";
+import { canResumeMakerExit } from "../presentation/stop";
 import type { SessionsProps } from "../viewTypes";
 export function SessionsView({
   owner,
@@ -23,6 +24,9 @@ export function SessionsView({
   setStop,
   setSelected,
   setWalletModal,
+  resumeExit,
+  stopError,
+  busy,
 }: SessionsProps) {
   const [preference, setPreference] = useState<{
     owner?: string;
@@ -62,25 +66,37 @@ export function SessionsView({
           Arrêter
         </button>
       ) : !s.cleanup_confirmed ? (
-        <button
-          className="button secondary small"
-          disabled={!!checking}
-          aria-busy={checking === s.id || undefined}
-          onClick={async () => {
-            setChecking(s.id);
-            setError(null);
-            try {
-              await api("/reconcile", {});
-              w.refresh();
-            } catch (e: any) {
-              setError({ id: s.id, message: e.message });
-            } finally {
-              setChecking(null);
-            }
-          }}
-        >
-          {checking === s.id ? "Vérification…" : "Vérifier l’arrêt"}
-        </button>
+        <div className="row-actions">
+          {canResumeMakerExit(s) && (
+            <button
+              className="button secondary small"
+              disabled={busy === "resume"}
+              onClick={() => resumeExit(s)}
+            >
+              <Icon name="run" size={13} />
+              Reprendre la sortie
+            </button>
+          )}
+          <button
+            className="button secondary small"
+            disabled={!!checking}
+            aria-busy={checking === s.id || undefined}
+            onClick={async () => {
+              setChecking(s.id);
+              setError(null);
+              try {
+                await api("/reconcile", {});
+                w.refresh();
+              } catch (e: any) {
+                setError({ id: s.id, message: e.message });
+              } finally {
+                setChecking(null);
+              }
+            }}
+          >
+            {checking === s.id ? "Vérification…" : "Vérifier l’arrêt"}
+          </button>
+        </div>
       ) : null}
     </div>
   );
@@ -99,6 +115,7 @@ export function SessionsView({
           Nouvelle session
         </button>
       </div>
+      {stopError && <InlineAlert>{stopError}</InlineAlert>}
       {owner ? (
         <>
           {!w.snapshot ? (

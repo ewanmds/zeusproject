@@ -157,6 +157,10 @@ class OutcomeCostsTests(unittest.TestCase):
                 result = scan._snapshot('no', 50 if reason=='depth' else 15,
                                         .1 if reason=='spread' else 10, base_rate=None)
             self.assertFalse(result['ready'], reason)
+            # The yellow banner names the cause with its threshold and unit.
+            expected = {'spread': 'bps', 'depth': '$', 'stale': 'carnet',
+                        'crossed': 'carnet'}[reason]
+            self.assertIn(expected, result['reason'], reason)
 
     def test_unknown_fee_profile_alone_keeps_estimates_unknown_without_blocking(self):
         scan, book = self.ready_scanner()

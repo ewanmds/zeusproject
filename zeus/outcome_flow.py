@@ -337,12 +337,32 @@ class OutcomeFlowScanner:
                     continue
                 history[coin] = list(trades)
             rows = dict(self.rows)
-        if not ready:
+        def not_ready(detail=""):
+            if status.get("error"):
+                status["reason"] = "Scanner indisponible: " + str(status["error"])
+            elif not status.get("connected"):
+                status["reason"] = "Flux public déconnecté; reconnexion en cours"
+            elif status.get("catalog_stale"):
+                status["reason"] = "Catalogue HIP-4 ancien (plus de 120 s); rechargement"
+            elif status.get("warming_up"):
+                status["reason"] = "Observation initiale: %d s / 60 s" % int(status.get("observed_sec") or 0)
+            elif detail:
+                status["reason"] = "Aucun candidat: " + detail
+            else:
+                status["reason"] = "Aucun flux deux sens dans les 5 dernières minutes"
+            status["order_usd"] = order_usd
+            status["max_spread_bps"] = max_spread_bps
+            status["min_depth_usd"] = order_usd
             return status
+
+        if not ready:
+            return not_ready()
         shortlist = []
+        skipped_events = 0
         for coin, trades in history.items():
             row = rows.get(int(coin[1:])//10)
             if not row or not before_event(row, now):
+                skipped_events += 1
                 continue
             metric = flow_metrics(trades, now)
             if metric and metric["eligible"]:
@@ -354,12 +374,16 @@ class OutcomeFlowScanner:
         targets = shortlist[:24]
         pool = self._book_executor()
         if pool is None:
-            return {**status, "connected": False}
+            status["connected"] = False
+            return not_ready("pool de lecture des carnets indisponible")
         with self.book_lock:
             books = list(pool.map(self._book, [r["market"] for r in targets]))
         candidates = []
         fees_not_covered = 0
         cost_unavailable = 0
+        rejected_book = rejected_depth = rejected_spread = 0
+        widest_spread = 0.0
+        deepest_book = 0.0
         for item, book in zip(targets, books):
             try:
                 bids, asks = book["levels"]
@@ -367,9 +391,18 @@ class OutcomeFlowScanner:
                 bq, aq = float(bids[0]["sz"]), float(asks[0]["sz"])
                 age = time.time()-float(book["time"])/1000
                 spread = 10000*(ask-bid)/((bid+ask)/2)
+                depth = min(bq*bid, aq*ask)
                 if (not all(map(math.isfinite, (bid, ask, bq, aq, age, spread)))
-                        or not 0 < bid < ask < 1 or not -1 <= age <= 5
-                        or min(bq*bid, aq*ask) < order_usd or spread > max_spread_bps):
+                        or not 0 < bid < ask < 1 or not -1 <= age <= 5):
+                    rejected_book += 1
+                    continue
+                widest_spread = max(widest_spread, spread)
+                deepest_book = max(deepest_book, depth)
+                if depth < order_usd:
+                    rejected_depth += 1
+                    continue
+                if spread > max_spread_bps:
+                    rejected_spread += 1
                     continue
                 # Queue clearance proxy, not a fill promise; use token flow so
                 # quote token prices cannot distort the displayed queue size.
@@ -405,9 +438,29 @@ class OutcomeFlowScanner:
         completed = time.time()
         for row in candidates:
             row['last_trade_age_sec'] += completed-now
+        reason = ""
+        if not candidates:
+            parts = []
+            if len(shortlist):
+                parts.append("%d marché(s) avec flux" % len(shortlist))
+            if rejected_book:
+                parts.append("%d carnet(s) absent(s) ou périmé(s)" % rejected_book)
+            if rejected_depth:
+                parts.append("%d profondeur(s) < %g $ (max %g $)"
+                             % (rejected_depth, order_usd, round(deepest_book, 2)))
+            if rejected_spread:
+                parts.append("%d spread(s) > %g bps (min observé %g bps)"
+                             % (rejected_spread, max_spread_bps, round(widest_spread, 2)))
+            if not parts and skipped_events:
+                parts.append("%d marché(s) sans flux récent" % skipped_events)
+            reason = ("Aucun candidat: " + "; ".join(parts)) if parts else \
+                     "Aucun flux deux sens dans les 5 dernières minutes"
         return {**status, "ready": bool(candidates), "warming_up": False, "candidates": candidates,
+                "reason": reason,
                 "fees_not_covered": fees_not_covered, "cost_unavailable": cost_unavailable,
                 "cost_policy": "informational",
+                "order_usd": order_usd, "max_spread_bps": max_spread_bps,
+                "min_depth_usd": order_usd,
                 "updated_at": completed, "ranking": "queue_proxy_sec",
                 "flow_candidates": len(shortlist), "books_checked": len(books)}
 

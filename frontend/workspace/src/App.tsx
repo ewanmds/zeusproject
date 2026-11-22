@@ -7,7 +7,11 @@ import { useWorkspace } from "./useWorkspace";
 import { signAgentApproval } from "./authorization";
 import { Icon, Modal, Pending } from "./ui";
 import { FeedbackButton } from "./components/FeedbackButton";
-import type { Draft, View, Session, Agent, Operation } from "./types";
+import type { Draft, View, Session, Agent, Operation, Snapshot } from "./types";
+import {
+  resolveStopSnapshot,
+  resumeExitMessage,
+} from "./presentation/stop";
 import { NavDock } from "./components/layout";
 import { Kbd } from "./components/fields";
 import { AlertDialog, useMobile } from "./components/Dialog";
@@ -364,10 +368,34 @@ export default function App() {
     setBusy("stop");
     setActionErrors((old) => ({ ...old, stop: "" }));
     try {
-      await api("/sessions/" + encodeURIComponent(stop.id) + "/stop", {});
+      const snapshot = await api<Snapshot>(
+        "/sessions/" + encodeURIComponent(stop.id) + "/stop",
+        {},
+      );
+      const resolution = resolveStopSnapshot(snapshot, stop.id);
       setStop(null);
       setSelected(null);
-      setNotice("Arrêt vérifié.");
+      // A 200 only records the request; never claim a verified stop until the
+      // returned snapshot proves it.
+      setNotice(resolution.message);
+      w.refresh();
+    } catch (e: any) {
+      setActionErrors((old) => ({ ...old, stop: e.message }));
+      w.refresh();
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const resumeExit = async (session: Session) => {
+    setBusy("resume");
+    setActionErrors((old) => ({ ...old, stop: "" }));
+    try {
+      const snapshot = await api<Snapshot>(
+        "/sessions/" + encodeURIComponent(session.id) + "/resume-exit",
+        {},
+      );
+      setNotice(resumeExitMessage(snapshot, session.id).message);
       w.refresh();
     } catch (e: any) {
       setActionErrors((old) => ({ ...old, stop: e.message }));
@@ -429,6 +457,8 @@ export default function App() {
     setSelected,
     setNotice,
     setWalletModal,
+    resumeExit,
+    stopError: actionErrors.stop,
     period,
     setPeriod,
     history,

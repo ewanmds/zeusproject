@@ -13,38 +13,33 @@ export function sessionStatus(
   session: Pick<
     Session,
     "running" | "stale" | "cleanup_confirmed" | "state" | "phase"
-  >,
+  > & { exit_requested?: boolean; stop_reason?: string },
   workspaceStale: boolean,
 ): { tone: StatusTone; label: string } {
+  // Only a real publication gap is "delayed"; accounting still settling is not.
   if (workspaceStale || session.stale)
     return { tone: "degraded", label: "Données retardées" };
-  if (!session.running && !session.cleanup_confirmed)
-    return { tone: "degraded", label: "Arrêt à vérifier" };
   const phaseLabel =
     phaseText[session.phase] || session.phase || "État à vérifier";
+  const makerExit =
+    session.phase === "draining" ||
+    session.exit_requested === true ||
+    (!!session.stop_reason && session.cleanup_confirmed !== true);
+  if (makerExit && session.running)
+    return { tone: "online", label: "Sortie maker en cours" };
+  if (!session.running && !session.cleanup_confirmed)
+    return { tone: "degraded", label: "Arrêt non confirmé" };
   if (["error", "failed"].includes(session.phase))
     return {
       tone: "offline",
       label: session.phase === "error" ? "Erreur" : phaseLabel,
     };
-  if (
-    session.running &&
-    [
-      "connecting",
-      "starting",
-      "stopping",
-      "rotating",
-      "reconciling",
-      "recovering",
-    ].includes(session.phase)
-  )
-    return { tone: "maintenance", label: phaseLabel };
-  const label = stateText[session.state] || phaseLabel;
-  if (session.running && ["Fees exceed spread", "Fees unavailable", "Risk paused", "Spread too wide"].includes(session.state))
-    return { tone: "degraded", label };
-  if (session.running && !["running", "active"].includes(session.phase))
-    return { tone: "degraded", label };
-  return { tone: session.running ? "online" : "neutral", label };
+  if (session.running)
+    return {
+      tone: "online",
+      label: stateText[session.state] || phaseLabel,
+    };
+  return { tone: "neutral", label: stateText[session.state] || phaseLabel };
 }
 
 export function StatusBadge({

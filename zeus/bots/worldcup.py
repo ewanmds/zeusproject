@@ -19,13 +19,14 @@ from __future__ import annotations
 
 from zeus import PROJECT_ROOT
 from zeus.builder import outcome_builder
-from zeus.safety import SafetyLatch, account_snapshot, finite, confirmed_client_order, safe_error, supervisor_alive
+from zeus.safety import SafetyLatch, account_snapshot, finite, confirmed_client_order, safe_error, supervisor_alive, atomic_json, read_json, SubmissionSkipped
 from zeus.network import retry_read, StartupReadCancelled
 from contextlib import nullcontext
 
 import argparse
 import math
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+from pathlib import Path
 import os
 import signal
 import sys
@@ -243,7 +244,7 @@ class BotConfig:
     worldcup: bool
     countries: List[str]
     outcome_side: str
-    exec_mode: str = "taker"   # "taker" = IOC croise le spread | "maker" = limit post-only
+    exec_mode: str = "maker"   # Outcome sessions are always post-only.
     maker_offset_pct: float = 0.0  # % derrière le touch, même convention que max_spread_pct (0.02 = 0.02%)
     maker_opening_rest_sec: float = 2.0  # Preserve opening queue; risk pulls/exits bypass.
     maker_requote_delay_sec: float = .05  # Confirmed normal cancels still require fresh account reconciliation.
@@ -258,9 +259,8 @@ class BotConfig:
     market_label: str = ""
     rotation_file: Optional[str] = None
     risk_pnl_carry: float = 0.0
-    # Hard inventory guards (Outcome): a position that moves against its
-    # average entry, or a drain that cannot go flat, is exited with a bounded
-    # IOC instead of waiting for a passive ask indefinitely.
+    # Outcome risk guards stop purchases and drain inventory with ALO only.
+    resume_exit: bool = False
     inventory_stop_bps: float = 200.0
     inventory_drain_timeout_sec: float = 90.0
     inventory_exit_slippage_bps: float = 50.0
@@ -394,6 +394,10 @@ class SessionStats:
 class HyperliquidSpreadBot:
     def __init__(self, cfg: BotConfig):
         self.cfg = cfg
+        if cfg.worldcup and not cfg.is_maker:
+            raise ValueError("Outcome requires maker / post-only execution")
+        self.exit_reason = ""
+        self.exit_started = 0.0
         self.console = Console()
         self.lock = threading.RLock()
         self.wake = threading.Event()
@@ -406,7 +410,9 @@ class HyperliquidSpreadBot:
         self.stats = SessionStats()
         self.account_revision = 0
         self.safety = SafetyLatch(self._halt, cfg.safety_file, is_running=lambda: self.running
-                                 and not (cfg.stop_file and os.path.exists(cfg.stop_file)) and supervisor_alive())
+                                 and not (cfg.stop_file and os.path.exists(cfg.stop_file)) and supervisor_alive(),
+                                  strict_maker_spot=cfg.worldcup,
+                                  opening_allowed=lambda: not self.rotation_requested())
         self.funds = None
         if cfg.funds_root:
             from zeus.process_control import OutcomeFunds
@@ -429,12 +435,14 @@ class HyperliquidSpreadBot:
             self._init_exchange(perp_dexs)
             if cfg.signing_root:
                 from zeus.signing import SigningCoordinator
-                self.exchange = SigningCoordinator(cfg.signing_root, self.wallet.address).wrap(self.exchange)
+                self.exchange = SigningCoordinator(cfg.signing_root, self.wallet.address).wrap(
+                    self.exchange, before_send=lambda name, args, kwargs: self.safety.assert_allowed_action(name, args, kwargs))
             if self.funds:
                 self.exchange = self.funds.wrap(self.exchange)
             self.exchange = self.safety.wrap(
                 self.exchange, self._reconcile_missing_cancels if cfg.worldcup else None,
-                self._pause_execution if cfg.worldcup else None)
+                self._pause_execution if cfg.worldcup else None,
+                reconcile_post_only=self._reconcile_post_only if cfg.worldcup else None)
 
         self.specs = self.discover_markets()
         self.states: Dict[str, MarketState] = {spec.symbol: MarketState(spec) for spec in self.specs}
@@ -529,36 +537,50 @@ class HyperliquidSpreadBot:
                 info.asset_to_sz_decimals[asset_id] = 0
 
     def liquidate_all_positions(self) -> None:
-        """Vend au market (IOC) tout l'inventaire du côté sélectionné restant.
-        Appelé au stop: le bot ne doit rien laisser en position derrière lui."""
-        if not self.cfg.live or self.exchange is None:
+        """Compatibility entry point: Outcome liquidation is a maker exit request."""
+        if self.cfg.worldcup:
+            self.request_maker_exit("Inventory close requested: maker exit")
             return
-        self.sync_account()
-        slip = max(0.0, self.cfg.market_slippage_bps) / 10_000.0
+        raise RuntimeError("Use the engine's explicit close lifecycle")
+
+    def request_maker_exit(self, reason="Maker exit requested"):
+        """Persist an exit-only intent without shutting down passive selling."""
+        if not self.cfg.worldcup:
+            self.request_stop()
+            return
+        if self.safety.stopped.is_set():
+            return
+        reason = safe_error(reason)
+        drain_file = self.cfg.rotation_file
+        try:
+            if drain_file and not os.path.exists(drain_file):
+                atomic_json(drain_file, {"requested_at": time.time(), "reason": reason,
+                                         "session_finished": True})
+            self.exit_reason = getattr(self, "exit_reason", "") or reason
+            self.exit_started = getattr(self, "exit_started", 0.0) or time.time()
+            metadata = getattr(self.safety, "metadata", None)
+            if metadata is not None and not metadata.get("exit_requested"):
+                metadata.update(exit_requested=True, stop_reason=self.exit_reason)
+                publish = getattr(self.safety, "publish", None)
+                if publish is not None and not publish():
+                    return
+        except (OSError, ValueError) as exc:
+            self.safety.fail("Maker exit journal unavailable: " + safe_error(exc))
+            return
+        self.wake.set()
+
+    def _reconcile_post_only(self, requests, operation):
+        """A complete ALO rejection is a quote race, never a taker fallback."""
         with self.lock:
-            states = list(self.states.values())
-        for st in states:
-            sell_size = float(math.floor(max(0.0, st.position)))
-            if sell_size < 1.0:
-                continue
-            ref = st.bid if st.bid > 0 else (st.mid if st.mid > 0 else 0.0)
-            if ref <= 0:
-                st.last_action = "liquidate: no bid, position kept"
-                continue
-            px = round_outcome_sell_px(ref * (1.0 - max(slip, 0.002)))
-            try:
-                self._submit_order(
-                    name=st.spec.symbol,
-                    is_buy=False,
-                    sz=sell_size,
-                    limit_px=round_px_wire(px),
-                    order_type={"limit": {"tif": "Ioc"}},
-                    reduce_only=False,
-                )
-                st.last_action = f"liquidate: SELL {sell_size:g} @ {px:g}"
-            except Exception as exc:
-                st.last_error = str(exc)[:120]
-                st.last_action = "liquidate error"
+            for request in requests:
+                st = self.states.get(request.get("coin") or request.get("name"))
+                if st is not None:
+                    st.reconcile_required = True
+                    st.pending_until = time.time() + self.cfg.maker_requote_delay_sec
+                    st.last_error = ""
+                    st.last_action = "Post-only race: refresh book and account"
+                    st.last_rest_book_ts = 0.0
+        self.wake.set()
 
     def inventory_risk_reason(self, st: MarketState, now: Optional[float] = None) -> Optional[str]:
         """Hard-exit trigger for held Outcome inventory (long-only spot tokens).
@@ -598,91 +620,19 @@ class HyperliquidSpreadBot:
         return None
 
     def enforce_inventory_stop(self, st: MarketState) -> bool:
-        """Flatten Outcome inventory with a bounded IOC when the guard trips.
-
-        This is the deliberate risk exception to maker-only execution: cancel
-        the resting quotes, re-sync balances, then sell the whole position with
-        an IOC limit below the touch. Normal maker/drain paths are unchanged.
-        """
-        if not self.cfg.live or self.exchange is None or not self.running:
-            return False
-        if self.safety.stopped.is_set() or self.safety.phase == "recovering":
+        """Risk events request an ALO drain; passive order management still runs."""
+        if not self.cfg.worldcup or not self.running or self.safety.stopped.is_set():
             return False
         reason = self.inventory_risk_reason(st)
-        if reason is None:
-            return False
-        if st.reconcile_required or time.time() < st.pending_until:
-            st.last_action = f"{reason}: waiting for reconciliation"
-            return True
-        with self.safety.lock, (self.funds.transaction() if getattr(self, "funds", None) else nullcontext()):
-            # An IOC must never race a resting ask: cancel both sides first.
-            self.cancel_all("inventory stop", [st.spec.symbol])
-            if st.bid_oid or st.ask_oid:
-                st.last_action = f"{reason}: cancel pending"
-                return True
-            if not self.sync_account():
-                st.last_action = f"{reason}: account sync failed"
-                return True
-            qty = float(math.floor(max(0.0, st.position)))
-            ref = st.bid if st.bid > 0 else st.mid
-            if qty < 1.0:
-                st.drain_started_at = 0.0
-                st.last_action = "inventory stop: already flat"
-                return True
-            if ref <= 0:
-                st.last_action = f"{reason}: no bid"
-                return True
-            slip = max(self.cfg.inventory_exit_slippage_bps / 10_000.0,
-                       self.cfg.market_slippage_bps / 10_000.0, 0.002)
-            px = round_outcome_sell_px(ref * (1.0 - slip))
-            with self.lock:
-                if (not self.running or self.safety.stopped.is_set()
-                        or st.reconcile_required or st.position < 1.0):
-                    return True
-                st.last_inventory_exit = {
-                    "requested_at": time.time(), "reason": reason,
-                    "entry_px": st.avg_entry_px or None,
-                    "entry_basis_source": st.entry_basis_source,
-                    "bid": st.bid, "ask": st.ask, "quantity": qty,
-                    "limit_px": px, "book_age_ms": max(0, time.time()-st.last_book_ts)*1000,
-                    "submission": "started"}
-                try:
-                    result = self._submit_order(
-                        name=st.spec.symbol, is_buy=False, sz=qty,
-                        limit_px=round_px_wire(px),
-                        order_type={"limit": {"tif": "Ioc"}},
-                        reduce_only=not self.cfg.worldcup,
-                    )
-                except Exception as exc:
-                    st.last_inventory_exit['submission'] = 'unconfirmed'
-                    st.last_error = safe_error(exc)
-                    st.last_action = f"{reason}: exit error"
-                    st.reconcile_required = True
-                    st.pending_until = time.time() + 2.0
-                    st.inventory_stop_until = time.time() + 5.0
-                    return True
-                st.last_inventory_exit['submission'] = 'response_received'
-                self.stats.orders_sent += 1
-                self.stats.forced_exits += 1
-                st.inventory_stop_until = time.time() + 5.0
-                st.pending_until = time.time() + 0.35
-                st.reconcile_required = True
-                self.account_revision = getattr(self, "account_revision", 0) + 1
-                try:
-                    self._parse_order_response(
-                        st,
-                        [{"coin": st.spec.symbol, "is_buy": False, "sz": qty,
-                          "limit_px": px}],
-                        result,
-                    )
-                except Exception as exc:
-                    # The order is already on the wire; never report it as a
-                    # failed exit. The next account sync resolves the fill.
-                    st.last_error = safe_error(exc)
-                    st.last_action = f"{reason}: sent, awaiting sync"
-                else:
-                    st.last_action = f"{reason}: {st.last_action}"
-                return True
+        if reason:
+            st.last_inventory_exit = {
+                "requested_at": time.time(), "reason": reason,
+                "entry_px": st.avg_entry_px or None, "entry_basis_source": st.entry_basis_source,
+                "bid": st.bid, "ask": st.ask, "quantity": math.floor(max(0, st.position)),
+                "limit_px": st.ask, "submission": "maker_exit_requested"}
+            st.last_action = reason + ": maker exit"
+            self.request_maker_exit(reason)
+        return False
 
     def _halt(self):
         self.running = False
@@ -752,7 +702,7 @@ class HyperliquidSpreadBot:
 
     def _cleanup_snapshot(self):
         resolved, live_orders = set(), set()
-        if self.safety.stopped.is_set():
+        if self.safety.stopped.is_set() or self.cfg.resume_exit or self.rotation_requested():
             for cloid in sorted(self.safety.pending_cloids):
                 oid, status = confirmed_client_order(self.info, self.cfg.account_address, cloid, self.states)
                 self.safety.owned.add(oid)
@@ -795,6 +745,11 @@ class HyperliquidSpreadBot:
                                                time.time() + self.cfg.maker_opening_rest_sec)
 
     def _cleanup_close(self, symbol, position):
+        # Fatal Outcome shutdown cancels owned orders and reports residual
+        # exposure; a running exit-only worker is required to manage a maker
+        # order. HIP-3 keeps its original explicit reduce-only close.
+        if self.cfg.worldcup:
+            raise SubmissionSkipped("Outcome cleanup cannot liquidate; resume the maker exit explicitly")
         if self.rotation_requested() and not (self.cfg.stop_file and os.path.exists(self.cfg.stop_file)):
             raise RuntimeError("Rotation requires flat inventory; automatic taker liquidation is disabled")
         bid, ask = self.fetch_rest_bbo(symbol)
@@ -804,14 +759,14 @@ class HyperliquidSpreadBot:
         buy = position < 0
         px = round_outcome_buy_px(ask * (1 + slip)) if buy else round_outcome_sell_px(bid * (1 - slip))
         self._submit_order(name=symbol, is_buy=buy, sz=abs(position), limit_px=px,
-                            order_type={"limit": {"tif": "Ioc"}}, reduce_only=not self.cfg.worldcup)
+                            order_type={"limit": {"tif": "Ioc"}}, reduce_only=True)
 
     def shutdown(self, *_: Any) -> None:
         self.request_stop()
         if self.cfg.live:
             self.safety.cleanup(self._cleanup_snapshot,
                                 lambda rows: self.exchange.bulk_cancel([{"coin": symbol, "oid": oid} for symbol, oid in rows]),
-                                self._cleanup_close)
+                                self._cleanup_close, allow_close=not self.cfg.worldcup)
         else:
             self.safety.cleanup_confirmed = True
             self.safety.phase = "failed" if self.safety.error else "stopped"
@@ -1477,10 +1432,15 @@ class HyperliquidSpreadBot:
 
     def risk_block_reason(self, st: MarketState, closing_inventory: bool = False) -> Optional[str]:
         net_risk_pnl = self.stats.net_pnl + self.cfg.risk_pnl_carry
-        if net_risk_pnl <= -abs(self.cfg.stop_loss_usd):
+        # Outcome exits are passive sells; a session stop-loss must never
+        # block them. HIP-3 keeps its original stop-loss behaviour.
+        closing_outcome = closing_inventory and self.cfg.worldcup
+        if not closing_outcome and net_risk_pnl <= -abs(self.cfg.stop_loss_usd):
             return f"session stop loss {fmt_usd(net_risk_pnl)}"
-        if self.cfg.take_profit_usd > 0 and self.stats.net_pnl >= self.cfg.take_profit_usd:
+        if not closing_outcome and self.cfg.take_profit_usd > 0 and self.stats.net_pnl >= self.cfg.take_profit_usd:
             return f"session take profit {fmt_usd(self.stats.net_pnl)}"
+        if not closing_inventory and self.cfg.worldcup and self.rotation_requested():
+            return getattr(self, "exit_reason", "") or "Maker exit requested; new bids paused"
         if not st.has_bbo:
             return "waiting bbo"
         if time.time() - st.last_book_ts > self.cfg.stale_sec:
@@ -1507,6 +1467,8 @@ class HyperliquidSpreadBot:
         return size
 
     def maker_quote_px(self, st: MarketState, is_buy: bool) -> float:
+        if self.cfg.worldcup:
+            return round_outcome_sell_px(st.bid) if is_buy else round_outcome_buy_px(st.ask)
         if self.cfg.maker_spread_pct is None:
             offset = max(0.0, self.cfg.maker_offset_pct) / 100.0
             return (round_outcome_sell_px(st.bid * (1.0 - offset)) if is_buy
@@ -1532,6 +1494,8 @@ class HyperliquidSpreadBot:
         slip = max(0.0, self.cfg.market_slippage_bps) / 10_000.0
         has_no_inventory = st.position >= 1.0
         maker = self.cfg.is_maker
+        if self.cfg.worldcup and not has_no_inventory and self.rotation_requested():
+            return None, "Maker exit: new purchases blocked"
         # Maker: target spread around mid, rounded to remain passive.
         # Taker: IOC qui croise avec un peu de slip.
         tif = "Alo" if maker else "Ioc"
@@ -1594,7 +1558,9 @@ class HyperliquidSpreadBot:
         target = finish_reason({'session_expires_at': self.cfg.session_expires_at,
                                 'target_volume_usd': self.cfg.target_volume_usd,
                                 'session_volume_carry': self.cfg.session_volume_carry}, self.stats.volume_usd, time.time())
-        return bool(target or self.cfg.rotation_file and os.path.exists(self.cfg.rotation_file))
+        return bool(target or getattr(self.cfg, "resume_exit", False) or getattr(self, "exit_reason", "")
+                    or self.cfg.stop_file and os.path.exists(self.cfg.stop_file)
+                    or self.cfg.rotation_file and os.path.exists(self.cfg.rotation_file))
 
     def bilateral_requests(self, st: MarketState) -> Dict[bool, Dict[str, Any]]:
         """One funded bid and one inventory-backed ask. Existing holds count once."""
@@ -1604,9 +1570,13 @@ class HyperliquidSpreadBot:
         if not 0 < bid < ask < 1:
             return requests_out
         held_ask = st.ask_quantity if st.ask_oid else 0.0
-        sell_qty = min(math.floor(st.available_position + held_ask), math.floor(st.position),
-                       max(1, math.ceil(self.cfg.min_order_usd / ask), math.floor(self.cfg.order_usd / ask)))
         draining = self.rotation_requested()
+        # An exit sells the whole attributable inventory at the best ask.
+        # Normal quoting keeps the configured order-size bound.
+        available = min(math.floor(st.available_position + held_ask), math.floor(st.position))
+        sell_qty = available if draining else min(
+            available,
+            max(1, math.ceil(self.cfg.min_order_usd / ask), math.floor(self.cfg.order_usd / ask)))
         risk_exit = self.risk_block_reason(st, closing_inventory=False)
         full_size = self.cfg.full_size_quotes
         partial_ask = (full_size and st.ask_oid and 0 < st.ask_quantity*st.quoted_ask < self.cfg.min_order_usd
@@ -1635,7 +1605,9 @@ class HyperliquidSpreadBot:
             requests_out[True] = {"coin": st.spec.symbol, "is_buy": True, "sz": float(st.bid_quantity),
                 "limit_px": st.quoted_bid, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
             return requests_out
-        minimum = max(1, math.ceil(self.cfg.min_order_usd / bid))
+        # floor avoids ceil(min) > floor(order): otherwise no bid is ever sent
+        # on a small-priced Outcome token.
+        minimum = max(1, math.floor(self.cfg.min_order_usd / bid))
         target = max(minimum, math.floor(self.cfg.order_usd / bid))
         buy_qty = min(target, math.floor(min(free, remaining)/bid))
         if buy_qty >= minimum:
@@ -1691,14 +1663,20 @@ class HyperliquidSpreadBot:
             oid = getattr(st, f"{side}_oid")
             req = plan.get(buy)
             quoted = getattr(st, f"quoted_{side}")
-            quantity = getattr(st, f"{side}_quantity")
             if oid:
-                if req and quoted == req["limit_px"] and 0 < quantity <= req["sz"]:
+                passive = quoted < st.ask if buy else quoted > st.bid
+                # Keep a resting order that is already at least as good as the
+                # target and still passive: never cancel our own better quote
+                # or burn queue on a one-tick difference.
+                target = float(req["limit_px"]) if req else 0.0
+                keep = bool(req and passive and (
+                    quoted >= target - 1e-12 if buy else quoted <= target + 1e-12))
+                if keep:
                     continue
                 # Normal repricing preserves queue age. Budget/risk/drain pulls
                 # bypass this hold, as do quotes which are no longer passive.
-                passive = quoted < st.ask if buy else quoted > st.bid
-                if req and passive and time.time()-getattr(st, f"{side}_order_ts") < self.cfg.maker_opening_rest_sec:
+                if (req and passive and not (self.rotation_requested() and not buy)
+                        and time.time()-getattr(st, f"{side}_order_ts") < self.cfg.maker_opening_rest_sec):
                     continue
                 if self.cfg.live:
                     self.cancel_bilateral_side(st, buy, "drain" if self.rotation_requested() else "requote" if req else "limit")
@@ -2113,6 +2091,14 @@ class HyperliquidSpreadBot:
         last_sync = 0.0
         while self.running:
             try:
+                if self.cfg.worldcup and not self.safety.stopped.is_set():
+                    session_loss = self.stats.net_pnl + self.cfg.risk_pnl_carry <= -abs(self.cfg.stop_loss_usd)
+                    session_profit = self.cfg.take_profit_usd > 0 and self.stats.net_pnl >= self.cfg.take_profit_usd
+                    if session_loss or session_profit:
+                        self.request_maker_exit("Session stop loss: maker exit" if session_loss else "Session take profit: maker exit")
+                    elif self.rotation_requested():
+                        intent = read_json(self.cfg.rotation_file) if self.cfg.rotation_file and os.path.exists(self.cfg.rotation_file) else {}
+                        self.request_maker_exit(intent.get("reason", "Session target: maker exit"))
                 if self.safety.phase == "recovering":
                     self._try_recovery()
                 else:
@@ -2158,7 +2144,17 @@ class HyperliquidSpreadBot:
 
         try:
             initial = self._cleanup_snapshot() if self.cfg.live else []
-            if any(position or orders for _, position, orders in initial):
+            resume = self.cfg.resume_exit or self.rotation_requested()
+            if resume:
+                if any(not self.safety.owns(order) for _, _, orders in initial for order in orders):
+                    raise RuntimeError("Cannot resume with unrelated Outcome orders")
+                if any(abs(finite(position)) > 1e-9 for _, position, _ in initial) \
+                        and not self.safety.exposure_started:
+                    raise RuntimeError("Cannot resume unattributed Outcome inventory")
+                self.request_maker_exit(
+                    "Explicitly resumed maker exit" if self.cfg.resume_exit
+                    else (getattr(self, "exit_reason", "") or "Maker exit requested at start"))
+            elif any(position or orders for _, position, orders in initial):
                 raise RuntimeError("Existing position/orders on selected market; manual reconciliation required")
             self.sync_account()
             if not self.running:
@@ -2219,6 +2215,8 @@ class HyperliquidSpreadBot:
                 "two_sided": self.cfg.two_sided,
                 "full_size_quotes": self.cfg.full_size_quotes,
                 "rotation_draining": self.rotation_requested(),
+                "exit_requested": self.rotation_requested(),
+                "stop_reason": getattr(self, "exit_reason", "") or getattr(self.safety, "metadata", {}).get("stop_reason", ""),
                 "bid_open": any(s.bid_oid for s in self.states.values()),
                 "ask_open": any(s.ask_oid for s in self.states.values()),
                 "last_action": "; ".join(state.last_action for state in self.states.values() if state.last_action),
@@ -2259,15 +2257,19 @@ class HyperliquidSpreadBot:
     def execution_status(self, st):
         if st is None:
             return "Starting", ""
+        if self.rotation_requested():
+            reason = getattr(self, "exit_reason", "") or "Maker exit requested"
+            started = getattr(self, "exit_started", 0.0)
+            waited = time.time() - started if started else 0.0
+            if waited > self.cfg.inventory_drain_timeout_sec:
+                reason += " (sortie en attente %.0f s, aucune contrepartie)" % waited
+            return "Draining inventory", reason
         if st.inventory_stop_until > time.time():
             return "Inventory stop", st.last_action
         if self.safety.phase == "recovering" or st.reconcile_required:
             return "Reconciling", ""
         if not st.has_bbo or time.time()-st.last_book_ts > self.cfg.stale_sec:
             return "Waiting for book", ""
-        if self.rotation_requested():
-            return ("Draining inventory", "Selling remaining tokens before switching markets") if st.ask_oid else (
-                "Rotating", "Waiting for verified flat account")
         risk = self.risk_block_reason(st, closing_inventory=False)
         if st.bid_oid and st.ask_oid:
             return "Bid + Ask", risk or ""

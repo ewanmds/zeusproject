@@ -52,12 +52,12 @@ class OutcomeRotation:
         # Close admission immediately, even if a replacement is resolving its
         # catalog under the controller lock. The supervisor checks again at spawn.
         for group in self.groups.copy().values():
-            if session_id is None or session_id in group["members"]:
+            if session_id is None or session_id in group["members"] or session_id == group["id"]:
                 group["cancelled"] = True
         with self.lock:
             current = set()
             for group in self.groups.values():
-                if session_id is None or session_id in group["members"]:
+                if session_id is None or session_id in group["members"] or session_id == group["id"]:
                     group["cancelled"] = True
                     current.add(group["current"])
             return current
@@ -180,9 +180,8 @@ class OutcomeRotation:
                     if not current.get("cleanup_confirmed"):
                         group.update(state="blocked", reason="Rotation blocked: old stop not confirmed")
                         continue
-                    if current.get("phase") == "failed" or current.get("error"):
-                        group.update(state="blocked", reason="Rotation blocked: previous session failed")
-                        continue
+                    # Flat is verified independently (zero orders and inventory);
+                    # a prior error/failed phase no longer blocks the next leg.
                     if current_id not in group.setdefault("accounted", set()):
                         group["pnl_carry"] = group.get("pnl_carry", 0)+float(current.get("net_pnl", 0))
                         group['volume_carry'] = group.get('volume_carry', 0)+float(current.get('volume_usd', 0))
@@ -255,8 +254,15 @@ class OutcomeRotation:
                 # Old worker is dead and exchange cleanup is confirmed. start()
                 # reselects from a fresh scanner snapshot and preserves budgets.
                 if top is None:
-                    group["reason"] = "Rotation: flat, waiting for eligible flow"
+                    waited = now - group.setdefault("wait_since", now)
+                    if waited > 300:
+                        group.update(cancelled=True, state="stopped",
+                                     reason="Rotation ended: no eligible $/min market")
+                    else:
+                        group["reason"] = "Rotation: flat, waiting for eligible flow"
                     continue
+                group["wait_since"] = 0.0
+                group["launch_failures"] = 0
                 from zeus.server import WorldcupStartRequest
                 values = {k: v for k, v in config.items() if k in WorldcupStartRequest.model_fields}
                 if values.get("maker_spread_pct") is None:
@@ -275,8 +281,14 @@ class OutcomeRotation:
             except Exception as exc:
                 with self.lock:
                     if not group['cancelled']:
-                        group.update(state="draining", retry_at=now+15,
-                                     reason="Rotation waiting: " + safe_error(exc))
+                        failures = group.get("launch_failures", 0) + 1
+                        group["launch_failures"] = failures
+                        if failures >= 5:
+                            group.update(cancelled=True, state="stopped",
+                                         reason="Rotation ended: " + safe_error(exc))
+                        else:
+                            group.update(state="draining", retry_at=now+min(60, 5*2**failures),
+                                         reason="Rotation waiting: " + safe_error(exc))
 
     def close(self):
         self.closed.set()

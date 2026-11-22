@@ -73,6 +73,8 @@ export interface Session {
   accounting_complete: boolean;
   state: string;
   reason: string;
+  exit_requested?: boolean;
+  stop_reason?: string;
   rotations: number;
   config: Partial<Draft> & {
     order_size_usd?: number;

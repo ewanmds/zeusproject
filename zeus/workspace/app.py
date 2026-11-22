@@ -296,6 +296,12 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         try: return runtimes.stop(who['wallet'], sid)
         except KeyError: raise HTTPException(404, 'Session not found')
 
+    @app.post('/api/v2/sessions/{sid}/resume-exit')
+    def resume_exit(sid: str, who=Depends(mutation)):
+        try: return runtimes.resume_exit(who['wallet'], sid)
+        except KeyError: raise HTTPException(404, 'Session not found')
+        except (ValueError, RuntimeError) as exc: raise HTTPException(400, str(exc))
+
     @app.post('/api/v2/reconcile')
     def reconcile(who=Depends(mutation)):
         return runtimes.reconcile(who['wallet'])

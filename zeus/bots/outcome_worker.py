@@ -22,6 +22,9 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
     side = public.get("outcome_side") or ("yes" if encoded_side == 0 else "no")
     if side not in {"yes", "no"} or (side == "yes") != (encoded_side == 0):
         raise ValueError("Outcome side does not match its exact market coin")
+    exec_mode = str(public.get("exec_mode") or "maker").strip().lower()
+    if exec_mode != "maker":
+        raise ValueError("Outcome sessions are post-only maker only")
     return BotConfig(
         base_url="https://api.hyperliquid.xyz", perp_dex="xyz", live=True,
         symbols=[market], keywords=[], max_symbols=1,
@@ -34,7 +37,7 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         account_address=os.getenv("WALLET_ADDRESS_OUTCOME", "").strip(),
         private_key=os.getenv("PRIVATE_KEY_OUTCOME", "").strip(),
         scan_only=False, worldcup=True, countries=[], outcome_side=side,
-        exec_mode=public.get("exec_mode", "taker"), maker_offset_pct=0,
+        exec_mode="maker", maker_offset_pct=0,
         maker_spread_pct=public.get("maker_spread_pct", 0.005), safety_file=str(safety_file),
         auto_max_spread_bps=public.get("auto_max_spread_bps", 10) if public.get("selection_mode") == "auto" else None,
         two_sided=public.get("two_sided", False),
@@ -48,6 +51,7 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         inventory_stop_bps=min(500.0, max(50.0, float(public.get("inventory_stop_bps") or 200))),
         inventory_drain_timeout_sec=min(600.0, max(15.0, float(public.get("inventory_drain_timeout_sec") or 90))),
         inventory_exit_slippage_bps=min(200.0, max(20.0, float(public.get("inventory_exit_slippage_bps") or 50))),
+        resume_exit=bool(public.get("resume_exit")),
         stop_file=str(stop_file) if stop_file else None,
         funds_root=str(funds_root) if funds_root else None,
     )
@@ -93,8 +97,11 @@ def run_worker(config_path, bot_factory=None):
                     bot.request_stop()
                 try:
                     publish()
-                except Exception as exc:
-                    bot.safety.fail("Snapshot publication failed: " + safe_error(exc))
+                except Exception:
+                    # UI telemetry only. A transient Windows write failure must
+                    # not stop trading or fabricate a fresh timestamp; the
+                    # supervisor reports the old sample as delayed instead.
+                    pass
 
     watcher = None
     instance_lock = ProcessLock(lock_path, timeout=0)

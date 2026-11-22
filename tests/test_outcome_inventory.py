@@ -106,29 +106,32 @@ class OutcomeInventoryTests(unittest.TestCase):
         self.assertEqual(bot.cfg.inventory_stop_bps, 200)
         self.assertEqual(bot.cfg.order_usd, 15)
 
-    def test_forced_exit_retains_reason_and_distinguishes_unknown_submission(self):
-        for failure in [False, True]:
-            bot, st = self.bot(35, 35*.64364)
-            self.assertTrue(bot.sync_account())
-            st.update_bbo(.56329, .5633)
-            bot.running, bot.status = True, 'offline-test'
-            bot.safety = SimpleNamespace(stopped=threading.Event(), phase='running', lock=threading.RLock())
-            bot.exchange = SimpleNamespace(order=Mock(return_value={'status': 'ok'}))
-            if failure:
-                bot.exchange.order.side_effect = TimeoutError('offline test')
-            bot.cancel_all = Mock()
-            bot.sync_account = Mock(return_value=True)
-            bot._parse_order_response = Mock()
-            self.assertTrue(bot.enforce_inventory_stop(st))
-            self.assertIn('inventory stop', st.last_inventory_exit['reason'])
-            self.assertAlmostEqual(st.last_inventory_exit['entry_px'], .64364)
-            self.assertEqual(st.last_inventory_exit['quantity'], 35)
-            self.assertEqual(st.last_inventory_exit['submission'], 'unconfirmed' if failure else 'response_received')
-            # Fills may replace last_action, but cannot erase the risk context.
-            st.last_action = 'fill A 35 @ .56329'
-            snap = bot.export_dashboard_stats()
-            self.assertEqual(snap['inventory_risk_context'][0]['last_forced_exit'], st.last_inventory_exit)
-            self.assertEqual(snap['gross_closed_pnl'], 0)
+    def test_inventory_stop_requests_maker_exit_without_any_ioc(self):
+        bot, st = self.bot(35, 35*.64364)
+        self.assertTrue(bot.sync_account())
+        st.update_bbo(.56329, .5633)
+        bot.running, bot.status = True, 'offline-test'
+        bot.safety = SimpleNamespace(stopped=threading.Event(), phase='running',
+                                     lock=threading.RLock(), publish=Mock(return_value=True))
+        bot.exchange = SimpleNamespace(order=Mock(return_value={'status': 'ok'}))
+        bot.cancel_all = Mock()
+        bot.sync_account = Mock(return_value=True)
+        bot._parse_order_response = Mock()
+        # The risk guard must keep the session alive for a passive exit and
+        # must never submit an IOC/market sell.
+        self.assertFalse(bot.enforce_inventory_stop(st))
+        self.assertIn('inventory stop', st.last_inventory_exit['reason'])
+        self.assertAlmostEqual(st.last_inventory_exit['entry_px'], .64364)
+        self.assertEqual(st.last_inventory_exit['quantity'], 35)
+        self.assertEqual(st.last_inventory_exit['submission'], 'maker_exit_requested')
+        bot.exchange.order.assert_not_called()
+        bot.cancel_all.assert_not_called()
+        self.assertIn('inventory stop', getattr(bot, 'exit_reason', ''))
+        # Fills may replace last_action, but cannot erase the risk context.
+        st.last_action = 'fill A 35 @ .56329'
+        snap = bot.export_dashboard_stats()
+        self.assertEqual(snap['inventory_risk_context'][0]['last_forced_exit'], st.last_inventory_exit)
+        self.assertEqual(snap['gross_closed_pnl'], 0)
 
 
 if __name__ == '__main__':

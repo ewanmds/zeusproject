@@ -56,7 +56,15 @@ def supervisor_alive():
             kernel.CloseHandle.argtypes = [ctypes.c_void_p]
             handle = kernel.OpenProcess(0x1000, False, pid)
             if not handle:
-                alive = ctypes.get_last_error() == 5
+                error = ctypes.get_last_error()
+                if error == 5:
+                    alive = True   # access denied: the process exists
+                elif error == 87:
+                    alive = False  # invalid parameter: no such process
+                else:
+                    # A transient OpenProcess failure must not stop trading.
+                    with _SUPERVISOR_LOCK:
+                        alive = _SUPERVISOR_CACHE.get("alive", True)
             else:
                 code = ctypes.c_ulong()
                 kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
@@ -189,13 +197,16 @@ def missing_modify_rejection(error):
 
 
 class SafetyLatch:
-    def __init__(self, on_stop=None, path=None, is_running=None, passive_only=False):
+    def __init__(self, on_stop=None, path=None, is_running=None, passive_only=False,
+                 strict_maker_spot=False, opening_allowed=None):
         self.lock = threading.RLock()
         self.stopped = threading.Event()
         self.on_stop = on_stop or (lambda: None)
         self.is_running = is_running or (lambda: True)
         self.local = threading.local()
-        self.passive_only = bool(passive_only)
+        self.strict_maker_spot = bool(strict_maker_spot)
+        self.passive_only = bool(passive_only or strict_maker_spot)
+        self.opening_allowed = opening_allowed or (lambda: True)
         # An ordinary failure, signal, or cleanup never grants market execution.
         # A new runtime must observe a fresh explicit manual-stop request.
         self.manual_stop_requested = False
@@ -222,12 +233,16 @@ class SafetyLatch:
         self.recovery_revision = 0
 
     def snapshot(self):
-        return dict(phase=self.phase, error=self.error, cleanup_error=self.cleanup_error,
+        draining = self.strict_maker_spot and self.metadata.get("exit_requested") and self.phase == "running"
+        return dict(phase="draining" if draining else self.phase, error=self.error, cleanup_error=self.cleanup_error,
                     cleanup_confirmed=self.cleanup_confirmed, can_start=self.cleanup_confirmed,
                     position_known=self.account_known or self.cleanup_confirmed, session_id=self.session_id,
-                    quoting_enabled=not self.stopped.is_set() and self.phase == "running",
+                    quoting_enabled=not self.stopped.is_set() and self.phase == "running" and not draining,
                     recovery_error=self.recovery_error,
-                    passive_only=self.passive_only, manual_stop_requested=self.manual_stop_requested)
+                    passive_only=self.passive_only, manual_stop_requested=self.manual_stop_requested,
+                    strict_maker_spot=self.strict_maker_spot,
+                    exit_requested=bool(self.metadata.get("exit_requested")),
+                    stop_reason=self.metadata.get("stop_reason", ""))
 
     def publish(self):
         if self.path:
@@ -298,10 +313,12 @@ class SafetyLatch:
             raise SubmissionSkipped("Passive-only session blocks SDK market convenience methods; use an explicit authorized reduce-only close")
         if name == "order":
             requests = [(kwargs.get("order_type", args[4] if len(args)>4 else None),
-                         kwargs.get("reduce_only", args[5] if len(args)>5 else False))]
+                         kwargs.get("reduce_only", args[5] if len(args)>5 else False),
+                         kwargs.get("is_buy", args[1] if len(args)>1 else None))]
         elif name == "modify_order":
             requests = [(kwargs.get("order_type", args[5] if len(args)>5 else None),
-                         kwargs.get("reduce_only", args[6] if len(args)>6 else False))]
+                         kwargs.get("reduce_only", args[6] if len(args)>6 else False),
+                         kwargs.get("is_buy", args[2] if len(args)>2 else None))]
         elif name in {"bulk_orders", "bulk_modify_orders_new"}:
             rows = args[0] if args else kwargs.get("order_requests" if name=="bulk_orders" else "modify_requests")
             if not isinstance(rows, (list,tuple)) or not rows:
@@ -311,20 +328,27 @@ class SafetyLatch:
                 request = row.get("order") if name=="bulk_modify_orders_new" and isinstance(row,dict) else row
                 if not isinstance(request,dict):
                     raise SubmissionSkipped("Passive-only session received an invalid order request")
-                requests.append((request.get("order_type"),request.get("reduce_only",False)))
+                requests.append((request.get("order_type"),request.get("reduce_only",False),request.get("is_buy")))
         else:
             return  # cancellation/leverage do not create crossing exposure
         manual = self.manual_stop_requested and getattr(self.local,"manual_close",False)
         closing_only = self.stopped.is_set() or getattr(self.local,"cleanup",False)
-        for order_type,reduce_only in requests:
-            if closing_only and reduce_only is not True:
+        for order_type,reduce_only,is_buy in requests:
+            if self.strict_maker_spot:
+                if closing_only:
+                    raise SubmissionSkipped("Outcome hard shutdown blocks new orders; resume the maker exit explicitly")
+                if is_buy not in (True, False) or not isinstance(is_buy, bool):
+                    raise SubmissionSkipped("Outcome orders require an explicit buy/sell direction")
+                if is_buy and not self.opening_allowed():
+                    raise SubmissionSkipped("Outcome maker exit requested; new purchases are blocked")
+            elif closing_only and reduce_only is not True:
                 raise SubmissionSkipped("A stopped passive session permits only explicit reduce-only closing orders")
             if not isinstance(order_type,dict) or set(order_type)!={"limit"} or not isinstance(order_type["limit"],dict):
                 raise SubmissionSkipped("Passive-only session blocks trigger or implicit market orders")
             tif = order_type["limit"].get("tif")
             if tif == "Alo":
                 continue
-            if manual and reduce_only is True and tif in {"Ioc","Gtc"}:
+            if not self.strict_maker_spot and manual and reduce_only is True and tif in {"Ioc","Gtc"}:
                 continue
             raise SubmissionSkipped("Passive-only session requires post-only Alo; crossing closes require an explicit manual Stop")
 
@@ -405,6 +429,8 @@ class SafetyLatch:
                         can_close = allow_close and (not self.passive_only or self.manual_stop_requested
                                                      and getattr(self.local,"manual_close",False))
                         if not can_close and any(abs(finite(position))>1e-9 for _,position,_ in rows):
+                            if self.strict_maker_spot:
+                                raise RuntimeError("Residual Outcome inventory; resume the maker exit explicitly")
                             raise RuntimeError("Residual position; automatic cleanup cannot market-close it, explicit manual Stop required")
                         for symbol, position, _ in rows:
                             if abs(finite(position)) > 1e-9:
@@ -488,6 +514,9 @@ class GuardedExchange:
                     if (gate.stopped.is_set() or not gate.is_running()) and not cleanup:
                         gate.stop()
                         raise ExecutionStopped("Session halted before submission")
+                    # Recheck after durable publication: Stop can arrive while
+                    # the journal or an account/signing lock was being written.
+                    gate.assert_allowed_action(name,args,kwargs)
                     result = method(*args, **kwargs)
                     if not isinstance(result, dict) or result.get("status") != "ok":
                         if isinstance(result, dict) and result.get("status") == "err":

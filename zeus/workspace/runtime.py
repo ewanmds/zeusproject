@@ -30,7 +30,10 @@ def visible_session(row, kind):
         'position_usd': row.get('position_usd'), 'stale': bool(row.get('stale')),
         'accounting_complete': bool(complete), 'config': config, 'quotes': row.get('quotes', []),
         'state': row.get('execution_state') or row.get('action') or phase,
-        'reason': row.get('error') or row.get('cleanup_error') or row.get('blocked_reason') or row.get('auto_rotation_reason') or '',
+        'reason': row.get('error') or row.get('cleanup_error') or row.get('blocked_reason')
+                  or row.get('auto_rotation_reason') or row.get('stop_reason') or '',
+        'exit_requested': bool(row.get('exit_requested') or phase == 'draining'),
+        'stop_reason': row.get('stop_reason') or '',
         'rotations': row.get('auto_rotations', 0)}
 
 
@@ -98,6 +101,14 @@ class Runtimes:
                 for field in ('volume_usd', 'net_pnl', 'fees', 'fills'):
                     row[field] = sum(b.get(field) or 0 for b in members) if complete else None
                 row['accounting_complete'] = complete
+                # Never hide an unconfirmed leg behind a newer confirmed one.
+                row['running'] = any(b.get('running') for b in members)
+                row['cleanup_confirmed'] = all(b.get('cleanup_confirmed') for b in members)
+                row['phase'] = ('draining' if any(b.get('phase') == 'draining' for b in members)
+                                else 'failed' if any(not b.get('cleanup_confirmed') for b in members)
+                                else row.get('phase'))
+                row['exit_requested'] = any(b.get('exit_requested') or b.get('phase') == 'draining'
+                                            for b in members)
                 row['cost_per_1m'] = -row['net_pnl']*1e6/row['volume_usd'] if complete and row['volume_usd'] else None
                 archived.append(row)
             sessions = [visible_session(b, 'outcome') for b in active+archived]
@@ -193,6 +204,15 @@ class Runtimes:
                 manager.stop_grid(token)
             self.invalidate(owner)
             return self.snapshot(owner)
+
+    def resume_exit(self, owner, session_id):
+        """Start an exit-only worker for a stopped, unconfirmed Outcome session."""
+        with self.tenant_lock(owner):
+            manager = self.manager(owner)
+            result = manager.resume_worldcup_exit(session_id)
+            self.invalidate(owner)
+            snapshot = self.snapshot(owner)
+            return {**snapshot, 'resumed_session_id': result.get('session_id')}
 
     def reconcile(self, owner):
         with self.tenant_lock(owner):
