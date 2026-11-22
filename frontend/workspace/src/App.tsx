@@ -8,11 +8,7 @@ import { signAgentApproval } from "./authorization";
 import { Icon, Modal, Pending } from "./ui";
 import { FeedbackButton } from "./components/FeedbackButton";
 import type { Draft, View, Session, Agent, Operation, Snapshot } from "./types";
-import {
-  resolveStopSnapshot,
-  resumeExitMessage,
-  resumeTradingMessage,
-} from "./presentation/stop";
+import { resolveStopSnapshot } from "./presentation/stop";
 import { NavDock } from "./components/layout";
 import { Kbd } from "./components/fields";
 import { AlertDialog, useMobile } from "./components/Dialog";
@@ -342,41 +338,6 @@ export default function App() {
     }
   };
 
-  const resumeExit = async (session: Session) => {
-    setBusy("resume");
-    setActionErrors((old) => ({ ...old, stop: "" }));
-    try {
-      const snapshot = await api<Snapshot>(
-        "/sessions/" + encodeURIComponent(session.id) + "/resume-exit",
-        {},
-      );
-      setNotice(resumeExitMessage(snapshot, session.id).message);
-      w.refresh();
-    } catch (e: any) {
-      setActionErrors((old) => ({ ...old, stop: e.message }));
-      w.refresh();
-    } finally {
-      setBusy("");
-    }
-  };
-
-  const resumeTrading = async (session: Session) => {
-    setBusy("resume");
-    setActionErrors((old) => ({ ...old, stop: "" }));
-    try {
-      const snapshot = await api<Snapshot>(
-        "/sessions/" + encodeURIComponent(session.id) + "/resume",
-        {},
-      );
-      setNotice(resumeTradingMessage(snapshot, session.id).message);
-      w.refresh();
-    } catch (e: any) {
-      setActionErrors((old) => ({ ...old, stop: e.message }));
-      w.refresh();
-    } finally {
-      setBusy("");
-    }
-  };
   const reconnect = () => {
     w.refresh();
     if (!owner) void w.loadIdentity();
@@ -429,8 +390,6 @@ export default function App() {
     setSelected,
     setNotice,
     setWalletModal,
-    resumeExit,
-    resumeTrading,
     stopError: actionErrors.stop,
     period,
     setPeriod,

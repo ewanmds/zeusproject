@@ -32,6 +32,13 @@ class OutcomeSupervisor:
         self.root = manager.state_dir
         from zeus.outcome_rotation import OutcomeRotation
         self.rotation = OutcomeRotation(self)
+        # Crash recovery is owned by the backend: no UI button is required.
+        self._recovery = {}
+        self._recovery_lock = threading.Lock()
+        self._closed = threading.Event()
+        self._recovery_thread = threading.Thread(
+            target=self._recovery_loop, name="outcome-auto-recover", daemon=True)
+        self._recovery_thread.start()
 
     def records(self):
         return [(p, r) for p, r in self.manager._session_files() if r.get("account_kind") == "outcome"]
@@ -51,6 +58,99 @@ class OutcomeSupervisor:
         with self._stats_lock:
             self._stats_cache[path] = (key, snap)
         return snap
+
+    def close(self):
+        self._closed.set()
+        thread = getattr(self, "_recovery_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2)
+        self.rotation.close()
+
+    def _recovery_loop(self):
+        while not self._closed.wait(5):
+            try:
+                self._auto_recover()
+            except Exception:
+                pass
+
+    def _auto_recover(self):
+        """Restart an interrupted Outcome worker without any user action.
+
+        The latest leg of each logical session is considered. A manual Stop or
+        a hard shutdown is respected; a crash/restart is resumed as trading,
+        or as an exit when an exit was already requested.
+        """
+        records = list(self.records())
+        if not records:
+            return
+        by_id = {r.get("session_id"): r for _, r in records}
+        groups = {}
+        for path, record in records:
+            if not record.get("symbols"):
+                continue
+            key = ((record.get("config") or {}).get("auto_group_id")
+                   or record.get("session_id"))
+            current = groups.get(key)
+            if current is None or record.get("started", 0) > current[1].get("started", 0):
+                groups[key] = (path, record)
+        now = time.time()
+        with self._recovery_lock:
+            for key, (path, record) in groups.items():
+                sid = record.get("session_id")
+                if not sid or record.get("cleanup_confirmed"):
+                    continue
+                info = self.procs.get(sid)
+                if info is not None and info["proc"].poll() is None:
+                    continue
+                if record.get("resumed_session_id") in by_id:
+                    continue
+                market = (record.get("symbols") or [""])[0]
+                if not market:
+                    continue
+                if any(i.get("market") == market and i["proc"].poll() is None
+                       for i in self.procs.values()):
+                    continue
+                stop_file = Path(record["stop_file"]) if record.get("stop_file") else None
+                if stop_file is None:
+                    continue
+                if stop_file.exists():
+                    continue  # explicit hard shutdown, never auto-trade again
+                meta = read_json(path) if Path(path).exists() else record
+                meta = meta if isinstance(meta, dict) else record
+                drain_file = stop_file.with_name("drain.json")
+                drain = read_json(drain_file) if drain_file.exists() else {}
+                drain = drain if isinstance(drain, dict) else {}
+                reason = str(meta.get("stop_reason") or drain.get("reason") or "")
+                reason_l = reason.lower()
+                manual = bool(drain.get("manual")) or reason_l.startswith("manual stop")
+                risk_exit = reason_l.startswith(("session stop loss", "session take profit",
+                                                 "inventory stop"))
+                rotation = reason_l.startswith("low executed")
+                if manual or risk_exit:
+                    exit_only = True
+                elif rotation:
+                    # A rotation drain must not end the logical session after a
+                    # restart: resume the same market in bid+ask and keep rotating.
+                    exit_only = False
+                else:
+                    exit_only = bool(meta.get("exit_requested")) or bool(drain)
+                if manual and not exit_only:
+                    continue
+                if not meta.get("exposure_started"):
+                    continue  # attribution is not provable; leave it unresolved
+                state = self._recovery.get(sid) or {}
+                if now < state.get("next_at", 0):
+                    continue
+                try:
+                    self._resume(sid, exit_only=exit_only)
+                    self._recovery.pop(sid, None)
+                except Exception as exc:
+                    failures = int(state.get("failures", 0)) + 1
+                    self._recovery[sid] = {
+                        "failures": failures,
+                        "next_at": now + min(300, 5 * 2 ** min(failures, 6)),
+                        "error": safe_error(exc),
+                    }
 
     def start(self, request, *, rotation_group=None, seed=None):
         self.rotation.assert_admission(rotation_group)
@@ -94,6 +194,13 @@ class OutcomeSupervisor:
         if not account or not (context.private_key if context else os.getenv("PRIVATE_KEY_OUTCOME", "").strip()):
             raise ValueError("Outcome requires WALLET_ADDRESS_OUTCOME and PRIVATE_KEY_OUTCOME in .env")
         public = request.model_dump()
+        if seed:
+            # A recovered leg keeps the logical session identity and may opt
+            # back into low-fill rotation even with an explicit market.
+            if seed.get("group_id"):
+                public["auto_group_id"] = seed["group_id"]
+            if seed.get("resume_rotation"):
+                public["resume_rotation"] = True
         if public.get('session_duration_sec') and not public.get('session_expires_at'):
             public['session_expires_at'] = time.time()+public['session_duration_sec']
         public["market"] = market
@@ -124,8 +231,8 @@ class OutcomeSupervisor:
                 if market in record.get("symbols", []) and not record.get("cleanup_confirmed"):
                     raise RuntimeError("Previous Outcome session is not reconciled on this market")
             session_id = uuid.uuid4().hex
-            if public.get("selection_mode") == "auto":
-                public["auto_group_id"] = rotation_group or session_id
+            if rotation_group or public.get("selection_mode") == "auto":
+                public["auto_group_id"] = rotation_group or public.get("auto_group_id") or session_id
             runtime = self.root / "runtime" / session_id
             runtime.mkdir(parents=True, exist_ok=False)
             journal = self.manager._reserve_session("outcome:" + market, [market], "outcome")
@@ -168,7 +275,8 @@ class OutcomeSupervisor:
             self.procs[session_id] = {**record, "proc": proc, "market": market, "pid": proc.pid,
                                       "safety_file": journal}
             result = {"session_id": session_id, "market": market, "pid": proc.pid, "phase": "connecting"}
-            self.rotation.register(result, public, rotation_group)
+            self.rotation.register(result, public,
+                                   rotation_group or (seed or {}).get("group_id"))
         return result
 
     def _entry(self, journal, record, info=None):
@@ -464,6 +572,8 @@ class OutcomeSupervisor:
         seed = {key: old.get(key) for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids")
                 if key in old}
         seed["resume_from"] = session_id
+        seed["group_id"] = config.get("auto_group_id") or session_id
+        seed["resume_rotation"] = (not exit_only) and bool(config.get("auto_rotate", True))
         result = self.start(WorldcupStartRequest(**values), seed=seed)
         # Keep an audit link without ever claiming the old session is verified.
         if record.get("stop_file"):

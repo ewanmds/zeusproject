@@ -25,7 +25,9 @@ class OutcomeRotation:
         self.catalog_retry_at = 0.0
 
     def register(self, session, config, group_id=None):
-        if config.get("selection_mode") != "auto" or not config.get("auto_rotate", True):
+        if not config.get("auto_rotate", True):
+            return
+        if config.get("selection_mode") != "auto" and not config.get("resume_rotation"):
             return
         with self.lock:
             if self.closed.is_set():

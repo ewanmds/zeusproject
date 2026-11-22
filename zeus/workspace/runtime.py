@@ -237,7 +237,11 @@ class Runtimes:
         import logging
         from zeus.safety import safe_error
         for manager in list(self.items.values()):
-            manager.outcome.rotation.close()
+            close = getattr(manager.outcome, "close", None)
+            if close is not None:
+                close()
+            else:
+                manager.outcome.rotation.close()
             # Run every tenant's existing cleanup even if one cannot confirm.
             for stop in (lambda: manager.stop_grid(None, False), manager.stop_worldcup):
                 try: stop()

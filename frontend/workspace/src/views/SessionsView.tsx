@@ -9,7 +9,6 @@ import { ViewSwitch } from "../components/ViewSwitch";
 import { DataTable } from "../components/DataTable";
 import { SessionProgress } from "../components/SessionProgress";
 import type { Session } from "../types";
-import { canResumeMakerExit, canResumeTrading } from "../presentation/stop";
 import type { SessionsProps } from "../viewTypes";
 export function SessionsView({
   owner,
@@ -24,10 +23,7 @@ export function SessionsView({
   setStop,
   setSelected,
   setWalletModal,
-  resumeExit,
-  resumeTrading,
   stopError,
-  busy,
 }: SessionsProps) {
   const [preference, setPreference] = useState<{
     owner?: string;
@@ -68,26 +64,6 @@ export function SessionsView({
         </button>
       ) : !s.cleanup_confirmed ? (
         <div className="row-actions">
-          {canResumeTrading(s) && (
-            <button
-              className="button primary small"
-              disabled={busy === "resume"}
-              onClick={() => resumeTrading(s)}
-            >
-              <Icon name="run" size={13} />
-              Reprendre la session
-            </button>
-          )}
-          {canResumeMakerExit(s) && (
-            <button
-              className="button secondary small"
-              disabled={busy === "resume"}
-              onClick={() => resumeExit(s)}
-            >
-              <Icon name="run" size={13} />
-              Reprendre la sortie
-            </button>
-          )}
           <button
             className="button secondary small"
             disabled={!!checking}

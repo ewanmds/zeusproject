@@ -320,6 +320,66 @@ class SupervisorStopTests(unittest.TestCase):
             self.assertEqual(json.loads(journal.read_text())['resumed_session_id'], 'new')
 
 
+class SupervisorAutoRecoveryTests(unittest.TestCase):
+    def supervisor(self, folder, record, drain=None, stop=False):
+        journal = Path(folder) / 'journal.json'
+        journal.write_text(json.dumps(record))
+        stop_file = Path(folder) / 'stop'
+        if stop:
+            stop_file.write_text('')
+        if drain is not None:
+            (Path(folder) / 'drain.json').write_text(json.dumps(drain))
+        sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
+        sup.procs = {}
+        sup.manager = SimpleNamespace(lock=threading.RLock())
+        sup.root = Path(folder)
+        sup._recovery = {}
+        sup._recovery_lock = threading.RLock()
+        rec = dict(record, stop_file=str(stop_file), symbols=['#101'],
+                   account_kind='outcome', cleanup_confirmed=False, started=1.0)
+        sup.records = lambda: [(str(journal), rec)]
+        sup._resume = Mock(return_value={'session_id': 'new'})
+        return sup
+
+    def test_crash_is_resumed_as_trading_without_a_button(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': True})
+            sup._auto_recover()
+            sup._resume.assert_called_once_with('s1', exit_only=False)
+
+    def test_risk_exit_is_resumed_as_exit_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': True,
+                                           'exit_requested': True,
+                                           'stop_reason': 'Session stop loss: maker exit'})
+            sup._auto_recover()
+            sup._resume.assert_called_once_with('s1', exit_only=True)
+
+    def test_rotation_drain_keeps_the_logical_session_trading(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': True},
+                                  drain={'reason': 'low executed $/min'})
+            sup._auto_recover()
+            sup._resume.assert_called_once_with('s1', exit_only=False)
+
+    def test_manual_stop_resumes_only_the_exit_and_hard_shutdown_never_restarts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': True},
+                                  drain={'manual': True, 'reason': 'Manual stop: maker exit'})
+            sup._auto_recover()
+            sup._resume.assert_called_once_with('s1', exit_only=True)
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': True}, stop=True)
+            sup._auto_recover()
+            sup._resume.assert_not_called()
+
+    def test_unattributed_session_is_left_unresolved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': False})
+            sup._auto_recover()
+            sup._resume.assert_not_called()
+
+
 class WorkspaceProjectionTests(unittest.TestCase):
     def test_archived_group_never_hides_an_unconfirmed_leg(self):
         def record(sid, confirmed):
