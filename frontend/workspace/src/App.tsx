@@ -1,7 +1,7 @@
 import { strategies, nav, initial } from "./config";
 import { RunView } from "./views/RunView";
 
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { api, usd, short, clock } from "./data";
 import { useWorkspace } from "./useWorkspace";
 import { signAgentApproval } from "./authorization";
@@ -71,10 +71,6 @@ export default function App() {
     stop: "",
   });
   const mobile = useMobile();
-  const operation = useRef<string | null>(null);
-  const [pendingOperation, setPendingOperation] = useState<Operation | null>(
-    null,
-  );
   const owner = w.identity?.wallet;
   const sessions = w.snapshot?.sessions || [];
   const metrics = w.snapshot?.metrics;
@@ -114,8 +110,6 @@ export default function App() {
     setStop(null);
     setScanner(null);
     setMarkets([]);
-    setPendingOperation(null);
-    operation.current = null;
     setHydrated(false);
     if (owner) {
       try {
@@ -123,13 +117,6 @@ export default function App() {
           localStorage.getItem("zeus-draft:" + owner) || "null",
         );
         setDraft(saved ? { ...initial, ...saved } : initial);
-        const pending = sessionStorage.getItem("zeus-command:" + owner);
-        if (pending) {
-          operation.current = pending;
-          api<Operation>("/commands/" + pending)
-            .then(setPendingOperation)
-            .catch(() => {});
-        }
       } catch {
         setDraft(initial);
       }
@@ -309,59 +296,26 @@ export default function App() {
     if (!review || !owner || busy) return;
     setBusy("launch");
     const key = crypto.randomUUID();
-    operation.current = key;
-    sessionStorage.setItem("zeus-command:" + owner, key);
     try {
       const result = await api<Operation>("/sessions", review.config, {
         "Idempotency-Key": key,
       });
-      setPendingOperation(result);
       setReview(null);
       if (result.phase === "confirmed") {
-        sessionStorage.removeItem("zeus-command:" + owner);
-        operation.current = null;
-        setPendingOperation(null);
         navigate("sessions");
         setNotice("Session lancée.");
         w.refresh();
       } else
         setNotice(
           result.result.message ||
-            "Lancement non confirmé. Vérifiez la commande avant de réessayer.",
+            "Lancement non confirmé. Vérifiez la session avant de réessayer.",
         );
     } catch {
       setReview(null);
-      setPendingOperation({ command: key, phase: "starting", result: {} });
-      setNotice("Résultat en attente. La commande ne sera pas renvoyée.");
+      setNotice("Résultat en attente. Vérifiez la session avant de réessayer.");
     } finally {
       setBusy("");
     }
-  };
-  const verifyCommand = async () => {
-    if (!operation.current) return;
-    setBusy("verify");
-    try {
-      const result = await api<Operation>("/commands/" + operation.current);
-      setPendingOperation(result);
-      w.refresh();
-      if (result.phase === "confirmed") {
-        sessionStorage.removeItem("zeus-command:" + owner);
-        operation.current = null;
-        setPendingOperation(null);
-        navigate("sessions");
-        setNotice("Session retrouvée.");
-      }
-    } catch (e: any) {
-      setNotice(e.message);
-    } finally {
-      setBusy("");
-    }
-  };
-  const clearCommand = () => {
-    if (!owner || pendingOperation?.phase !== "rejected") return;
-    sessionStorage.removeItem("zeus-command:" + owner);
-    operation.current = null;
-    setPendingOperation(null);
   };
   const stopSession = async () => {
     if (!stop) return;
@@ -441,7 +395,6 @@ export default function App() {
     owner,
     ready,
     preview,
-    pendingOperation,
     busy,
     navigate,
     setShowHelp,
@@ -541,29 +494,6 @@ export default function App() {
           <InlineAlert tone="warning" onClose={() => w.setError("")}>
             {w.error}
           </InlineAlert>
-        )}
-        {pendingOperation && (
-          <div className="command-alert">
-            <div>
-              <strong>Lancement à vérifier</strong>
-              <p>
-                {pendingOperation.result.message ||
-                  "Le résultat de cette commande est en attente."}
-              </p>
-            </div>
-            <button
-              className="button secondary"
-              onClick={verifyCommand}
-              disabled={!!busy}
-            >
-              Vérifier
-            </button>
-            {pendingOperation.phase === "rejected" && (
-              <button className="button subtle" onClick={clearCommand}>
-                Terminer la vérification
-              </button>
-            )}
-          </div>
         )}
         {view === "run" && <RunView {...viewProps} />}
         {view === "sessions" && (

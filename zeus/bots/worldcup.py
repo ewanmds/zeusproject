@@ -1585,7 +1585,10 @@ class HyperliquidSpreadBot:
         if partial_ask:
             requests_out[False] = {"coin": st.spec.symbol, "is_buy": False, "sz": float(st.ask_quantity),
                 "limit_px": st.quoted_ask, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
-        elif sell_qty >= 1 and (not full_size or draining or risk_exit or sell_qty*ask >= self.cfg.min_order_usd):
+        elif sell_qty >= 1 and (not full_size or draining or risk_exit
+                                or sell_qty*ask >= self.cfg.min_order_usd*0.9):
+            # 69,46 $ d'inventaire pour un ordre de 70 $ ne doit pas attendre
+            # le centime exact : les tokens sont entiers et le prix bouge.
             requests_out[False] = {"coin": st.spec.symbol, "is_buy": False, "sz": float(sell_qty),
                 "limit_px": ask, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
         if draining or risk_exit:
@@ -2279,11 +2282,11 @@ class HyperliquidSpreadBot:
             return "Ask working", risk or ""
         if risk:
             return "Spread too wide" if risk.startswith(("auto spread", "spread ")) else "Risk paused", risk
-        if st.position > 0 and self.cfg.full_size_quotes and st.position*st.ask < self.cfg.min_order_usd:
-            return "Building inventory", "Waiting for enough tokens for a full-size ask"
+        if st.position > 0 and self.cfg.full_size_quotes and st.position*st.ask < self.cfg.min_order_usd*0.9:
+            return "", ""
         if st.position <= 0 and getattr(self, "available_usdc", 0) < math.ceil(self.cfg.min_order_usd/st.bid)*st.bid:
-            return "Insufficient USDC", "Available USDC is below the rounded order value"
-        return "Waiting to quote", ""
+            return "", ""
+        return "", ""
 
     def render(self) -> Group:
         acquired = self.lock.acquire(timeout=1.0)

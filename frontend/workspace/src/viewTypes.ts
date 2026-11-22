@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import type { Draft, View, Session, Operation, Metrics } from "./types";
+import type { Draft, View, Session, Metrics } from "./types";
 import type { useWorkspace } from "./useWorkspace";
 type Setter<T> = Dispatch<SetStateAction<T>>;
 type Workspace = ReturnType<typeof useWorkspace>;
@@ -16,7 +16,6 @@ export interface RunProps {
   owner?: string;
   ready: boolean;
   preview: () => Promise<void>;
-  pendingOperation: Operation | null;
   busy: string;
   setShowHelp: Setter<boolean>;
   actionError: string;

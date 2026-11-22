@@ -28,7 +28,6 @@ export function RunView({
   owner,
   ready,
   preview,
-  pendingOperation,
   busy,
   setShowHelp,
   actionError,
@@ -455,7 +454,6 @@ export function RunView({
               loadingLabel="Vérification"
               disabled={
                 !!busy ||
-                !!pendingOperation ||
                 (!!owner &&
                   ready &&
                   (!Number.isFinite(draft.order_usd) ||
