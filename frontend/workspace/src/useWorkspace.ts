@@ -163,11 +163,31 @@ export function useWorkspace() {
         /* Optional balance must not freeze live stats. */
       }
     };
-    const open = () => {
+    const open = async () => {
       if (!alive) return;
-      const url = new URL("/api/v2/ws", location.href);
-      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      socket = new WebSocket(url);
+      let target: string;
+      try {
+        if (
+          config?.ws_origin &&
+          !["127.0.0.1", "localhost"].includes(location.hostname)
+        ) {
+          // Cross-host (Vercel): the HTTP API is proxied, the WS is direct.
+          const ticket = await api<{ url: string }>("/ws-ticket");
+          target = ticket.url;
+        } else {
+          const url = new URL("/api/v2/ws", location.href);
+          url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+          target = url.toString();
+        }
+      } catch {
+        if (alive) {
+          setConnection("polling");
+          reconnect = window.setTimeout(open, 2500);
+        }
+        return;
+      }
+      if (!alive) return;
+      socket = new WebSocket(target);
       socket.onopen = () => {
         if (alive) setConnection("live");
       };
@@ -213,7 +233,7 @@ export function useWorkspace() {
       document.removeEventListener("visibilitychange", visible);
       refreshRef.current = () => {};
     };
-  }, [identity?.wallet, clear]);
+  }, [identity?.wallet, clear, config?.ws_origin]);
   const logout = async () => {
     try {
       await api("/auth/logout", {});

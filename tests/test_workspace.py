@@ -171,6 +171,16 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(frame['sessions'][0]['id'],own['sessions'][0]['id'])
         finally: other.close()
 
+    def test_ws_ticket_authenticates_a_cross_host_socket(self):
+        self.login(self.client, self.a)
+        ticket = self.client.get('/api/v2/ws-ticket').json()
+        self.assertIn('ticket=', ticket['url'])
+        with self.client.websocket_connect(
+                'ws://127.0.0.1:8081/api/v2/ws?ticket=' + ticket['ticket'],
+                headers={'Origin': self.origin}) as ws:
+            frame = ws.receive_json()
+            self.assertEqual(frame['owner'], self.a.address.lower())
+
     def test_idempotent_launch_and_changed_payload_conflict(self):
         self.login(self.client,self.a);self.authorize(self.client,self.a)
         payload={'strategy':'outcome','order_usd':25,'position_cap':200};headers={'Idempotency-Key':'same-command-key-123'}
