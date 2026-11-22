@@ -1,4 +1,5 @@
 """Per-market Outcome process supervisor and durable snapshot reader."""
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -67,11 +68,12 @@ class OutcomeSupervisor:
         self.rotation.close()
 
     def _recovery_loop(self):
+        log = logging.getLogger(__name__)
         while not self._closed.wait(5):
             try:
                 self._auto_recover()
             except Exception:
-                pass
+                log.exception("Outcome auto-recovery loop failed")
 
     def _auto_recover(self):
         """Restart an interrupted Outcome worker without any user action.
@@ -144,13 +146,18 @@ class OutcomeSupervisor:
                 try:
                     self._resume(sid, exit_only=exit_only)
                     self._recovery.pop(sid, None)
+                    logging.getLogger(__name__).warning(
+                        "Outcome auto-recovery started %s (exit_only=%s)", sid, exit_only)
                 except Exception as exc:
                     failures = int(state.get("failures", 0)) + 1
+                    detail = safe_error(exc)
                     self._recovery[sid] = {
                         "failures": failures,
                         "next_at": now + min(300, 5 * 2 ** min(failures, 6)),
-                        "error": safe_error(exc),
+                        "error": detail,
                     }
+                    logging.getLogger(__name__).warning(
+                        "Outcome auto-recovery %s failed (%s): %s", sid, failures, detail)
 
     def start(self, request, *, rotation_group=None, seed=None):
         self.rotation.assert_admission(rotation_group)
@@ -235,7 +242,9 @@ class OutcomeSupervisor:
                 public["auto_group_id"] = rotation_group or public.get("auto_group_id") or session_id
             runtime = self.root / "runtime" / session_id
             runtime.mkdir(parents=True, exist_ok=False)
-            journal = self.manager._reserve_session("outcome:" + market, [market], "outcome")
+            journal = self.manager._reserve_session(
+                "outcome:" + market, [market], "outcome",
+                ignore_session_id=(seed or {}).get("resume_from"))
             journal = journal or self.root / (session_id + ".json")
             stop_file, stats_file = runtime / "stop", runtime / "stats.json"
             record = {"session_id": session_id, "key": "outcome:" + market, "symbols": [market],
@@ -532,14 +541,16 @@ class OutcomeSupervisor:
         return self._resume(session_id, exit_only=False)
 
     def _resume(self, session_id, *, exit_only):
-        matching = [r for _, r in self.records()
+        matching = [(p, r) for p, r in self.records()
                     if r.get("session_id") == session_id
                     or (r.get("config") or {}).get("auto_group_id") == session_id]
         if not matching:
             raise KeyError("Session not found")
-        record = next((r for r in matching if r.get("cleanup_confirmed") is not True), None)
-        if record is None:
+        target = next(((p, r) for p, r in matching
+                       if r.get("cleanup_confirmed") is not True), None)
+        if target is None:
             raise ValueError("Session already stopped and verified")
+        journal_path, record = target
         if record.get("account_kind") != "outcome":
             raise ValueError("Only Outcome sessions can be resumed")
         market = (record.get("symbols") or [""])[0]
@@ -556,6 +567,8 @@ class OutcomeSupervisor:
         config = dict(record.get("config") or {})
         side = config.get("outcome_side") or ("yes" if int(market[1:]) % 10 == 0 else "no")
         values = {k: v for k, v in config.items() if k in WorldcupStartRequest.model_fields}
+        if values.get("maker_spread_pct") is None:
+            values.pop("maker_spread_pct", None)
         values.update(market=market, outcome_side=side, exec_mode="maker",
                       selection_mode="manual", two_sided=True,
                       resume_exit=exit_only, resume_trading=not exit_only,
@@ -565,7 +578,7 @@ class OutcomeSupervisor:
             # duration/volume target; the user can stop it explicitly.
             values.update(session_expires_at=None, target_volume_usd=None,
                           session_volume_carry=0)
-        old = read_json(record.get("stop_file")) if record.get("stop_file") else {}
+        old = read_json(journal_path) if Path(journal_path).exists() else {}
         old = old if isinstance(old, dict) else {}
         if not old.get("exposure_started"):
             raise ValueError("Attribution incomplète: aucune exposition publiée par cette session; réconciliation manuelle requise")
@@ -576,15 +589,14 @@ class OutcomeSupervisor:
         seed["resume_rotation"] = (not exit_only) and bool(config.get("auto_rotate", True))
         result = self.start(WorldcupStartRequest(**values), seed=seed)
         # Keep an audit link without ever claiming the old session is verified.
-        if record.get("stop_file"):
-            try:
-                journal = read_json(record["stop_file"])
-                if isinstance(journal, dict):
-                    journal.update(
-                        resumed_session_id=result["session_id"],
-                        reason=("Sortie maker reprise explicitement" if exit_only
-                                else "Session reprise en trading"))
-                    atomic_json(record["stop_file"], journal)
-            except (OSError, ValueError):
-                pass
+        try:
+            journal = read_json(journal_path) if Path(journal_path).exists() else {}
+            if isinstance(journal, dict):
+                journal.update(
+                    resumed_session_id=result["session_id"],
+                    reason=("Sortie maker reprise explicitement" if exit_only
+                            else "Session reprise en trading"))
+                atomic_json(journal_path, journal)
+        except (OSError, ValueError):
+            pass
         return result
