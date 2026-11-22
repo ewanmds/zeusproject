@@ -44,6 +44,12 @@ class OutcomeMakerConfigTests(unittest.TestCase):
         public = {'market': '#101', 'order_size_usd': 15, 'max_position_usd': 200}
         self.assertEqual(build_config(public, None).exec_mode, 'maker')
 
+    def test_worker_reads_resume_trading_flag(self):
+        public = {'market': '#101', 'order_size_usd': 15, 'max_position_usd': 200,
+                  'exec_mode': 'maker', 'resume_trading': True}
+        self.assertTrue(build_config(public, None).resume_trading)
+        self.assertFalse(build_config(public, None).resume_exit)
+
 
 class OutcomeSafetyGateTests(unittest.TestCase):
     def test_strict_maker_spot_blocks_market_and_crossing_orders(self):
@@ -248,6 +254,39 @@ class SupervisorStopTests(unittest.TestCase):
                                       'cleanup_confirmed': True, 'config': {}})]
         with self.assertRaises(ValueError):
             sup.resume_exit('s1')
+
+    def test_resume_trading_starts_bid_ask_worker_without_old_targets(self):
+        with tempfile.TemporaryDirectory() as folder:
+            journal = Path(folder) / 'journal.json'
+            journal.write_text(json.dumps({
+                'session_id': 's1', 'exposure_started': True, 'owned_oids': [7],
+                'cloids': ['0xabc'], 'pending_cloids': []}))
+            sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
+            sup.procs = {}
+            sup.manager = SimpleNamespace(lock=threading.RLock())
+            sup.records = lambda: [(str(journal), {
+                'session_id': 's1', 'symbols': ['#101'],
+                'account_kind': 'outcome', 'cleanup_confirmed': False,
+                'stop_file': str(journal),
+                'config': {'market': '#101', 'outcome_side': 'no',
+                           'order_size_usd': 15, 'max_position_usd': 200,
+                           'exec_mode': 'maker', 'selection_mode': 'auto',
+                           'two_sided': True, 'auto_rotate': True,
+                           'target_volume_usd': 100,
+                           'session_expires_at': time.time() + 60}})]
+            sup.start = Mock(return_value={'session_id': 'new'})
+            result = sup.resume_trading('s1')
+            self.assertEqual(result, {'session_id': 'new'})
+            request = sup.start.call_args.args[0]
+            self.assertEqual(request.exec_mode, 'maker')
+            self.assertTrue(request.resume_trading)
+            self.assertFalse(request.resume_exit)
+            self.assertTrue(request.auto_rotate)
+            self.assertIsNone(request.target_volume_usd)
+            self.assertIsNone(request.session_expires_at)
+            seed = sup.start.call_args.kwargs['seed']
+            self.assertEqual(seed['resume_from'], 's1')
+            self.assertTrue(seed['exposure_started'])
 
     def test_resume_starts_exit_only_worker_with_attribution_seed(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -261,6 +261,7 @@ class BotConfig:
     risk_pnl_carry: float = 0.0
     # Outcome risk guards stop purchases and drain inventory with ALO only.
     resume_exit: bool = False
+    resume_trading: bool = False
     inventory_stop_bps: float = 200.0
     inventory_drain_timeout_sec: float = 90.0
     inventory_exit_slippage_bps: float = 50.0
@@ -702,7 +703,8 @@ class HyperliquidSpreadBot:
 
     def _cleanup_snapshot(self):
         resolved, live_orders = set(), set()
-        if self.safety.stopped.is_set() or self.cfg.resume_exit or self.rotation_requested():
+        if (self.safety.stopped.is_set() or self.cfg.resume_exit
+                or self.cfg.resume_trading or self.rotation_requested()):
             for cloid in sorted(self.safety.pending_cloids):
                 oid, status = confirmed_client_order(self.info, self.cfg.account_address, cloid, self.states)
                 self.safety.owned.add(oid)
@@ -2147,16 +2149,20 @@ class HyperliquidSpreadBot:
 
         try:
             initial = self._cleanup_snapshot() if self.cfg.live else []
-            resume = self.cfg.resume_exit or self.rotation_requested()
+            resume = self.cfg.resume_exit or self.cfg.resume_trading or self.rotation_requested()
             if resume:
                 if any(not self.safety.owns(order) for _, _, orders in initial for order in orders):
                     raise RuntimeError("Cannot resume with unrelated Outcome orders")
                 if any(abs(finite(position)) > 1e-9 for _, position, _ in initial) \
                         and not self.safety.exposure_started:
                     raise RuntimeError("Cannot resume unattributed Outcome inventory")
-                self.request_maker_exit(
-                    "Explicitly resumed maker exit" if self.cfg.resume_exit
-                    else (getattr(self, "exit_reason", "") or "Maker exit requested at start"))
+                if self.cfg.resume_exit:
+                    self.request_maker_exit("Explicitly resumed maker exit")
+                elif not self.cfg.resume_trading and self.rotation_requested():
+                    self.request_maker_exit(
+                        getattr(self, "exit_reason", "") or "Maker exit requested at start")
+                else:
+                    self.status = "resumed trading"
             elif any(position or orders for _, position, orders in initial):
                 raise RuntimeError("Existing position/orders on selected market; manual reconciliation required")
             self.sync_account()

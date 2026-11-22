@@ -56,8 +56,19 @@ describe("identity boundary", () => {
     const request = api("/account");
     invalidateIdentity();
     setCSRF("b");
-    finish({ ok: true, json: async () => ({ privateAccount: "a" }) });
+    finish({ ok: true, text: async () => JSON.stringify({ privateAccount: "a" }) });
     await expect(request).rejects.toMatchObject({ name: "AbortError" });
+  });
+  it("turns a plain-text server error into a readable APIError", async () => {
+    vi.stubGlobal("fetch", async () => ({
+      ok: false,
+      status: 500,
+      text: async () => "Internal Server Error",
+    }));
+    await expect(api("/account")).rejects.toMatchObject({
+      status: 500,
+      message: "Erreur serveur (500). Réessayez.",
+    });
   });
   it("does not retry a failed financial command", async () => {
     const fetch = vi.fn().mockRejectedValue(new Error("timeout"));

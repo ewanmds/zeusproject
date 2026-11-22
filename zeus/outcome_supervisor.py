@@ -417,6 +417,13 @@ class OutcomeSupervisor:
 
     def resume_exit(self, session_id):
         """Start an exit-only worker for a stopped, unconfirmed Outcome session."""
+        return self._resume(session_id, exit_only=True)
+
+    def resume_trading(self, session_id):
+        """Resume normal bid+ask trading on the same market with attribution."""
+        return self._resume(session_id, exit_only=False)
+
+    def _resume(self, session_id, *, exit_only):
         matching = [r for _, r in self.records()
                     if r.get("session_id") == session_id
                     or (r.get("config") or {}).get("auto_group_id") == session_id]
@@ -426,9 +433,7 @@ class OutcomeSupervisor:
         if record is None:
             raise ValueError("Session already stopped and verified")
         if record.get("account_kind") != "outcome":
-            raise ValueError("Only Outcome sessions resume a maker exit")
-        if record.get("cleanup_confirmed") is True:
-            raise ValueError("Session already stopped and verified")
+            raise ValueError("Only Outcome sessions can be resumed")
         market = (record.get("symbols") or [""])[0]
         if not market:
             raise ValueError("Session has no Outcome market")
@@ -438,14 +443,20 @@ class OutcomeSupervisor:
                     raise RuntimeError("A worker is already active on this market")
             previous = self.procs.get(record.get("resumed_session_id"))
             if previous is not None and previous["proc"].poll() is None:
-                raise RuntimeError("A maker exit is already running for this session")
+                raise RuntimeError("A resume is already running for this session")
         from zeus.server import WorldcupStartRequest
         config = dict(record.get("config") or {})
         side = config.get("outcome_side") or ("yes" if int(market[1:]) % 10 == 0 else "no")
         values = {k: v for k, v in config.items() if k in WorldcupStartRequest.model_fields}
         values.update(market=market, outcome_side=side, exec_mode="maker",
-                      selection_mode="manual", resume_exit=True,
-                      two_sided=True)
+                      selection_mode="manual", two_sided=True,
+                      resume_exit=exit_only, resume_trading=not exit_only,
+                      auto_rotate=not exit_only)
+        if not exit_only:
+            # A resumed trading session must not immediately finish on an old
+            # duration/volume target; the user can stop it explicitly.
+            values.update(session_expires_at=None, target_volume_usd=None,
+                          session_volume_carry=0)
         old = read_json(record.get("stop_file")) if record.get("stop_file") else {}
         old = old if isinstance(old, dict) else {}
         if not old.get("exposure_started"):
@@ -459,8 +470,10 @@ class OutcomeSupervisor:
             try:
                 journal = read_json(record["stop_file"])
                 if isinstance(journal, dict):
-                    journal.update(resumed_session_id=result["session_id"],
-                                   reason="Sortie maker reprise explicitement")
+                    journal.update(
+                        resumed_session_id=result["session_id"],
+                        reason=("Sortie maker reprise explicitement" if exit_only
+                                else "Session reprise en trading"))
                     atomic_json(record["stop_file"], journal)
             except (OSError, ValueError):
                 pass

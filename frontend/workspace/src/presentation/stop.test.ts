@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   canResumeMakerExit,
+  canResumeTrading,
   isMakerExitPending,
   resolveStopSnapshot,
   resumeExitMessage,
+  resumeTradingMessage,
 } from "./stop";
 import type { Session, Snapshot } from "../types";
 
@@ -130,6 +132,33 @@ describe("maker exit presentation", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("resumes trading only when the stop was not a manual Stop", () => {
+    expect(
+      canResumeTrading(
+        session({ running: false, cleanup_confirmed: false, stop_reason: "" }),
+      ),
+    ).toBe(true);
+    expect(
+      canResumeTrading(
+        session({
+          running: false,
+          cleanup_confirmed: false,
+          stop_reason: "Manual stop: maker exit",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("describes a trading resume request without claiming closure", () => {
+    const result = resumeTradingMessage(
+      snapshot([session({ running: false, cleanup_confirmed: false })]),
+      "s1",
+    );
+    expect(result.status).toBe("pending");
+    expect(result.confirmed).toBe(false);
+    expect(result.message).toContain("Reprise du trading");
   });
 
   it("describes a resume request without claiming closure", () => {

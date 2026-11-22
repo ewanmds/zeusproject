@@ -254,12 +254,9 @@ class OutcomeRotation:
                 # Old worker is dead and exchange cleanup is confirmed. start()
                 # reselects from a fresh scanner snapshot and preserves budgets.
                 if top is None:
-                    waited = now - group.setdefault("wait_since", now)
-                    if waited > 300:
-                        group.update(cancelled=True, state="stopped",
-                                     reason="Rotation ended: no eligible $/min market")
-                    else:
-                        group["reason"] = "Rotation: flat, waiting for eligible flow"
+                    # Never end the logical session on its own. Wait for the
+                    # next eligible market; the user keeps the Stop control.
+                    group["reason"] = "Rotation: flat, waiting for eligible flow"
                     continue
                 group["wait_since"] = 0.0
                 group["launch_failures"] = 0
@@ -283,12 +280,10 @@ class OutcomeRotation:
                     if not group['cancelled']:
                         failures = group.get("launch_failures", 0) + 1
                         group["launch_failures"] = failures
-                        if failures >= 5:
-                            group.update(cancelled=True, state="stopped",
-                                         reason="Rotation ended: " + safe_error(exc))
-                        else:
-                            group.update(state="draining", retry_at=now+min(60, 5*2**failures),
-                                         reason="Rotation waiting: " + safe_error(exc))
+                        # Retry with a bounded backoff; never end the session
+                        # on a transient launch failure.
+                        group.update(state="draining", retry_at=now+min(60, 5*2**min(failures, 4)),
+                                     reason="Rotation waiting: " + safe_error(exc))
 
     def close(self):
         self.closed.set()

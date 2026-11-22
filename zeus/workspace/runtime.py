@@ -176,9 +176,10 @@ class Runtimes:
                 req = WorldcupStartRequest(selection_mode='auto', outcome_side=payload['side'], exec_mode='maker',
                       two_sided=True, full_size_quotes=True, order_size_usd=payload['order_usd'],
                       max_position_usd=payload['position_cap'], auto_max_spread_bps=payload['spread_bps'],
-                      # A manual launch must never rotate, drain or spawn a
-                      # replacement session on its own. Only the user stops it.
-                      auto_rotate=False,
+                      # Low fills rotate to the next market. The logical
+                      # session stays visible under one auto_group_id; it never
+                      # ends unless the user presses Stop.
+                      auto_rotate=True, auto_rotation_after_sec=180,
                       session_duration_sec=payload.get('duration_sec'), target_volume_usd=payload.get('target_volume_usd'),
                       session_stop_loss_usd=payload.get('stop_loss_usd', 50))
                 result = manager.start_worldcup(req)
@@ -213,6 +214,15 @@ class Runtimes:
         with self.tenant_lock(owner):
             manager = self.manager(owner)
             result = manager.resume_worldcup_exit(session_id)
+            self.invalidate(owner)
+            snapshot = self.snapshot(owner)
+            return {**snapshot, 'resumed_session_id': result.get('session_id')}
+
+    def resume_trading(self, owner, session_id):
+        """Resume bid+ask trading on the same market after an interruption."""
+        with self.tenant_lock(owner):
+            manager = self.manager(owner)
+            result = manager.resume_worldcup_trading(session_id)
             self.invalidate(owner)
             snapshot = self.snapshot(owner)
             return {**snapshot, 'resumed_session_id': result.get('session_id')}

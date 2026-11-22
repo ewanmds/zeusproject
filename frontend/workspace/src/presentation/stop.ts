@@ -106,6 +106,56 @@ export function canResumeMakerExit(
   );
 }
 
+/**
+ * A stopped Outcome session may also be resumed in normal bid+ask mode when
+ * the interruption was a crash or a server restart, not a user Stop.
+ */
+export function canResumeTrading(
+  session: Pick<
+    Session,
+    "kind" | "strategy" | "running" | "cleanup_confirmed" | "stop_reason"
+  >,
+) {
+  return (
+    session.kind === "outcome" &&
+    session.strategy === "outcome" &&
+    !session.running &&
+    session.cleanup_confirmed !== true &&
+    !session.stop_reason
+  );
+}
+
+export function resumeTradingMessage(
+  snapshot: Snapshot | null | undefined,
+  target: string,
+): StopResolution {
+  const matches = targetSessions(snapshot, target);
+  if (!matches.length)
+    return {
+      status: "unknown",
+      confirmed: false,
+      message:
+        "Reprise non vérifiée : la session cible est introuvable dans l’état reçu.",
+      session: null,
+    };
+  const pending = matches.find(
+    (session) => session.running || session.cleanup_confirmed !== true,
+  );
+  if (!pending)
+    return {
+      status: "confirmed",
+      confirmed: true,
+      message: "Cette session est déjà arrêtée et vérifiée.",
+      session: matches[0],
+    };
+  return {
+    status: "pending",
+    confirmed: false,
+    message: "Reprise du trading demandée. La session redémarre sur le même marché.",
+    session: pending,
+  };
+}
+
 export function resumeExitMessage(
   snapshot: Snapshot | null | undefined,
   target: string,

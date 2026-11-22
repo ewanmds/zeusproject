@@ -133,15 +133,16 @@ class WorldcupStartRequest(BaseModel):
     auto_max_spread_bps: float = Field(default=10, gt=0, le=100, allow_inf_nan=False)
     two_sided: bool = False
     full_size_quotes: bool = True
-    # Manual launches never rotate or spawn replacement sessions unless the
-    # caller explicitly opts in.
-    auto_rotate: bool = False
+    # Low fills rotate to the next market; the logical session continues under
+    # one auto_group_id until the user stops it.
+    auto_rotate: bool = True
     auto_rotation_after_sec: float = Field(default=180, ge=30, le=3600, allow_inf_nan=False)
     auto_market_cooldown_sec: float = Field(default=300, ge=60, le=86400, allow_inf_nan=False)
     auto_min_fill_usd_per_min: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     outcome_side: Optional[Literal["yes", "no"]] = None
     exec_mode: Literal["maker", "taker"] = "maker"
     resume_exit: bool = False
+    resume_trading: bool = False
     maker_spread_pct: float = Field(default=0.005, ge=0, allow_inf_nan=False)
     order_size_usd: float = Field(default=50, ge=10, allow_inf_nan=False)
     # En %, même convention que --max-spread-pct (0.02 = 0.02% = 2 bps).
@@ -835,6 +836,9 @@ class BotManager:
 
     def resume_worldcup_exit(self, session_id):
         return self.outcome.resume_exit(session_id)
+
+    def resume_worldcup_trading(self, session_id):
+        return self.outcome.resume_trading(session_id)
 
     def get_worldcup_stats(self):
         return self.outcome.status()

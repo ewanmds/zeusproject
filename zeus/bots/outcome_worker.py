@@ -52,6 +52,7 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         inventory_drain_timeout_sec=min(600.0, max(15.0, float(public.get("inventory_drain_timeout_sec") or 90))),
         inventory_exit_slippage_bps=min(200.0, max(20.0, float(public.get("inventory_exit_slippage_bps") or 50))),
         resume_exit=bool(public.get("resume_exit")),
+        resume_trading=bool(public.get("resume_trading")),
         stop_file=str(stop_file) if stop_file else None,
         funds_root=str(funds_root) if funds_root else None,
     )

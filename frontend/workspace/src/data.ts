@@ -41,13 +41,28 @@ export async function api<T>(
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
     });
-    const data = await response.json();
+    const text = await response.text();
+    let data: any = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        // A proxy or ASGI 500 can answer in plain text or HTML. Never surface
+        // a JSON parser error to the user.
+        data = {
+          detail:
+            response.status >= 500
+              ? "Erreur serveur (" + response.status + "). Réessayez."
+              : text.slice(0, 200),
+        };
+      }
+    }
     if (path !== "/config" && generation !== authGeneration)
       throw new DOMException("Le compte a changé.", "AbortError");
     if (!response.ok)
       throw new APIError(
         response.status,
-        typeof data.detail === "string"
+        typeof data?.detail === "string"
           ? data.detail
           : "Vérifiez les paramètres de la demande.",
       );

@@ -35,6 +35,7 @@ export interface SessionsProps {
   setNotice: Setter<string>;
   setWalletModal: Setter<boolean>;
   resumeExit: (session: Session) => Promise<void>;
+  resumeTrading: (session: Session) => Promise<void>;
   stopError: string;
   busy: string;
 }
