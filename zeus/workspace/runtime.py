@@ -176,6 +176,9 @@ class Runtimes:
                 req = WorldcupStartRequest(selection_mode='auto', outcome_side=payload['side'], exec_mode='maker',
                       two_sided=True, full_size_quotes=True, order_size_usd=payload['order_usd'],
                       max_position_usd=payload['position_cap'], auto_max_spread_bps=payload['spread_bps'],
+                      # A manual launch must never rotate, drain or spawn a
+                      # replacement session on its own. Only the user stops it.
+                      auto_rotate=False,
                       session_duration_sec=payload.get('duration_sec'), target_volume_usd=payload.get('target_volume_usd'),
                       session_stop_loss_usd=payload.get('stop_loss_usd', 50))
                 result = manager.start_worldcup(req)

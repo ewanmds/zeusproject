@@ -133,7 +133,9 @@ class WorldcupStartRequest(BaseModel):
     auto_max_spread_bps: float = Field(default=10, gt=0, le=100, allow_inf_nan=False)
     two_sided: bool = False
     full_size_quotes: bool = True
-    auto_rotate: bool = True
+    # Manual launches never rotate or spawn replacement sessions unless the
+    # caller explicitly opts in.
+    auto_rotate: bool = False
     auto_rotation_after_sec: float = Field(default=180, ge=30, le=3600, allow_inf_nan=False)
     auto_market_cooldown_sec: float = Field(default=300, ge=60, le=86400, allow_inf_nan=False)
     auto_min_fill_usd_per_min: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
