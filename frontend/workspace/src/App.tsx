@@ -731,8 +731,8 @@ export default function App() {
         >
           <p className="modal-description">{stop.name}</p>
           <p>
-            Le moteur annule ses ordres et applique sa procédure de sortie.
-            L’arrêt reste en cours jusqu’à sa vérification.
+            Le premier arrêt demande une sortie maker. Un second arrêt force
+            l’annulation des ordres, sans vente au marché.
           </p>
           {actionErrors.stop && <InlineAlert>{actionErrors.stop}</InlineAlert>}
           <div className="dialog-actions">

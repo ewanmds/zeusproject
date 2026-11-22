@@ -230,6 +230,22 @@ class SupervisorStopTests(unittest.TestCase):
             self.assertFalse(stop_file.exists())
             self.assertTrue(json.loads(drain.read_text())['manual'])
 
+    def test_stop_on_an_already_draining_session_forces_the_worker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            stop_file = Path(folder) / 'stop'
+            (Path(folder) / 'drain.json').write_text(json.dumps(
+                {'requested_at': 1, 'reason': 'low executed $/min'}))
+            sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
+            sup.manager = SimpleNamespace(lock=threading.RLock())
+            sup.records = lambda: []
+            sup.rotation = SimpleNamespace(cancel=lambda sid: [])
+            sup.procs = {'s1': {'session_id': 's1', 'stop_file': str(stop_file),
+                                'safety_file': str(Path(folder) / 'journal.json'),
+                                'market': '#101',
+                                'proc': SimpleNamespace(poll=lambda: 0)}}
+            sup.stop('s1')
+            self.assertTrue(stop_file.exists())  # hard stop signal, no taker sell
+
     def test_stop_is_idempotent_for_a_dead_unconfirmed_session(self):
         with tempfile.TemporaryDirectory() as folder:
             stop_file = Path(folder) / 'stop'

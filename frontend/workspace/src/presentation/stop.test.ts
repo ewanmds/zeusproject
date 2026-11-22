@@ -43,7 +43,7 @@ function snapshot(sessions: Session[]): Snapshot {
 describe("stop evidence", () => {
   it("never confirms before cleanup is explicit", () => {
     const result = resolveStopSnapshot(
-      snapshot([session({ running: false, cleanup_confirmed: false })]),
+      snapshot([session({ running: true, cleanup_confirmed: false })]),
       "s1",
     );
     expect(result.status).toBe("pending");
@@ -79,6 +79,21 @@ describe("stop evidence", () => {
     );
     expect(result.status).toBe("pending");
     expect(result.session?.id).toBe("leg-b");
+  });
+
+  it("explains a forced stop that left a residual position", () => {
+    const result = resolveStopSnapshot(
+      snapshot([
+        session({
+          running: false,
+          cleanup_confirmed: false,
+          phase: "failed",
+        }),
+      ]),
+      "s1",
+    );
+    expect(result.status).toBe("pending");
+    expect(result.message).toContain("Arrêt non confirmé");
   });
 
   it("keeps a grouped unconfirmed leg visible", () => {

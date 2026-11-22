@@ -59,10 +59,20 @@ export function resolveStopSnapshot(
   );
   if (unresolved.length) {
     const outcome = matches.some(isMakerOutcome);
+    const stillExiting = unresolved.every(
+      (session) =>
+        session.running ||
+        session.phase === "draining" ||
+        session.exit_requested === true,
+    );
     return {
       status: "pending",
       confirmed: false,
-      message: outcome ? PENDING_MAKER_EXIT : PENDING_STOP,
+      message: outcome
+        ? stillExiting
+          ? PENDING_MAKER_EXIT
+          : "Arrêt non confirmé : vérifiez la position résiduelle."
+        : PENDING_STOP,
       session: unresolved[0],
     };
   }

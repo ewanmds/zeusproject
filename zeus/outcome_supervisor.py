@@ -486,6 +486,24 @@ class OutcomeSupervisor:
         except OSError as exc:
             raise RuntimeError("Outcome exit journal unavailable: " + safe_error(exc)) from exc
 
+    def _stop_or_force(self, info, reason):
+        """First Stop requests a maker exit; an already-draining Stop forces it.
+
+        A forced stop cancels owned orders and exits the worker. It never sends
+        a taker sell; a residual position stays unresolved and is reported.
+        """
+        path = self._drain_path(info)
+        if path is not None and path.exists():
+            stop_file = info.get("stop_file")
+            if stop_file:
+                try:
+                    Path(stop_file).touch()
+                except OSError as exc:
+                    raise RuntimeError("Outcome stop signal unavailable: " + safe_error(exc)) from exc
+            return "forced"
+        self._request_maker_exit(info, reason)
+        return "requested"
+
     def stop(self, session_id=None):
         """Record a maker-exit request. Returns ids whose request was accepted.
 
@@ -514,18 +532,18 @@ class OutcomeSupervisor:
                     raise RuntimeError("An Outcome worker is still active on this market; stop it first")
                 return [session_id]
             for record in pending:
-                self._request_maker_exit(record, reason)
+                self._stop_or_force(record, reason)
             return [session_id]
-        for info in targets:
-            self._request_maker_exit(info, reason)
+        results = [self._stop_or_force(info, reason) for info in targets]
+        forced = "forced" in results
         if session_id is None:
             attached = {info["session_id"] for info in targets}
             for _, record in self.records():
                 if record.get("session_id") not in attached and not record.get("cleanup_confirmed"):
-                    self._request_maker_exit(record, reason)
+                    self._stop_or_force(record, reason)
         # Let a fast, already-flat exit confirm, but never kill a worker whose
         # passive sell is still waiting for a counterparty.
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + (10 if forced else 5)
         pending = [info for info in targets if info["proc"].poll() is None]
         while pending and time.monotonic() < deadline:
             time.sleep(0.2)
