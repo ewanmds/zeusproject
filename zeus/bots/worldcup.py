@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from zeus import PROJECT_ROOT
 from zeus.builder import outcome_builder
-from zeus.safety import SafetyLatch, account_snapshot, finite, confirmed_client_order, safe_error, supervisor_alive, atomic_json, read_json, SubmissionSkipped
+from zeus.safety import SafetyLatch, GuardedExchange, account_snapshot, finite, confirmed_client_order, safe_error, supervisor_alive, atomic_json, read_json, SubmissionSkipped
 from zeus.network import retry_read, StartupReadCancelled
 from contextlib import nullcontext
 
@@ -248,6 +248,7 @@ class BotConfig:
     maker_offset_pct: float = 0.0  # % derrière le touch, même convention que max_spread_pct (0.02 = 0.02%)
     maker_opening_rest_sec: float = 2.0  # Preserve opening queue; risk pulls/exits bypass.
     maker_requote_delay_sec: float = .05  # Confirmed normal cancels still require fresh account reconciliation.
+    maker_reprice_confirm_sec: float = .25  # Ignore brief passive-price flicker; risk pulls bypass.
     maker_spread_pct: Optional[float] = None  # Total quote spread in percent; None keeps CLI offset pricing.
     auto_max_spread_bps: Optional[float] = None
     two_sided: bool = False
@@ -325,6 +326,8 @@ class MarketState:
     reconcile_required: bool = False
     cancel_retry_until: float = 0.0
     opening_rearm_until: float = 0.0
+    pending_reprices: Dict[str, Tuple[int, float, float]] = field(default_factory=dict)
+    last_cancel: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def has_bbo(self) -> bool:
@@ -364,6 +367,7 @@ class SessionStats:
     rejected: int = 0
     orders_sent: int = 0
     cancels_sent: int = 0
+    requotes_skipped: int = 0
     forced_exits: int = 0
 
     @property
@@ -410,6 +414,7 @@ class HyperliquidSpreadBot:
         self.status = "init"
         self.stats = SessionStats()
         self.account_revision = 0
+        self._quote_cancel_local = threading.local()
         self.safety = SafetyLatch(self._halt, cfg.safety_file, is_running=lambda: self.running
                                  and not (cfg.stop_file and os.path.exists(cfg.stop_file)) and supervisor_alive(),
                                   strict_maker_spot=cfg.worldcup,
@@ -434,6 +439,10 @@ class HyperliquidSpreadBot:
         self.wallet = None
         if cfg.live:
             self._init_exchange(perp_dexs)
+            if cfg.worldcup:
+                # Innermost wrapper: check after account/signing lock waits,
+                # immediately before entering the SDK. Never hold a book lock over I/O.
+                self.exchange = self._queue_checked_exchange(self.exchange)
             if cfg.signing_root:
                 from zeus.signing import SigningCoordinator
                 self.exchange = SigningCoordinator(cfg.signing_root, self.wallet.address).wrap(
@@ -521,6 +530,50 @@ class HyperliquidSpreadBot:
         if "builder" not in order:
             order["builder"] = outcome_builder()
         return self.exchange.order(**order)
+
+    def _queue_checked_exchange(self, exchange):
+        bot = self
+        class QueueCheckedExchange:
+            def __getattr__(self, name):
+                method = getattr(exchange, name)
+                if name not in GuardedExchange.ACTIONS:
+                    return method
+                def send(*args, **kwargs):
+                    bot._before_exchange_send(name, args, kwargs)
+                    return method(*args, **kwargs)
+                return send
+        return QueueCheckedExchange()
+
+    @staticmethod
+    def _resting_at_target(st, buy, request):
+        if not request:
+            return False
+        quoted = st.quoted_bid if buy else st.quoted_ask
+        target = float(request['limit_px'])
+        passive = quoted < st.ask if buy else quoted > st.bid
+        return passive and (quoted >= target-1e-12 if buy else quoted <= target+1e-12)
+
+    def _before_exchange_send(self, name, args, kwargs):
+        self.safety.assert_allowed_action(name, args, kwargs)
+        context = getattr(getattr(self, '_quote_cancel_local', None), 'context', None)
+        if name != 'bulk_cancel' or context is None:
+            return
+        st, buy, oid, target = context
+        if not any(int(req['oid']) == oid and req['coin'] == st.spec.symbol for req in args[0]):
+            return
+        side = 'bid' if buy else 'ask'
+        with self.lock:
+            if getattr(st, side+'_oid') != oid or st.reconcile_required:
+                raise SubmissionSkipped('Quote changed; reconcile before repricing')
+            if self.risk_block_reason(st, closing_inventory=not buy):
+                return  # A new risk/stop condition must still pull the quote.
+            request = self.bilateral_requests(st).get(buy)
+            if self._resting_at_target(st, buy, request):
+                st.pending_reprices.pop(side, None)
+                raise SubmissionSkipped('Queue preserved: resting quote already at target')
+            if request and target is not None and abs(float(request['limit_px'])-target) > 1e-12:
+                st.pending_reprices.pop(side, None)
+                raise SubmissionSkipped('Target changed during signing wait; re-evaluate')
 
     @staticmethod
     def patch_outcome_assets(info: Info, outcome_meta: Dict[str, Any]) -> None:
@@ -1224,9 +1277,13 @@ class HyperliquidSpreadBot:
                                 changed = True
                             if st.bid_oid == oid:
                                 st.bid_oid = None
+                                st.bid_quantity = 0.0
+                                st.reconcile_required = True
                                 changed = True
                             if st.ask_oid == oid:
                                 st.ask_oid = None
+                                st.ask_quantity = 0.0
+                                st.reconcile_required = True
                                 changed = True
                             if "reject" in status:
                                 self.stats.rejected += 1
@@ -1234,12 +1291,30 @@ class HyperliquidSpreadBot:
                                 rejection_error = f"Order rejected: {status}"
                         elif status in {"open", "resting"}:
                             side = str(order.get("side", "")).upper()
-                            if side == "B":
-                                st.bid_oid = oid
-                                st.quoted_bid = safe_float(order.get("limitPx"), st.quoted_bid)
-                            else:
-                                st.ask_oid = oid
-                                st.quoted_ask = safe_float(order.get("limitPx"), st.quoted_ask)
+                            if side not in {'A', 'B'}:
+                                continue
+                            prefix = 'bid' if side == 'B' else 'ask'
+                            old_oid = getattr(st, prefix+'_oid')
+                            old_qty = getattr(st, prefix+'_quantity')
+                            price = safe_float(order.get('limitPx'))
+                            quantity = safe_float(order.get('sz'))
+                            if (old_oid not in (None, oid) or not math.isfinite(price)
+                                    or price <= 0 or not math.isfinite(quantity) or quantity <= 0
+                                    or old_oid == oid and old_qty > 0 and quantity > old_qty+1e-9):
+                                # Incomplete/reordered events must not turn a
+                                # funded resting order into a zero-size quote.
+                                st.reconcile_required = True
+                                changed = True
+                                continue
+                            if old_oid != oid or abs(old_qty-quantity) > 1e-9:
+                                st.reconcile_required = True
+                            setattr(st, prefix+'_oid', oid)
+                            setattr(st, 'quoted_'+prefix, price)
+                            setattr(st, prefix+'_quantity', quantity)
+                            if old_oid != oid or getattr(st, prefix+'_order_ts') <= 0:
+                                stamp = safe_float(order.get('timestamp'))/1000
+                                now = time.time()
+                                setattr(st, prefix+'_order_ts', stamp if 0 < stamp <= now+1 else now)
                             changed = True
                 if changed:
                     self.account_revision = getattr(self, "account_revision", 0) + 1
@@ -1621,19 +1696,32 @@ class HyperliquidSpreadBot:
                 "limit_px": bid, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
         return requests_out
 
-    def cancel_bilateral_side(self, st: MarketState, buy: bool, reason: str) -> None:
+    def cancel_bilateral_side(self, st: MarketState, buy: bool, reason: str, *, target_px=None) -> None:
         """Cancel only the affected quote; do not discard the opposite queue."""
         side = "bid" if buy else "ask"
         oid = getattr(st, f"{side}_oid")
         if not oid or time.time() < st.cancel_retry_until or not self.can_send_action():
             return
+        local = getattr(self, '_quote_cancel_local', None)
+        if local is None:
+            local = self._quote_cancel_local = threading.local()
+        previous_context = getattr(local, 'context', None)
+        previous_retry = st.cancel_retry_until
+        quoted = getattr(st, 'quoted_'+side)
+        quantity = getattr(st, side+'_quantity')
         try:
+            local.context = (st, buy, int(oid), target_px) if reason == 'requote' else None
+            if local.context:
+                self._before_exchange_send('bulk_cancel', ([{'coin': st.spec.symbol, 'oid': int(oid)}],), {})
             st.cancel_retry_until = time.time()+2
             result = self.exchange.bulk_cancel([{"coin": st.spec.symbol, "oid": int(oid)}])
             self.stats.cancels_sent += 1
             statuses = result.get("response", {}).get("data", {}).get("statuses", []) if isinstance(result, dict) and result.get("status") == "ok" else []
             with self.lock:
                 if statuses == ["success"]:
+                    st.last_cancel = dict(at=time.time(), side=side, oid=int(oid), price=quoted,
+                                          quantity=quantity, reason=reason, target_price=target_px)
+                    st.pending_reprices.pop(side, None)
                     if getattr(st, f"{side}_oid") == oid:
                         setattr(st, f"{side}_oid", None)
                         setattr(st, f"{side}_quantity", 0.0)
@@ -1646,9 +1734,15 @@ class HyperliquidSpreadBot:
                 st.reconcile_required = True
                 self.account_revision += 1
                 st.last_action = f"{side} cancel: {reason}"
+        except SubmissionSkipped as exc:
+            st.cancel_retry_until = previous_retry
+            self.stats.requotes_skipped += 1
+            st.last_action = safe_error(exc)
         except Exception as exc:
             st.last_error = safe_error(exc)
             st.reconcile_required = True
+        finally:
+            local.context = previous_context
 
     def place_bilateral(self, st: MarketState) -> None:
         if not self.running or self.safety.stopped.is_set() or self.safety.phase == "recovering":
@@ -1675,17 +1769,29 @@ class HyperliquidSpreadBot:
                 # target and still passive: never cancel our own better quote
                 # or burn queue on a one-tick difference.
                 target = float(req["limit_px"]) if req else 0.0
-                keep = bool(req and passive and (
-                    quoted >= target - 1e-12 if buy else quoted <= target + 1e-12))
+                keep = self._resting_at_target(st, buy, req)
                 if keep:
+                    st.pending_reprices.pop(side, None)
                     continue
                 # Normal repricing preserves queue age. Budget/risk/drain pulls
                 # bypass this hold, as do quotes which are no longer passive.
-                if (req and passive and not (self.rotation_requested() and not buy)
+                urgent_sell = not buy and bool(self.rotation_requested()
+                    or self.risk_block_reason(st, closing_inventory=False))
+                if (req and passive and not urgent_sell
                         and time.time()-getattr(st, f"{side}_order_ts") < self.cfg.maker_opening_rest_sec):
                     continue
+                if self.cfg.worldcup and req and passive and not urgent_sell:
+                    now = time.time()
+                    pending = st.pending_reprices.get(side)
+                    if not pending or pending[0] != oid or abs(pending[1]-target) > 1e-12:
+                        st.pending_reprices[side] = (oid, target, now)
+                        st.last_action = side+' target confirmation; queue preserved'
+                        continue
+                    if now-pending[2] < self.cfg.maker_reprice_confirm_sec:
+                        continue
                 if self.cfg.live:
-                    self.cancel_bilateral_side(st, buy, "drain" if self.rotation_requested() else "requote" if req else "limit")
+                    self.cancel_bilateral_side(st, buy,
+                        "drain" if self.rotation_requested() else "requote" if req else "limit", target_px=target if req else None)
                 return
             if not req or buy and time.time() < st.opening_rearm_until:
                 continue
@@ -1824,9 +1930,15 @@ class HyperliquidSpreadBot:
                     if st is None:
                         continue
                     if st.bid_oid in oids:
+                        st.last_cancel = dict(at=time.time(), side='bid', oid=int(st.bid_oid),
+                                              price=st.quoted_bid, quantity=st.bid_quantity, reason=reason)
+                        st.pending_reprices.pop('bid', None)
                         st.bid_oid = None
                         st.opening_rearm_until = time.time() + self.cfg.maker_opening_rest_sec
                     if st.ask_oid in oids:
+                        st.last_cancel = dict(at=time.time(), side='ask', oid=int(st.ask_oid),
+                                              price=st.quoted_ask, quantity=st.ask_quantity, reason=reason)
+                        st.pending_reprices.pop('ask', None)
                         st.ask_oid = None
                     if not st.bid_oid and not st.ask_oid:
                         st.cancel_retry_until = 0.0
@@ -2216,7 +2328,8 @@ class HyperliquidSpreadBot:
                        "ask_size": st.ask_quantity if st.ask_oid else 0,
                        "ask_age_sec": max(0, now-st.ask_order_ts) if st.ask_oid else None,
                        "book_age_ms": max(0, now-st.last_book_ts)*1000 if st.last_book_ts else None,
-                       "book_source": st.book_source} for st in self.states.values()]
+                       "book_source": st.book_source,
+                       "last_cancel": dict(st.last_cancel) or None} for st in self.states.values()]
             active_state = next(iter(self.states.values()), None)
             execution_state, blocked_reason = self.execution_status(active_state)
 
@@ -2244,6 +2357,7 @@ class HyperliquidSpreadBot:
                 "gross_closed_pnl": stats.gross_closed_pnl,
                 "orders_sent": stats.orders_sent,
                 "cancels_sent": stats.cancels_sent,
+                "requotes_skipped": stats.requotes_skipped,
                 "rejected": stats.rejected,
                 "forced_exits": stats.forced_exits,
                 "last_fill_at": getattr(self, "last_fill_at", 0),
