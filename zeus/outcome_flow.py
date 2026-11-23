@@ -498,7 +498,7 @@ class OutcomeFlowScanner:
         candidates = []
         fees_not_covered = 0
         cost_unavailable = 0
-        rejected_book = rejected_depth = rejected_spread = 0
+        rejected_book = rejected_depth = rejected_spread = rejected_edge = 0
         widest_spread = 0.0
         deepest_book = 0.0
         for item, book in zip(targets, books):
@@ -537,8 +537,12 @@ class OutcomeFlowScanner:
                     cost_unavailable += 1
                 else:
                     fees_not_covered += not item['fees_covered']
-                # Cost is informational in volume mode. Neither a negative
-                # estimate nor unavailable fee metadata rejects eligible flow.
+                # A known negative round-trip edge means the maker close fee
+                # cannot be covered. Keep observing the market, never auto-open.
+                if (item.get('net_touch_edge_bps') is not None
+                        and item['net_touch_edge_bps'] < 0):
+                    rejected_edge += 1
+                    continue
                 item["score"] /= (1+max(wait_buy, wait_sell)/60)*(1+spread/10)
                 candidates.append(item)
             except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
@@ -569,6 +573,8 @@ class OutcomeFlowScanner:
             if rejected_spread:
                 parts.append("%d spread(s) > %g bps (min observé %g bps)"
                              % (rejected_spread, max_spread_bps, round(widest_spread, 2)))
+            if rejected_edge:
+                parts.append("%d edge(s) net < 0 bps après frais" % rejected_edge)
             if not parts and skipped_events:
                 parts.append("%d marché(s) sans flux récent" % skipped_events)
             reason = ("Aucun candidat: " + "; ".join(parts)) if parts else \
@@ -576,7 +582,7 @@ class OutcomeFlowScanner:
         return {**status, "ready": bool(candidates), "warming_up": False, "candidates": candidates,
                 "reason": reason,
                 "fees_not_covered": fees_not_covered, "cost_unavailable": cost_unavailable,
-                "cost_policy": "informational",
+                "cost_policy": "nonnegative_net_edge",
                 "order_usd": order_usd, "max_spread_bps": max_spread_bps,
                 "min_depth_usd": order_usd,
                 "updated_at": completed, "ranking": "queue_proxy_sec",

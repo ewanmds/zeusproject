@@ -30,7 +30,8 @@ class ModerateFlowTests(unittest.TestCase):
         with patch('zeus.outcome_flow.time.time', return_value=NOW), ThreadPoolExecutor(2) as pool, \
                 patch.object(scan, '_book_executor', return_value=pool), \
                 patch.object(scan, '_book', return_value=book or self.book()):
-            return scan._snapshot('no', order_usd, spread_bps)
+            # These cases exercise flow cadence, not fee economics.
+            return scan._snapshot('no', order_usd, spread_bps, base_rate=0)
 
     def test_four_spaced_prints_with_only_one_sell_event_can_quote_a_funded_book(self):
         result = self.run_scan(self.scanner())
@@ -91,7 +92,7 @@ class ModerateFlowTests(unittest.TestCase):
     def test_cache_and_final_validation_accept_the_same_new_age_limit(self):
         scan = self.scanner(trades((250, 100, 55, 40), ('B', 'A', 'A', 'B')))
         with ThreadPoolExecutor(2) as pool, \
-                patch('zeus.outcome_costs.maker_profile', return_value=.0004), \
+                patch('zeus.outcome_costs.maker_profile', return_value=0), \
                 patch('zeus.outcome_flow.time.monotonic', return_value=100), \
                 patch.object(scan, '_book_executor', return_value=pool), \
                 patch.object(scan, '_book', return_value=self.book()) as read:

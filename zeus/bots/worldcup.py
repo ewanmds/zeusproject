@@ -251,6 +251,11 @@ class BotConfig:
     maker_reprice_confirm_sec: float = .25  # Ignore brief passive-price flicker; risk pulls bypass.
     maker_spread_pct: Optional[float] = None  # Total quote spread in percent; None keeps CLI offset pricing.
     auto_max_spread_bps: Optional[float] = None
+    # Auto Outcome entry economics: never open when the known touch edge after
+    # the maker close fee is negative. Exits bypass this guard.
+    auto_net_edge_bps: Optional[float] = None
+    auto_maker_close_fee_bps: Optional[float] = None
+    min_entry_edge_bps: float = 0.0
     two_sided: bool = False
     full_size_quotes: bool = False
     session_expires_at: Optional[float] = None
@@ -1608,6 +1613,19 @@ class HyperliquidSpreadBot:
             return "waiting bbo"
         if time.time() - st.last_book_ts > self.cfg.stale_sec:
             return f"stale feed {fmt_age(st.last_book_ts)}"
+        if (self.cfg.worldcup and not closing_inventory
+                and self.cfg.auto_max_spread_bps is not None):
+            edge = self.cfg.auto_net_edge_bps
+            if edge is not None and edge < self.cfg.min_entry_edge_bps:
+                return (f"net edge {edge:.2f}bps < "
+                        f"{self.cfg.min_entry_edge_bps:.2f}bps; no entry")
+            fee = self.cfg.auto_maker_close_fee_bps
+            if fee is not None and st.bid > 0 and st.ask > st.bid:
+                rate = max(0.0, fee)/10000.0
+                live = 10000.0*(st.ask*(1.0-rate)-st.bid)/((st.bid+st.ask)/2.0)
+                if live < self.cfg.min_entry_edge_bps:
+                    return (f"live net edge {live:.2f}bps < "
+                            f"{self.cfg.min_entry_edge_bps:.2f}bps; no entry")
         if self.cfg.worldcup and not closing_inventory and time.time() < st.inventory_stop_until:
             return 'Inventory stop cooldown; new bids paused'
         if (self.cfg.auto_max_spread_bps is not None and not closing_inventory

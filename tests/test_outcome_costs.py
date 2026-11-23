@@ -117,17 +117,15 @@ class OutcomeCostsTests(unittest.TestCase):
             return {'time': now*1000, 'levels': [[{'px': '.38268', 'sz': '100'}], [{'px': ask, 'sz': '100'}]]}
         return scan, book
 
-    def test_scanner_keeps_active_markets_even_when_spread_does_not_cover_fees(self):
+    def test_scanner_rejects_a_negative_net_edge(self):
         scan, book = self.ready_scanner()
         with ThreadPoolExecutor(2) as pool, patch.object(scan, '_book_executor', return_value=pool), patch.object(scan, '_book', side_effect=book):
             result = scan._snapshot('no', 15, 10, base_rate=.000384)
         self.assertTrue(result['ready'])
-        self.assertEqual({r['market'] for r in result['candidates']}, {'#101', '#201'})
+        self.assertEqual({r['market'] for r in result['candidates']}, {'#201'})
         self.assertEqual(result['fees_not_covered'], 1)
-        self.assertEqual(result['cost_policy'], 'informational')
-        tight = next(r for r in result['candidates'] if r['market']=='#101')
-        self.assertLess(tight['net_touch_edge_bps'], 0)
-        self.assertFalse(tight['fees_covered'])
+        self.assertEqual(result['cost_policy'], 'nonnegative_net_edge')
+        self.assertNotIn('#101', {r['market'] for r in result['candidates']})
         self.assertFalse(result['error'])
 
     def test_unknown_fee_profile_or_metadata_does_not_hide_eligible_flow(self):
@@ -186,35 +184,39 @@ class OutcomeCostsTests(unittest.TestCase):
     def test_auto_launch_admits_negative_or_unknown_cost_without_real_process(self):
         from zeus.outcome_supervisor import OutcomeSupervisor
         from zeus.server import WorldcupStartRequest
-        for base in [.000384, None]:
-            scan, book = self.ready_scanner()
-            with ThreadPoolExecutor(2) as pool, patch.object(scan, '_book_executor', return_value=pool), patch.object(scan, '_book', side_effect=book):
-                snapshot = scan._snapshot('no', 15, 10, base_rate=base)
-            # Regression case: the only available market has negative or
-            # unknown estimated edge; it must still be admitted for volume.
-            snapshot['candidates'] = [r for r in snapshot['candidates'] if r['market']=='#101']
-            with tempfile.TemporaryDirectory() as folder:
-                supervisor = OutcomeSupervisor.__new__(OutcomeSupervisor)
-                supervisor.root, supervisor.procs = Path(folder), {}
-                context = SimpleNamespace(account='0x'+'1'*40, private_key='offline-test', environment=Mock(return_value={}))
-                supervisor.manager = SimpleNamespace(account_context=context, lock=threading.RLock(), _reserve_session=Mock(return_value=None))
-                supervisor.rotation = SimpleNamespace(assert_admission=Mock(), candidate_allowed=Mock(return_value=True),
-                                                       lock=threading.RLock(), register=Mock())
-                supervisor.status = Mock(return_value={'bots': []})
-                supervisor.records = Mock(return_value=[])
-                request = WorldcupStartRequest(selection_mode='auto', exec_mode='maker', outcome_side='no',
-                                               order_size_usd=15, max_position_usd=200)
-                with patch('zeus.outcome_flow.scanner.snapshot', return_value=snapshot), \
-                     patch('zeus.outcomes.resolve_market', return_value={'key': '#101', 'name': 'Test'}), \
-                     patch('zeus.outcome_supervisor.subprocess.Popen', return_value=SimpleNamespace(pid=123)) as spawn:
-                    result = supervisor.start(request)
-                self.assertEqual(result['market'], '#101')
-                spawn.assert_called_once()
-                public = supervisor.procs[result['session_id']]['config']
-                self.assertEqual(public['order_size_usd'], 15)
-                self.assertEqual(public['max_position_usd'], 200)
-                edge = public['auto_selection']['net_touch_edge_bps']
-                self.assertTrue(edge is None if base is None else edge < 0)
+        # A known negative edge is never auto-selected.
+        scan, book = self.ready_scanner()
+        with ThreadPoolExecutor(2) as pool, patch.object(scan, '_book_executor', return_value=pool), patch.object(scan, '_book', side_effect=book):
+            snapshot = scan._snapshot('no', 15, 10, base_rate=.000384)
+        self.assertNotIn('#101', {r['market'] for r in snapshot['candidates']})
+
+        # Unknown fee metadata remains selectable; the live guard in the worker
+        # still protects any later spread change.
+        scan, book = self.ready_scanner()
+        with ThreadPoolExecutor(2) as pool, patch.object(scan, '_book_executor', return_value=pool), patch.object(scan, '_book', side_effect=book):
+            snapshot = scan._snapshot('no', 15, 10, base_rate=None)
+        snapshot['candidates'] = [r for r in snapshot['candidates'] if r['market']=='#101']
+        with tempfile.TemporaryDirectory() as folder:
+            supervisor = OutcomeSupervisor.__new__(OutcomeSupervisor)
+            supervisor.root, supervisor.procs = Path(folder), {}
+            context = SimpleNamespace(account='0x'+'1'*40, private_key='offline-test', environment=Mock(return_value={}))
+            supervisor.manager = SimpleNamespace(account_context=context, lock=threading.RLock(), _reserve_session=Mock(return_value=None))
+            supervisor.rotation = SimpleNamespace(assert_admission=Mock(), candidate_allowed=Mock(return_value=True),
+                                                   lock=threading.RLock(), register=Mock())
+            supervisor.status = Mock(return_value={'bots': []})
+            supervisor.records = Mock(return_value=[])
+            request = WorldcupStartRequest(selection_mode='auto', exec_mode='maker', outcome_side='no',
+                                           order_size_usd=15, max_position_usd=200)
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=snapshot), \
+                 patch('zeus.outcomes.resolve_market', return_value={'key': '#101', 'name': 'Test'}), \
+                 patch('zeus.outcome_supervisor.subprocess.Popen', return_value=SimpleNamespace(pid=123)) as spawn:
+                result = supervisor.start(request)
+            self.assertEqual(result['market'], '#101')
+            spawn.assert_called_once()
+            public = supervisor.procs[result['session_id']]['config']
+            self.assertEqual(public['order_size_usd'], 15)
+            self.assertEqual(public['max_position_usd'], 200)
+            self.assertIsNone(public['auto_selection']['net_touch_edge_bps'])
 
 
 if __name__ == '__main__':

@@ -176,6 +176,20 @@ class OutcomeQuoteTests(unittest.TestCase):
         self.assertEqual(plan[False]['limit_px'], .31)
         self.assertEqual(plan[False]['order_type']['limit']['tif'], 'Alo')
 
+    def test_auto_outcome_does_not_open_when_live_net_edge_is_negative(self):
+        bot = make_bot()
+        st = MarketState(MarketSpec('#101', 0, balance_coin='+101'))
+        st.update_bbo(.38268, .38269)
+        bot.states = {'#101': st}
+        bot.cfg.auto_max_spread_bps = 10
+        bot.cfg.auto_maker_close_fee_bps = 7.68
+        bot.cfg.auto_net_edge_bps = 2.0
+        bot.cfg.min_entry_edge_bps = 0.0
+        bot.rotation_requested = lambda: False
+        self.assertIn('live net edge', bot.risk_block_reason(st, closing_inventory=False))
+        self.assertIsNone(bot.risk_block_reason(st, closing_inventory=True))
+        self.assertNotIn(True, bot.bilateral_requests(st))
+
     def test_l2_book_exposes_bounded_depth_for_the_dashboard(self):
         bot = make_bot()
         st = MarketState(MarketSpec('#101', 0, balance_coin='+101'))
