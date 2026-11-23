@@ -376,7 +376,9 @@ class SupervisorStopTests(unittest.TestCase):
             journal = Path(folder) / 'journal.json'
             journal.write_text(json.dumps({
                 'session_id': 's1', 'exposure_started': True, 'owned_oids': [7],
-                'cloids': ['0xabc'], 'pending_cloids': []}))
+                'cloids': ['0xabc'], 'pending_cloids': [],
+                'session_accounting': {'volume_usd': 200, 'net_pnl': -3},
+                'inventory_since': {'#101': 123}, 'exit_started_at': 456}))
             sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
             sup.procs = {}
             sup.manager = SimpleNamespace(lock=threading.RLock())
@@ -403,6 +405,10 @@ class SupervisorStopTests(unittest.TestCase):
             seed = sup.start.call_args.kwargs['seed']
             self.assertEqual(seed['resume_from'], 's1')
             self.assertTrue(seed['exposure_started'])
+            self.assertEqual(request.session_volume_carry, 200)
+            self.assertEqual(seed['rotation_pnl_carry'], -3)
+            self.assertEqual(seed['inventory_since'], {'#101': 123})
+            self.assertEqual(seed['exit_started_at'], 456)
 
     def test_resume_starts_exit_only_worker_with_attribution_seed(self):
         with tempfile.TemporaryDirectory() as folder:

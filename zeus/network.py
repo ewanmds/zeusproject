@@ -5,8 +5,10 @@ respect Retry-After, back off with jitter, and make every wait interruptible by
 Stop. Order submissions keep their own durable-reconciliation path.
 """
 import random
+import math
 import threading
 import time
+from email.utils import parsedate_to_datetime
 from http.client import IncompleteRead
 
 import requests
@@ -48,7 +50,7 @@ class StartupReadCancelled(RuntimeError):
 
 
 def _status(exc):
-    status = getattr(exc, "status_code", None)
+    status = getattr(exc, "status_code", getattr(exc, "status", None))
     if isinstance(exc, requests.HTTPError) and exc.response is not None:
         status = exc.response.status_code
     return status
@@ -56,6 +58,8 @@ def _status(exc):
 
 def classify_error(exc):
     """Return one stable category, never a transport-class soup."""
+    if isinstance(exc, HyperliquidError):
+        return exc.kind
     status = _status(exc)
     if status == 429:
         return "rate_limited"
@@ -74,6 +78,8 @@ def classify_error(exc):
 
 
 def retry_after_seconds(exc):
+    if isinstance(exc, HyperliquidError):
+        return exc.retry_after
     response = getattr(exc, "response", None)
     headers = getattr(response, "headers", None)
     if not headers:
@@ -84,8 +90,11 @@ def retry_after_seconds(exc):
     try:
         value = float(str(raw).strip())
     except (TypeError, ValueError):
-        return None
-    return max(0.0, min(60.0, value))
+        try:
+            value = parsedate_to_datetime(str(raw)).timestamp() - time.time()
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return max(0.0, value) if math.isfinite(value) else None
 
 
 def _interruptible_wait(delay, sleep, cancelled):
@@ -138,7 +147,8 @@ def retry_read(label, operation, *, attempts=4, sleep=time.sleep, cancelled=None
                 delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
                 if jitter:
                     delay *= random.uniform(0.8, 1.2)
-            delay = max(0.05, min(max_delay, delay))
+            # A server cooldown is a lower bound, including values above 60 s.
+            delay = max(0.05, delay if retry_after is not None else min(max_delay, delay))
             prefix = ("Limitation Hyperliquid" if kind == "rate_limited"
                       else f"Hyperliquid {kind}")
             print(f"{prefix}: {label}, retrying {attempt + 1}/{attempts} "
@@ -148,7 +158,52 @@ def retry_read(label, operation, *, attempts=4, sleep=time.sleep, cancelled=None
 
 def post_info(base_url, payload, *, cancelled=None):
     def read():
-        response = _http().post(base_url + "/info", json=payload, timeout=10)
-        response.raise_for_status()
-        return response.json()
+        return request_info(base_url, payload, cancelled=cancelled)
     return retry_read(str(payload.get("type", "info")), read, cancelled=cancelled)
+
+
+def request_info(base_url, payload, *, timeout=10, cancelled=None, critical=False):
+    """One budgeted read. No hidden retry and no signed action in this path."""
+    from zeus.read_cache import read_budget
+    read_budget().acquire(payload.get("type", "info"), critical=critical,
+                          cancelled=cancelled)
+    response = _http().post(base_url.rstrip("/") + "/info", json=payload, timeout=timeout)
+    if response.status_code == 429:
+        error = requests.HTTPError(response=response)
+        read_budget().cooldown(retry_after_seconds(error) or 30)
+    response.raise_for_status()
+    return response.json()
+
+
+def instrument_info(info, base_url, *, cancelled=None, transport=None):
+    """Cover SDK account reads too; retain its original non-info operations."""
+    original = info.post
+    def post(path, payload=None):
+        if path != "/info":
+            return original(path, payload)
+        ws = transport() if transport else None
+        if ws is not None and ws.state()["ready"]:
+            return ws.post_info(payload or {})
+        return request_info(base_url, payload or {}, cancelled=cancelled, critical=True)
+    info.post = post
+    return info
+
+
+class AccountInfoReads:
+    """Read-only verification without constructing/loading an execution SDK."""
+    def __init__(self, base_url, timeout=5, read=None):
+        self.base_url, self.timeout, self.read = base_url, timeout, read or request_info
+
+    def post(self, path, payload):
+        if path != '/info':
+            raise ValueError('Account verification permits info reads only')
+        return self.read(self.base_url, payload, timeout=self.timeout, critical=True)
+
+    def spot_user_state(self, account):
+        return self.post('/info', {'type': 'spotClearinghouseState', 'user': account})
+
+    def frontend_open_orders(self, account, dex=''):
+        return self.post('/info', {'type': 'frontendOpenOrders', 'user': account, 'dex': dex})
+
+    def user_state(self, account, dex=''):
+        return self.post('/info', {'type': 'clearinghouseState', 'user': account, 'dex': dex})

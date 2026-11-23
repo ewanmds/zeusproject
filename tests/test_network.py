@@ -107,7 +107,7 @@ class NetworkRetryTests(unittest.TestCase):
         self.assertEqual(classify_error(http_error(422)), "invalid_configuration")
         self.assertEqual(retry_after_seconds(http_error(429, {"Retry-After": "7"})), 7)
         self.assertIsNone(retry_after_seconds(http_error(429)))
-        self.assertEqual(retry_after_seconds(http_error(429, {"Retry-After": "999"})), 60)
+        self.assertEqual(retry_after_seconds(http_error(429, {"Retry-After": "999"})), 999)
 
 
 if __name__ == "__main__":

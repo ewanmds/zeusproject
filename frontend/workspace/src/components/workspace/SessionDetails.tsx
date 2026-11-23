@@ -33,6 +33,8 @@ export function SessionDetails({ session }: { session: Session }) {
                 {values([
                   ["Volume exécuté", usd(s.volume_usd)],
                   ["Volume / min", usd(volumePerMin)],
+                  ["Volume / heure observé", usd(volumePerMin !== null ? volumePerMin * 60 : null)],
+                  ["Transport d’exécution", s.execution_transport || "—"],
                   ["Fills", s.fills ?? "—"],
                   [
                     "Ordres / annulations",
@@ -77,6 +79,8 @@ export function SessionDetails({ session }: { session: Session }) {
               ["Position valorisée", usd(s.position_usd)],
               ["PnL brut avant frais", usd(s.net_pnl !== null && s.fees !== null ? s.net_pnl + s.fees : null)],
               ["PnL réalisé net", usd(s.net_pnl)],
+              ["PnL latent au bid", usd(s.unrealized_pnl)],
+              ["PnL réalisé + latent", usd(s.marked_net_pnl)],
               ["Frais", usd(s.fees)],
             ]),
           },
@@ -116,8 +120,8 @@ export function SessionDetails({ session }: { session: Session }) {
       )}
       {s.strategy === "outcome" && !s.running && !s.cleanup_confirmed && (
         <InlineAlert tone="warning">
-          Sortie maker non confirmée. Le backend réessaie automatiquement la
-          sortie post-only ; aucun nouvel achat n’est autorisé.
+          Arrêt non confirmé. L’inventaire résiduel et les ordres doivent être
+          vérifiés. Un arrêt immédiat conserve les positions et interdit la reprise automatique.
         </InlineAlert>
       )}
       {s.reason && s.reason !== s.stop_reason && (

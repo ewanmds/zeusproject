@@ -373,6 +373,8 @@ class BotManager:
         seen = set()
         corrupt = {}
         for path in self.state_dir.glob("*.json"):
+            if path.name == "api-budget.json":
+                continue  # legacy shared API accounting, not a session journal
             seen.add(path)
             try:
                 record = self._read_journal(path)
@@ -415,7 +417,7 @@ class BotManager:
         return result
 
     def _verify_session_flat(self, record):
-        from hyperliquid.info import Info
+        from zeus.network import AccountInfoReads
         from zeus.safety import confirmed_client_order
         kind = record["account_kind"]
         account = self.account_context.account if self.account_context else os.getenv("WALLET_ADDRESS_OUTCOME" if kind == "outcome" else "WALLET_ADDRESS", "").strip()
@@ -423,7 +425,7 @@ class BotManager:
             raise RuntimeError("Account unavailable for stop verification")
         if record.get("account") and record["account"].lower() != account.lower():
             raise RuntimeError("Session account changed; manual verification required")
-        info = Info("https://api.hyperliquid.xyz", skip_ws=True, timeout=5)
+        info = AccountInfoReads("https://api.hyperliquid.xyz", timeout=5)
         symbols = record["symbols"]
         # The account snapshot is the authority on residual risk. It must be
         # read before the client ids: an order that never reached the exchange
@@ -891,6 +893,7 @@ async def _warm_public_catalogs():
 @asynccontextmanager
 async def _server_lifespan(_app):
     global public_catalogs
+    manager.outcome.start_recovery()
     if public_catalogs.closed:
         public_catalogs = PublicCatalogService()
     warm = asyncio.create_task(_warm_public_catalogs())
@@ -903,7 +906,7 @@ async def _server_lifespan(_app):
         for task in (publisher, recovery, warm):
             task.cancel()
         await asyncio.gather(publisher, recovery, warm, return_exceptions=True)
-        manager.outcome.rotation.close()
+        manager.outcome.close()
         from zeus.outcome_flow import scanner
         await asyncio.to_thread(scanner.close)
         await public_catalogs.close()

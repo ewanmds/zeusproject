@@ -19,7 +19,7 @@ def visible_session(row, kind):
     config = {k: cfg.get(k) for k in ('selection_mode', 'exec_mode', 'order_size_usd',
               'max_position_usd', 'outcome_side', 'strategy', 'offset_bps', 'auto_max_spread_bps',
               'session_duration_sec', 'target_volume_usd', 'session_expires_at', 'session_stop_loss_usd') if k in cfg}
-    reason = (row.get('error') or row.get('cleanup_error') or row.get('blocked_reason')
+    reason = (row.get('error') or row.get('cleanup_error') or row.get('startup_wait') or row.get('blocked_reason')
               or row.get('auto_rotation_reason') or row.get('stop_reason') or '')
     reason = safe_error(reason) if reason else ''
     return {'id': row.get('session_id') or row.get('key') or row.get('token'), 'kind': kind,
@@ -34,6 +34,9 @@ def visible_session(row, kind):
         'orders_sent': row.get('orders_sent'), 'cancels_sent': row.get('cancels_sent'),
         'cost_per_1m': row.get('cost_per_1m') if complete else None,
         'position_usd': row.get('position_usd'), 'stale': bool(row.get('stale')),
+        'unrealized_pnl': row.get('unrealized_pnl') if not row.get('stale') else None,
+        'marked_net_pnl': row.get('marked_net_pnl') if complete else None,
+        'execution_transport': row.get('execution_transport'),
         'accounting_complete': bool(complete), 'config': config, 'quotes': row.get('quotes', []),
         'state': row.get('execution_state') or row.get('action') or phase,
         'reason': reason,
@@ -50,6 +53,14 @@ class Runtimes:
         self.guard = threading.RLock()
         self.source = uuid.uuid4().hex
         self.revisions = {}
+        self.recovery_enabled = False
+
+    def start_recovery(self):
+        self.recovery_enabled = True
+        for manager in list(self.items.values()):
+            start = getattr(manager.outcome, 'start_recovery', None)
+            if callable(start):
+                start()
 
     def tenant_lock(self, owner):
         with self.guard: return self.locks.setdefault(owner, threading.RLock())
@@ -65,6 +76,10 @@ class Runtimes:
                 context = AccountContext(owner, owner, agent['address'] if agent else '',
                                          agent['private_key'] if agent else '')
                 self.items[owner] = factory(state_dir=self.root/'tenants'/owner[2:], account_context=context)
+                if getattr(self, 'recovery_enabled', False):
+                    start = getattr(self.items[owner].outcome, 'start_recovery', None)
+                    if callable(start):
+                        start()
             return self.items[owner]
 
     def invalidate(self, owner):
@@ -167,6 +182,9 @@ class Runtimes:
         return result
 
     def launch(self, owner, payload):
+        from zeus import PROJECT_ROOT
+        if (PROJECT_ROOT/'.zeus-state'/'maintenance').exists():
+            raise ValueError('Mise à jour du workspace en cours ; lancement temporairement suspendu')
         from zeus.server import WorldcupStartRequest, GridStartRequest, manager as legacy
         with self.tenant_lock(owner):
             context = self.accounts.context(owner)  # Independently verify current approval before launch.

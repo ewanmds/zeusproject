@@ -112,6 +112,8 @@ class OutcomeFlowScanner:
         self.generation = 0
         self.error = ""
         self.books = {}
+        self.book_targets = set()
+        self.book_retry_at = {}
         self.book_lock = threading.Lock()
         self.snapshot_lock = threading.Lock()
         self.snapshot_cache = {}
@@ -172,6 +174,8 @@ class OutcomeFlowScanner:
                         while not self.stop.is_set() and self.ws is ws and self.connected:
                             with self.lock:
                                 wanted = {f"#{10*outcome+side}" for outcome in self.rows for side in (0, 1)}
+                                wanted = {("trades", c) for c in wanted} | {
+                                    ("l2Book", c) for c in self.book_targets if int(c[1:])//10 in self.rows}
                             # Incremental catalog updates preserve all other queues
                             # and observation history instead of restarting warmup.
                             changes = [("unsubscribe", c) for c in sorted(sent-wanted)]
@@ -179,7 +183,7 @@ class OutcomeFlowScanner:
                             # Send modest batches instead of one frame per 200 ms:
                             # 380 subscriptions used to take 76 s, delaying
                             # readiness long past the 60 s observation window.
-                            for index, (method, coin) in enumerate(changes):
+                            for index, (method, (kind, coin)) in enumerate(changes):
                                 if index and index % 20 == 0:
                                     if self.stop.wait(.5) or self.ws is not ws or not self.connected:
                                         return
@@ -189,9 +193,9 @@ class OutcomeFlowScanner:
                                     valid = int(coin[1:])//10 in self.rows
                                 if method == "subscribe" and not valid:
                                     continue
-                                ws.send(json.dumps({"method": method, "subscription": {"type": "trades", "coin": coin}}))
-                                if method == "subscribe": sent.add(coin)
-                                else: sent.discard(coin)
+                                ws.send(json.dumps({"method": method, "subscription": {"type": kind, "coin": coin}}))
+                                if method == "subscribe": sent.add((kind, coin))
+                                else: sent.discard((kind, coin))
                                 if time.monotonic()-last_ping >= 20:
                                     ws.send(json.dumps({"method": "ping"}))
                                     last_ping = time.monotonic()
@@ -209,6 +213,9 @@ class OutcomeFlowScanner:
             def message(ws, raw):
                 try:
                     payload = json.loads(raw)
+                    if payload.get("channel") == "l2Book":
+                        self.ingest_book(payload.get("data", {}))
+                        return
                     if payload.get("channel") == "subscriptionResponse":
                         subscription = payload.get("data", {}).get("subscription", {})
                         if subscription.get("type") == "trades":
@@ -268,19 +275,35 @@ class OutcomeFlowScanner:
                 except (KeyError, TypeError, ValueError):
                     continue
 
+    def ingest_book(self, book):
+        """Keep exchange timestamps; a stale websocket snapshot stays stale."""
+        try:
+            coin, stamp = str(book["coin"]), float(book["time"])/1000
+            if not math.isfinite(stamp) or not -1 <= time.time()-stamp <= 5:
+                return
+            with self.lock:
+                previous = self.books.get(coin)
+                if previous and float(previous[1].get("time", 0)) > float(book["time"]):
+                    return
+                self.books[coin] = (time.time(), book)
+        except (KeyError, TypeError, ValueError):
+            return
+
     def _book(self, coin):
         with self.lock:
             cached = self.books.get(coin)
-        if cached and time.time()-cached[0] < 1:
-            return cached[1]
+            if cached and time.time()-cached[0] < 4:
+                return cached[1]
+            if time.time() < self.book_retry_at.get(coin, 0):
+                return None
+            self.book_retry_at[coin] = time.time()+5
         try:
-            r = _http().post("https://api.hyperliquid.xyz/info", json={"type": "l2Book", "coin": coin}, timeout=3)
-            r.raise_for_status()
-            book = r.json()
+            from zeus.network import request_info
+            book = request_info("https://api.hyperliquid.xyz", {"type": "l2Book", "coin": coin}, timeout=3)
             with self.lock:
                 self.books[coin] = (time.time(), book)
             return book
-        except (requests.RequestException, ValueError):
+        except (requests.RequestException, RuntimeError, ValueError):
             return None
 
     def snapshot(self, side="no", order_usd=50, max_spread_bps=10, *, account=None):
@@ -386,6 +409,8 @@ class OutcomeFlowScanner:
         shortlist.sort(key=lambda r: (-r["volume_usd_1m"], -r["score"], r["market"]))
         # Dollar/minute first; retain freshness, spread, depth and two-way guards.
         targets = shortlist[:24]
+        with self.lock:
+            self.book_targets = {r["market"] for r in targets}
         pool = self._book_executor()
         if pool is None:
             status["connected"] = False

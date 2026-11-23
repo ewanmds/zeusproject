@@ -280,6 +280,9 @@ export function SessionsView({
                           >
                             {usd(s.net_pnl)}
                           </strong>
+                          {s.position_usd != null && s.position_usd > 0 && (
+                            <small>PnL latent : {usd(s.unrealized_pnl)}</small>
+                          )}
                         </div>
                         <div>
                           <span>Durée</span>

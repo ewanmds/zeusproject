@@ -72,6 +72,9 @@ export interface Session {
   cancels_sent?: number | null;
   cost_per_1m: number | null;
   position_usd: number | null;
+  unrealized_pnl?: number | null;
+  marked_net_pnl?: number | null;
+  execution_transport?: string;
   stale: boolean;
   accounting_complete: boolean;
   state: string;

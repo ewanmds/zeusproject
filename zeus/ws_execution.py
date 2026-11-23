@@ -21,6 +21,8 @@ class UncertainActionError(RuntimeError):
 @dataclass
 class _Pending:
     request_id: int
+    response_type: str = "action"
+    info_type: str = ""
     done: threading.Event = field(default_factory=threading.Event)
     result: object = None
     error: object = None
@@ -131,6 +133,13 @@ class WebSocketExecution:
         return thread is None or not thread.is_alive()
 
     def post_action(self, payload):
+        return self._post(payload, "action")
+
+    def post_info(self, payload):
+        """Idempotent info RPC on the warm socket; never signs an action."""
+        return self._post(payload, "info")
+
+    def _post(self, payload, request_type):
         if not self.action_lock.acquire(blocking=False):
             raise SubmissionSkipped("Execution busy; no additional action sent")
         pending = socket = None
@@ -147,7 +156,7 @@ class WebSocketExecution:
                 request_id = self.next_id
             try:
                 packet = json.dumps({"method":"post", "id":request_id,
-                                     "request":{"type":"action", "payload":payload}},
+                                     "request":{"type":request_type, "payload":payload}},
                                     separators=(",", ":"), allow_nan=False)
             except (TypeError, ValueError) as exc:
                 raise SubmissionSkipped("Execution payload could not be serialized; no action sent") from exc
@@ -155,7 +164,7 @@ class WebSocketExecution:
                 with self.condition:
                     if self.socket is not socket or self.generation != generation or self.stop_event.is_set():
                         raise SubmissionSkipped("Execution connection changed before send")
-                if self.final_gate:
+                if self.final_gate and request_type == "action":
                     gate_started = time.perf_counter_ns()
                     try:
                         self.final_gate(payload)
@@ -167,7 +176,8 @@ class WebSocketExecution:
                         raise SubmissionSkipped("Execution stopped before send")
                     if (time.perf_counter_ns()-started)/1e9 >= self.request_timeout:
                         raise SubmissionSkipped("Local execution deadline elapsed before send")
-                    pending = self.pending = _Pending(request_id)
+                    pending = self.pending = _Pending(request_id, response_type=request_type,
+                                                       info_type=payload.get("type", ""))
                 # From this point a partial send is possible. Never classify a
                 # send exception as a safe local skip, even if the socket says 0.
                 try:
@@ -176,7 +186,7 @@ class WebSocketExecution:
                     self._count("ws_send_errors")
                     self._drop(socket, type(exc).__name__)
                     raise UncertainActionError("Execution send failed; original action outcome is unknown") from exc
-            self._count("ws_action_requests")
+            self._count("ws_action_requests" if request_type == "action" else "ws_info_requests")
             remaining = max(0, self.request_timeout-(time.perf_counter_ns()-started)/1e9)
             if not pending.done.wait(remaining):
                 with self.condition:
@@ -189,9 +199,11 @@ class WebSocketExecution:
             if self.metrics:
                 self.metrics.observe("ws_action_roundtrip", (time.perf_counter_ns()-started)/1e6)
             return pending.result
-        except BaseException:
+        except BaseException as exc:
             if pending is not None and not pending.done.is_set():
                 self._drop(socket, "Execution caller interrupted")
+            if request_type == "info" and isinstance(exc, UncertainActionError):
+                raise TimeoutError("Read-only WebSocket info response unavailable") from exc
             raise
         finally:
             self.action_lock.release()
@@ -220,6 +232,17 @@ class WebSocketExecution:
             if not isinstance(response, dict):
                 raise ValueError("Invalid execution ACK response")
             kind, payload = response.get("type"), response.get("payload")
+            if pending.response_type == "info":
+                if (kind == "info" and isinstance(payload, dict)
+                        and payload.get("type") == pending.info_type
+                        and isinstance(payload.get("data"), (dict, list))):
+                    self._finish_locked(pending, result=payload["data"])
+                    self._count("ws_info_acks")
+                elif kind == "error" and isinstance(payload, str):
+                    self._finish_locked(pending, error=RuntimeError(safe_error(payload)))
+                else:
+                    raise ValueError("Invalid info ACK type or payload")
+                return False
             if kind == "error" and isinstance(payload, str):
                 # Preserve the SDK-style envelope; GuardedExchange keeps pending
                 # CLOIDs for errors whose non-execution cannot be established.

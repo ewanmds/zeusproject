@@ -108,6 +108,7 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
 
     @asynccontextmanager
     async def lifespan(app):
+        runtimes.start_recovery()
         # Scanner/catalog lifetime belongs to this process, not the old server.
         from zeus.server import _warm_public_catalogs, public_catalogs
         warming = asyncio.create_task(_warm_public_catalogs()) if settings.warm_catalogs else None
@@ -158,9 +159,11 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
 
     @app.get('/api/v2/config')
     def config():
+        from zeus.version import build_revision
         return {'walletconnect_project_id': settings.walletconnect_id, 'origin': settings.origin,
                 'ws_origin': settings.ws_origin.rstrip('/'),
-                'features': {'pause': False, 'session_targets': True}, 'version': 'workspace-1'}
+                'features': {'pause': False, 'session_targets': True}, 'version': 'workspace-1',
+                'build_revision': build_revision()}
 
     attempts = {}
     attempts_lock = threading.Lock()

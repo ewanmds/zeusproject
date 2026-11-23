@@ -106,6 +106,11 @@
 
 ## Known limits / next lots
 
+The subsequent [throughput repair](OUTCOME_THROUGHPUT.md) supersedes the list
+below for shared read quotas, metadata cache, WebSocket execution/account reads,
+streamed scanner books, normal partial-inventory exits, actual taker fees and
+read-only account auditing. These historical bullets describe the earlier lot.
+
 - Shared cross-process REST budget (960 units/min, priority reserve) is not yet
   implemented; classification and backoff are.
 - Metadata sharing/caching across `Info`, `Exchange` and WebSocket, and the
@@ -122,6 +127,7 @@
 
 ## Rollback
 
-- Source: `git reset --hard pre-outcome-hardening-20261123` (keeps journals).
+- Review the desired source revision and preserve local changes before a
+  rollback. Stop/verify sessions first; do not force-reset a working checkout.
 - Journals, requested stops and uncertain CLOIDs must not be deleted.
 - Do not restart an active bot or deploy during preparation.

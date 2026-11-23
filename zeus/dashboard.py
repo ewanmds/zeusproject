@@ -66,6 +66,10 @@ def outcome_projection(entries, intents=(), *, now=None):
         known = all(m.get("position_known") and number(m.get("position_usd")) for m in active)
         row["position_known"] = known
         row["position_usd"] = sum(m["position_usd"] for m in active) if known else None
+        row["unrealized_pnl"] = (sum(m["unrealized_pnl"] for m in active)
+                                 if all(number(m.get("unrealized_pnl")) for m in active) else None)
+        row["marked_net_pnl"] = (row["net_pnl"]+row["unrealized_pnl"]
+                                 if number(row.get("net_pnl")) and number(row.get("unrealized_pnl")) else None)
         if intent and not current.get("running"):
             row.update(phase="rotating" if logical_running else "blocked", needs_attention=not logical_running,
                        auto_rotation_reason=intent.get("reason") or "Waiting for the next market", quoting_enabled=False)

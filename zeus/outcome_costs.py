@@ -49,10 +49,9 @@ def net_edge_bps(bid, ask, rate):
 
 
 def _read_profile(account):
-    response = requests.post('https://api.hyperliquid.xyz/info',
-                             json={'type': 'userFees', 'user': account}, timeout=3)
-    response.raise_for_status()
-    return base_maker_rate(response.json())
+    from zeus.network import request_info
+    return base_maker_rate(request_info('https://api.hyperliquid.xyz',
+                          {'type': 'userFees', 'user': account}, timeout=3))
 
 
 def _refresh(account):
@@ -60,7 +59,7 @@ def _refresh(account):
         rate = _read_profile(account)
         with _lock:
             _profiles[account] = (time.monotonic(), rate)
-    except (requests.RequestException, ValueError, KeyError, TypeError):
+    except (requests.RequestException, RuntimeError, ValueError, KeyError, TypeError):
         pass  # Expired/unknown fees make estimates unavailable, never block Auto.
     finally:
         with _lock:

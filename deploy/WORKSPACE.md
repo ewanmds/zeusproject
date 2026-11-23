@@ -1,5 +1,11 @@
 # Replace the public EC2 dashboard with the wallet workspace
 
+For an **already installed wallet workspace**, after stopping and verifying its
+sessions, use `bash deploy/refresh-workspace.sh` following `git pull --ff-only
+origin main`. This preserves Caddy/database configuration and verifies the served
+source revision. The migration instructions below are for the original switch
+from the private dashboard. See [Outcome throughput repair](../docs/OUTCOME_THROUGHPUT.md).
+
 Target verified from this checkout's service/Caddy definitions:
 `ec2-user`, `/home/ec2-user/zeusproject`, existing `zeus-bot`, public hostname
 `3-113-242-142.sslip.io`. The remote machine has not been inspected or changed

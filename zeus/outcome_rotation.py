@@ -37,7 +37,8 @@ class OutcomeRotation:
             if group is None:
                 group = self.groups[group_id] = {"id": group_id, "config": dict(config),
                     "members": set(), "cancelled": False, "rotations": 0, "cooldown": {},
-                    "pnl_carry": 0.0, "volume_carry": 0.0, "accounted": set()}
+                    "pnl_carry": float(config.get("rotation_pnl_carry", 0)),
+                    "volume_carry": float(config.get("session_volume_carry", 0)), "accounted": set()}
             now = time.time()
             group.update(current=session["session_id"], started=now, state="observing",
                          samples=deque([(now, 0.0)], maxlen=2000), reason="", retry_at=0.0,

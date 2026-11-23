@@ -37,9 +37,16 @@ class OutcomeSupervisor:
         self._recovery = {}
         self._recovery_lock = threading.Lock()
         self._closed = threading.Event()
-        self._recovery_thread = threading.Thread(
-            target=self._recovery_loop, name="outcome-auto-recover", daemon=True)
-        self._recovery_thread.start()
+        self._recovery_thread = None
+
+    def start_recovery(self):
+        """Enable recovery only in a running backend, never on import/audit."""
+        with self._recovery_lock:
+            if self._closed.is_set() or self._recovery_thread is not None:
+                return
+            self._recovery_thread = threading.Thread(
+                target=self._recovery_loop, name="outcome-auto-recover", daemon=True)
+            self._recovery_thread.start()
 
     def records(self):
         return [(p, r) for p, r in self.manager._session_files() if r.get("account_kind") == "outcome"]
@@ -78,10 +85,10 @@ class OutcomeSupervisor:
 
     def close(self):
         self._closed.set()
+        self.rotation.close()  # close replacement admission before waiting on I/O
         thread = getattr(self, "_recovery_thread", None)
         if thread is not None and thread.is_alive():
             thread.join(timeout=2)
-        self.rotation.close()
 
     def _recovery_loop(self):
         log = logging.getLogger(__name__)
@@ -176,6 +183,8 @@ class OutcomeSupervisor:
                         "Outcome auto-recovery %s failed (%s): %s", sid, failures, detail)
 
     def start(self, request, *, rotation_group=None, seed=None):
+        if (PROJECT_ROOT/'.zeus-state'/'maintenance').exists() and not getattr(request, 'resume_exit', False):
+            raise ValueError('Mise à jour du workspace en cours ; nouvelles entrées suspendues')
         self.rotation.assert_admission(rotation_group)
         from zeus import outcomes
         if getattr(request, "exec_mode", "maker") != "maker":
@@ -239,6 +248,8 @@ class OutcomeSupervisor:
             public["auto_selection"] = {**selection, "selected_at": time.time()}
             # Quote at touch instead of improving a spread chosen in a draft.
             public["maker_spread_pct"] = None
+        if seed and "rotation_pnl_carry" in seed:
+            public["rotation_pnl_carry"] = finite(seed["rotation_pnl_carry"])
         if self.root is None:
             self.temporary = tempfile.TemporaryDirectory(prefix="zeus-offline-")
             self.root = Path(self.temporary.name)
@@ -275,7 +286,7 @@ class OutcomeSupervisor:
                       "stop_file": str(stop_file), "stats_file": str(stats_file), "pid": os.getpid()}
             # A resumed exit must be able to claim exactly the inventory and
             # client IDs the interrupted session already published.
-            for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids"):
+            for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids", "inventory_since", "exit_started_at"):
                 if seed and key in seed:
                     record[key] = seed[key]
             atomic_json(journal, record)
@@ -358,6 +369,8 @@ class OutcomeSupervisor:
         # the launch time is the reference with a short startup grace.
         last_ts = float(snap.get("ts", 0) or 0)
         reference = last_ts or float(record.get("started", 0) or 0)
+        if phase == "connecting" and lifecycle.get("startup_wait") and not lifecycle.get("exposure_started"):
+            reference = float(lifecycle.get("ts", reference))
         stale = bool(alive and reference and time.time() - reference > 10)
         entry = {**record, **snap, "session_id": session_id, "market": record.get("symbols", [""])[0],
                  "config": record.get("config", {}), "started": record.get("started", snap.get("started", 0)),
@@ -696,8 +709,16 @@ class OutcomeSupervisor:
             raise ValueError("Session journal market does not match; reconcile manually")
         if not old.get("exposure_started"):
             raise ValueError("Attribution incomplète: aucune exposition publiée par cette session; réconciliation manuelle requise")
-        seed = {key: old.get(key) for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids")
+        seed = {key: old.get(key) for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids", "inventory_since", "exit_started_at")
                 if key in old}
+        accounting = old.get("session_accounting") or {}
+        stats_path = record.get("stats_file")
+        if stats_path and Path(stats_path).exists():
+            stats = read_json(stats_path)
+            if stats.get("session_id") == record.get("session_id") and stats.get("market") == market:
+                accounting = stats
+        values["session_volume_carry"] = finite(config.get("session_volume_carry", 0))+finite(accounting.get("volume_usd", 0))
+        seed["rotation_pnl_carry"] = finite(config.get("rotation_pnl_carry", 0))+finite(accounting.get("net_pnl", 0))
         seed["resume_from"] = session_id
         seed["group_id"] = config.get("auto_group_id") or session_id
         seed["resume_rotation"] = (not exit_only) and bool(config.get("auto_rotate", True))

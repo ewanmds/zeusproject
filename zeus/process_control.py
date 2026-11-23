@@ -7,7 +7,7 @@ from pathlib import Path
 import threading
 import time
 
-from zeus.safety import atomic_json, acknowledged_status, finite, GuardedExchange
+from zeus.safety import atomic_json, acknowledged_status, finite, GuardedExchange, SubmissionSkipped
 
 
 class ProcessLock:
@@ -158,6 +158,12 @@ class OutcomeFunds:
                                 for cloid in reserved:
                                     data["reserved"].pop(cloid, None)
                             return result
+                        except SubmissionSkipped:
+                            # Proven local refusal: no bytes left. Otherwise a
+                            # skipped WS send would reserve buying power forever.
+                            for cloid in reserved:
+                                data["reserved"].pop(cloid, None)
+                            raise
                         finally:
                             data["last_submit_ms"] = max(int(data["last_submit_ms"]), int(time.time() * 1000))
                             atomic_json(coordinator.root / "funds.json", data)
