@@ -122,5 +122,12 @@ local versus uncertain fund reservations, reconnect fills, shared quotas/cache,
 read-only WS envelopes, startup/recovery ownership and deployment preflight.
 A public BTC info-RPC smoke check returned a valid two-sided book without signing.
 
+FastAPI's TestClient needs HTTPX, which is not installed by the plain `fastapi`
+dependency. The validated FastAPI/HTTPX versions are now declared explicitly.
+Without HTTPX, discovery reproduces exactly `136 tests / errors=1`: the 17
+workspace tests are replaced by one failed import. The updater now probes the
+HTTP test stack before building and preserves the complete Python test report
+under its backup directory. Failed checks never restart the running backend.
+
 The EC2 updater has been syntax-checked, not executed on the remote machine.
 Existing frontend build warnings about the wallet dependency bundle remain.

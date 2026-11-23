@@ -1,4 +1,6 @@
-fastapi
+# Validated FastAPI/TestClient pair, including deployment-test dependencies.
+fastapi==0.128.0
+httpx==0.28.1
 uvicorn[standard]
 pydantic
 # Validated execution stack; keep the SDK and signing library pinned.

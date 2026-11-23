@@ -53,9 +53,15 @@ fi
 node_supported || { echo 'Select Node 22.12+ and npm before updating.' >&2; exit 1; }
 tar -czf "$BACKUP/trading-state.tar.gz" --exclude='*/network/*' -C "$ROOT" .zeus-state -C "$(dirname "$WORKSPACE_STATE")" "$(basename "$WORKSPACE_STATE")"
 .venv-workspace/bin/python -m pip install -r requirements.txt
+.venv-workspace/bin/python deploy/check_workspace_dependencies.py
 npm ci --prefix frontend/workspace --no-audit --no-fund
 npm run build --prefix frontend/workspace
-ZEUS_MAINTENANCE_ROOT="$BACKUP/test-maintenance" .venv-workspace/bin/python -m unittest discover -s tests -p 'test_*.py'
+if ! ZEUS_MAINTENANCE_ROOT="$BACKUP/test-maintenance" .venv-workspace/bin/python -m unittest discover -s tests -p 'test_*.py' > "$BACKUP/python-tests.log" 2>&1; then
+  cat "$BACKUP/python-tests.log" >&2
+  echo "Tests failed before restart. Full report: $BACKUP/python-tests.log" >&2
+  exit 1
+fi
+cat "$BACKUP/python-tests.log"
 npm test --prefix frontend/workspace
 idle
 sudo -n systemctl restart zeus-workspace
