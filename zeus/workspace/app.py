@@ -8,7 +8,7 @@ from pathlib import Path
 import secrets
 import threading
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from cryptography.fernet import Fernet
 from eth_account import Account
@@ -36,13 +36,19 @@ class Settings:
     walletconnect_id: str = ''
     production: bool = False
     warm_catalogs: bool = True
+    # Public WebSocket origin when the browser page is served from another host
+    # (for example Vercel -> EC2 direct WSS). Empty means derive it from the
+    # request host, then fall back to REST polling.
+    ws_origin: str = ''
 
     @classmethod
     def environment(cls):
         return cls(Path(os.getenv('ZEUS_WORKSPACE_STATE', PROJECT_ROOT/'.zeus-workspace')),
                    os.getenv('ZEUS_WORKSPACE_ORIGIN', 'http://127.0.0.1:8081').rstrip('/'),
                    os.getenv('ZEUS_WORKSPACE_DATABASE_URL', ''), os.getenv('ZEUS_WORKSPACE_KEY', ''),
-                   os.getenv('ZEUS_WALLETCONNECT_PROJECT_ID', ''), os.getenv('ZEUS_WORKSPACE_PRODUCTION') == '1')
+                   os.getenv('ZEUS_WALLETCONNECT_PROJECT_ID', ''),
+                   production=os.getenv('ZEUS_WORKSPACE_PRODUCTION') == '1',
+                   ws_origin=os.getenv('ZEUS_WORKSPACE_WS_ORIGIN', '').rstrip('/'))
 
 
 class Input(BaseModel):
@@ -97,8 +103,30 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
     runtimes = Runtimes(settings.root, store, accounts, manager_factory)
     allowed_origins = {settings.origin}
     if not settings.production: allowed_origins.update({'http://127.0.0.1:5173', 'http://localhost:5173'})
+    if settings.ws_origin:
+        allowed_origins.add(settings.ws_origin.replace('wss://', 'https://').replace('ws://', 'http://'))
     secure = settings.origin.startswith('https://')
     cookie = 'zeus_workspace'
+    ws_tickets = {}
+    ws_tickets_lock = threading.Lock()
+    ws_ticket_ttl = 90
+
+    def websocket_origin(request):
+        """Public direct-WSS origin, or empty when only REST polling is safe."""
+        origin = settings.ws_origin
+        if not origin:
+            frontend = urlsplit(settings.origin).netloc.lower()
+            host = (request.headers.get('host') or '').lower()
+            forwarded = (request.headers.get('x-forwarded-host') or '').lower()
+            for candidate in (host, forwarded):
+                if candidate and candidate != frontend:
+                    origin = candidate
+                    break
+        if not origin:
+            return ''
+        if '://' not in origin:
+            origin = ('https://' if secure else 'http://') + origin
+        return origin.replace('https://', 'wss://').replace('http://', 'ws://').rstrip('/')
 
     @asynccontextmanager
     async def lifespan(app):
@@ -151,9 +179,24 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         app.add_exception_handler(error_type, exchange_unavailable)
 
     @app.get('/api/v2/config')
-    def config():
+    def config(request: Request):
         return {'walletconnect_project_id': settings.walletconnect_id, 'origin': settings.origin,
+                'ws_origin': websocket_origin(request),
                 'features': {'pause': False, 'session_targets': True}, 'version': 'workspace-1'}
+
+    @app.get('/api/v2/ws-ticket')
+    def ws_ticket(request: Request, who=Depends(identity)):
+        token = request.cookies.get(cookie)
+        if not token:
+            raise HTTPException(401, 'Connect your wallet to continue')
+        now = time.time()
+        ticket = secrets.token_urlsafe(32)
+        with ws_tickets_lock:
+            for key, (_, expires) in list(ws_tickets.items()):
+                if expires <= now:
+                    ws_tickets.pop(key, None)
+            ws_tickets[ticket] = (token, now + ws_ticket_ttl)
+        return {'ticket': ticket, 'expires_at': now + ws_ticket_ttl}
 
     attempts = {}
     attempts_lock = threading.Lock()
@@ -337,7 +380,13 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
     async def live(ws: WebSocket):
         if ws.headers.get('origin') not in allowed_origins:
             await ws.close(code=1008); return
+        ticket = ws.query_params.get('ticket', '')
         token = ws.cookies.get(cookie)
+        if ticket:
+            now = time.time()
+            with ws_tickets_lock:
+                entry = ws_tickets.pop(ticket, None)
+            token = entry[0] if entry and entry[1] >= now else None
         who = await asyncio.to_thread(store.identity, token)
         if not who: await ws.close(code=1008); return
         await ws.accept()

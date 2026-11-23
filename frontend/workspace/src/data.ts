@@ -1,4 +1,4 @@
-import type { Snapshot } from "./types";
+import type { Config, Snapshot } from "./types";
 export class APIError extends Error {
   constructor(
     public status: number,
@@ -71,6 +71,36 @@ export async function api<T>(
     clearTimeout(timeout);
   }
 }
+export function workspaceSocketUrl(
+  config: Pick<Config, "ws_origin"> | null | undefined,
+  pageOrigin: string,
+  ticket: string,
+): string | null {
+  const raw = config?.ws_origin?.trim();
+  if (!raw) return null;
+  let origin: URL;
+  try {
+    origin = new URL(raw);
+  } catch {
+    return null;
+  }
+  const page = new URL(pageOrigin);
+  // A same-origin Vercel socket cannot be upgraded; keep the REST fallback.
+  if (origin.host === page.host && !["localhost", "127.0.0.1", "::1"].includes(page.hostname))
+    return null;
+  const protocol =
+    origin.protocol === "https:"
+      ? "wss:"
+      : origin.protocol === "http:"
+        ? "ws:"
+        : origin.protocol;
+  if (protocol !== "wss:" && protocol !== "ws:") return null;
+  const url = new URL("/api/v2/ws", origin);
+  url.protocol = protocol;
+  url.searchParams.set("ticket", ticket);
+  return url.toString();
+}
+
 export class SnapshotStore {
   current: Snapshot | null = null;
   received = 0;

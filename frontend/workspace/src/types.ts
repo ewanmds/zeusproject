@@ -29,6 +29,8 @@ export interface Balance {
 }
 export interface Config {
   walletconnect_project_id: string;
+  origin?: string;
+  ws_origin?: string;
   features: { pause: boolean; session_targets: boolean };
 }
 export interface Draft {

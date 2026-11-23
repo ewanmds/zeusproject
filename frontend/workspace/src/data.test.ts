@@ -6,6 +6,7 @@ import {
   api,
   setCSRF,
   invalidateIdentity,
+  workspaceSocketUrl,
 } from "./data";
 import type { Snapshot } from "./types";
 const frame = (
@@ -24,6 +25,38 @@ const frame = (
     metrics: {},
   }) as unknown as Snapshot;
 afterEach(() => vi.unstubAllGlobals());
+describe("cross-origin workspace socket", () => {
+  it("uses the configured public WSS origin and ticket", () => {
+    expect(
+      workspaceSocketUrl(
+        { ws_origin: "https://3-113-242-142.sslip.io" },
+        "https://zeusproject.vercel.app",
+        "ticket-1",
+      ),
+    ).toBe("wss://3-113-242-142.sslip.io/api/v2/ws?ticket=ticket-1");
+  });
+  it("never retries a same-origin Vercel socket", () => {
+    expect(
+      workspaceSocketUrl(
+        { ws_origin: "https://zeusproject.vercel.app" },
+        "https://zeusproject.vercel.app",
+        "ticket-1",
+      ),
+    ).toBeNull();
+    expect(
+      workspaceSocketUrl({}, "https://zeusproject.vercel.app", "ticket-1"),
+    ).toBeNull();
+  });
+  it("keeps the local development proxy socket", () => {
+    expect(
+      workspaceSocketUrl(
+        { ws_origin: "http://127.0.0.1:5173" },
+        "http://127.0.0.1:5173",
+        "ticket-1",
+      ),
+    ).toBe("ws://127.0.0.1:5173/api/v2/ws?ticket=ticket-1");
+  });
+});
 describe("tenant snapshots", () => {
   it("rejects other wallets and out-of-order frames", () => {
     const s = new SnapshotStore("a");

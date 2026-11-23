@@ -5,6 +5,7 @@ import {
   setCSRF,
   SnapshotStore,
   invalidateIdentity,
+  workspaceSocketUrl,
 } from "./data";
 import type {
   Identity,
@@ -136,7 +137,8 @@ export function useWorkspace() {
       store = new SnapshotStore(owner);
     let alive = true,
       socket: WebSocket | null = null,
-      reconnect = 0;
+      reconnect = 0,
+      reconnectAttempt = 0;
     const accept = (value: Snapshot) => {
       if (alive && generation === epoch.current && store.accept(value)) {
         setSnapshot(value);
@@ -153,8 +155,9 @@ export function useWorkspace() {
           clear();
           return;
         }
-        if (!store.received || Date.now() - store.received > 6000)
-          setError("Flux retardé. Les dernières données sont conservées.");
+        // Keep the last usable snapshot; the header shows the connection
+        // state. Never replace real data with a global delayed banner.
+        setConnection("polling");
       }
     };
     const funds = async () => {
@@ -165,28 +168,54 @@ export function useWorkspace() {
         /* Optional balance must not freeze live stats. */
       }
     };
-    const open = () => {
+    const scheduleReconnect = () => {
       if (!alive) return;
-      const url = new URL("/api/v2/ws", location.href);
-      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      socket = new WebSocket(url);
-      socket.onopen = () => {
-        if (alive) setConnection("live");
+      const delay = Math.min(10000, 1000 * 2 ** Math.min(reconnectAttempt, 3));
+      reconnectAttempt += 1;
+      reconnect = window.setTimeout(() => void open(), delay);
+    };
+    const open = async () => {
+      if (!alive) return;
+      if (!config?.ws_origin?.trim()) {
+        // Same-origin Vercel sockets cannot be upgraded. REST polling is the
+        // guaranteed path; no failed WebSocket loop and no false banner.
+        setConnection("polling");
+        return;
+      }
+      let ticket = "";
+      try {
+        ticket = (await api<{ ticket: string }>("/ws-ticket")).ticket;
+      } catch {
+        setConnection("polling");
+        scheduleReconnect();
+        return;
+      }
+      if (!alive || generation !== epoch.current) return;
+      const url = workspaceSocketUrl(config, location.origin, ticket);
+      if (!url) {
+        setConnection("polling");
+        return;
+      }
+      const ws = new WebSocket(url);
+      socket = ws;
+      ws.onopen = () => {
+        if (!alive || socket !== ws) return;
+        reconnectAttempt = 0;
+        setConnection("live");
       };
-      socket.onmessage = (e) => {
+      ws.onmessage = (e) => {
         try {
           const d = JSON.parse(e.data);
           if (d.type === "workspace") accept(d);
         } catch {}
       };
-      socket.onclose = () => {
-        if (alive) {
-          setConnection("polling");
-          void poll();
-          reconnect = window.setTimeout(open, 2500);
-        }
+      ws.onclose = () => {
+        if (!alive || socket !== ws) return;
+        setConnection("polling");
+        void poll();
+        scheduleReconnect();
       };
-      socket.onerror = () => socket?.close();
+      ws.onerror = () => ws.close();
     };
     refreshRef.current = () => {
       void poll();
@@ -194,7 +223,7 @@ export function useWorkspace() {
     };
     void poll();
     void funds();
-    open();
+    void open();
     const timer = window.setInterval(() => {
       if (!document.hidden && Date.now() - store.received > 2000) void poll();
     }, 3000);
@@ -216,7 +245,7 @@ export function useWorkspace() {
       refreshRef.current = () => {};
       acceptRef.current = () => {};
     };
-  }, [identity?.wallet, clear]);
+  }, [identity?.wallet, config?.ws_origin, clear]);
   const logout = async () => {
     try {
       await api("/auth/logout", {});

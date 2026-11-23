@@ -13,6 +13,7 @@ from unittest.mock import patch
 from eth_account import Account
 from eth_account.messages import encode_defunct, encode_typed_data
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from zeus.workspace.app import Settings, create_app
 from zeus.workspace.accounts import HyperliquidAccounts
@@ -108,6 +109,51 @@ class WorkspaceTests(unittest.TestCase):
             maker_stop.assert_not_called()
             self.assertEqual(self.client.post(path, json={}).status_code, 200)
             maker_stop.assert_called_once_with(sid)
+
+    def test_ws_ticket_serves_one_snapshot_and_is_single_use(self):
+        self.login(self.client, self.a)
+        response = self.client.get('/api/v2/ws-ticket')
+        self.assertEqual(response.status_code, 200, response.text)
+        ticket = response.json()['ticket']
+        with self.client.websocket_connect('/api/v2/ws?ticket='+ticket,
+                                           headers={'origin': self.origin}) as ws:
+            frame = ws.receive_json()
+            self.assertEqual(frame['type'], 'workspace')
+            self.assertEqual(frame['owner'], self.a.address.lower())
+        with self.assertRaises(WebSocketDisconnect):
+            with self.client.websocket_connect('/api/v2/ws?ticket='+ticket,
+                                               headers={'origin': self.origin}) as ws:
+                ws.receive_json()
+
+    def test_ws_ticket_requires_login(self):
+        self.assertEqual(self.client.get('/api/v2/ws-ticket').status_code, 401)
+
+    def test_config_exposes_configured_ws_origin(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = create_app(
+                Settings(Path(folder), origin='https://zeusproject.vercel.app',
+                         ws_origin='https://3-113-242-142.sslip.io', warm_catalogs=False),
+                accounts_factory=FakeAccounts, manager_factory=FakeManager)
+            client = TestClient(app, base_url='https://zeusproject.vercel.app')
+            try:
+                self.assertEqual(client.get('/api/v2/config').json()['ws_origin'],
+                                 'wss://3-113-242-142.sslip.io')
+            finally:
+                client.close()
+                app.state.store.engine.dispose()
+
+    def test_config_derives_ws_origin_from_the_api_host(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = create_app(
+                Settings(Path(folder), origin='https://zeusproject.vercel.app', warm_catalogs=False),
+                accounts_factory=FakeAccounts, manager_factory=FakeManager)
+            client = TestClient(app, base_url='https://3-113-242-142.sslip.io')
+            try:
+                self.assertEqual(client.get('/api/v2/config').json()['ws_origin'],
+                                 'wss://3-113-242-142.sslip.io')
+            finally:
+                client.close()
+                app.state.store.engine.dispose()
 
     def test_observed_list_marks_occupied_markets_without_launching(self):
         self.login(self.client, self.a)
