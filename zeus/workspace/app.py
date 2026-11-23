@@ -307,10 +307,12 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         from zeus.outcome_flow import scanner
         result = scanner.observations(side, order_usd, spread_bps)
         state = runtimes.snapshot(who['wallet'])
-        busy = {s['market'] for s in state['sessions'] if s['running'] or not s['cleanup_confirmed']}
+        busy = {s['market']: ('Déjà en session' if s['running']
+                              else 'Arrêt non confirmé sur ce marché')
+                for s in state['sessions'] if s['running'] or not s['cleanup_confirmed']}
         for row in result['observed_markets']:
             if row['market'] in busy:
-                row.update(auto_eligible=False, eligibility_reason='Déjà en session')
+                row.update(auto_eligible=False, eligibility_reason=busy[row['market']])
         return result
 
     @app.post('/api/v2/sessions/preview')

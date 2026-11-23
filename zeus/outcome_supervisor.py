@@ -287,7 +287,7 @@ class OutcomeSupervisor:
                 if record.get("session_id") in replaced:
                     continue  # the explicit resume replaces this interrupted session
                 if market in record.get("symbols", []) and not record.get("cleanup_confirmed"):
-                    raise RuntimeError("Previous Outcome session is not reconciled on this market")
+                    raise RuntimeError("Arrêt non confirmé sur ce marché : vérifiez l'ancienne session dans Terminées avant de relancer")
             session_id = uuid.uuid4().hex
             if rotation_group or public.get("selection_mode") == "auto":
                 public["auto_group_id"] = rotation_group or public.get("auto_group_id") or session_id

@@ -46,9 +46,7 @@ export function SessionsView({
   const compact = preference.owner === owner && preference.compact;
   // Aggregate known values even while one session is still starting. A single
   // incomplete row must not blank the whole account summary.
-  const activeRows =
-    w.snapshot?.sessions.filter((s) => s.running || !s.cleanup_confirmed) ||
-    [];
+  const activeRows = w.snapshot?.sessions.filter((s) => s.running) || [];
   const known = (field: "volume_usd" | "net_pnl" | "fees" | "fills") => {
     const values = activeRows
       .map((s) => s[field])

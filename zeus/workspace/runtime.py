@@ -150,7 +150,10 @@ class Runtimes:
                 row['cost_per_1m'] = -row['net_pnl']*1e6/row['volume_usd'] if complete and row['volume_usd'] else None
                 sessions.append(visible_session(row, 'grid'))
             sessions.sort(key=lambda b: b['started'], reverse=True)
-            active_rows = [s for s in sessions if s['running'] or not s['cleanup_confirmed']]
+            # The account summary and the "En cours" count describe live
+            # execution only. Unconfirmed stopped rows stay available in
+            # "Terminées", but they are not current activity.
+            active_rows = [s for s in sessions if s['running']]
             metrics = self.metrics(active_rows)
             self.revisions[owner] = self.revisions.get(owner, 0)+1
             result = {'type': 'workspace', 'owner': owner, 'source_id': self.source,

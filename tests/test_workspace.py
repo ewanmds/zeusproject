@@ -168,6 +168,34 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(row['auto_eligible'])
         self.assertEqual(row['eligibility_reason'], 'Déjà en session')
 
+    def test_observed_list_distinguishes_a_stopped_unconfirmed_session(self):
+        self.login(self.client, self.a)
+        with patch('zeus.outcome_flow.scanner.observations', return_value={
+            'observed_markets': [dict(market='#101', auto_eligible=True, eligibility_reason='Admissible')]
+        }), patch.object(self.app.state.runtimes, 'snapshot', return_value={
+            'sessions': [dict(market='#101', running=False, cleanup_confirmed=False)]
+        }):
+            response = self.client.get('/api/v2/scanner/observed?side=no&order_usd=110&spread_bps=10')
+        self.assertEqual(response.status_code, 200, response.text)
+        row = response.json()['observed_markets'][0]
+        self.assertFalse(row['auto_eligible'])
+        self.assertEqual(row['eligibility_reason'], 'Arrêt non confirmé sur ce marché')
+
+    def test_workspace_metrics_count_running_sessions_only(self):
+        self.login(self.client, self.a)
+        self.authorize(self.client, self.a)
+        self.client.post('/api/v2/sessions', json={'strategy': 'outcome', 'order_usd': 25, 'position_cap': 200},
+                         headers={'Idempotency-Key': 'metrics-running-only-1234'})
+        manager = self.app.state.runtimes.manager(self.a.address.lower())
+        manager.rows[0].update(volume_usd=10, net_pnl=1, fees=0, fills=2)
+        manager.rows.append(dict(manager.rows[0], session_id='stopped-unconfirmed', running=False,
+                                 cleanup_confirmed=False, volume_usd=99, net_pnl=99, fills=9))
+        self.app.state.runtimes.invalidate(self.a.address.lower())
+        metrics = self.client.get('/api/v2/workspace').json()['metrics']
+        self.assertEqual(metrics['active'], 1)
+        self.assertEqual(metrics['volume_usd'], 10)
+        self.assertEqual(metrics['fills'], 2)
+
     def test_login_signed_message_cookie_and_logout(self):
         me, _ = self.login(self.client, self.a)
         self.assertEqual(me['wallet'], self.a.address.lower())
