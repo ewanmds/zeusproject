@@ -86,6 +86,31 @@ def main():
                         call.continue_()
                     page.route('**/*',route)
                     page.goto(origin);page.evaluate('(value)=>window.__walletAddress=value',a.address)
+                    expect(page.get_by_role('heading',name='Le market making, sans surveillance.')).to_be_visible()
+                    capture(page, f'landing-{width}.png')
+                    overflow=page.evaluate('''()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,
+                        elements:[...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>innerWidth+1||el.scrollWidth>el.clientWidth+2)
+                        .slice(0,20).map(el=>({tag:el.tagName,cls:el.className,right:el.getBoundingClientRect().right,scroll:el.scrollWidth,client:el.clientWidth}))})''')
+                    assert overflow['scroll']<=overflow['width'],overflow
+                    # Public landing and skills page at common widths.
+                    if width==1440:
+                        for check_width,check_height in ((360,800),(768,1024),(1280,720),(1920,1080),(640,360)):
+                            page.set_viewport_size({'width':check_width,'height':check_height})
+                            try:page.wait_for_function('document.documentElement.scrollWidth<=innerWidth',timeout=2500)
+                            except Exception:pass
+                            overflow=page.evaluate("""()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,elements:[...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>innerWidth+1 && getComputedStyle(el).position!=='fixed').slice(0,12).map(el=>({tag:el.tagName,cls:el.className,right:el.getBoundingClientRect().right,width:el.getBoundingClientRect().width}))})""")
+                            if overflow['scroll']>check_width:page.screenshot(path=str(folder/f'overflow-{check_width}.png'),full_page=True)
+                            assert overflow['scroll']<=check_width,overflow
+                        page.set_viewport_size({'width':width,'height':1000})
+                    page.get_by_role('button',name='Voir les skills frontend').click()
+                    expect(page.get_by_role('heading',name='Skills frontend.')).to_be_visible()
+                    expect(page.get_by_text('Design system',exact=True).first).to_be_visible()
+                    capture(page, f'skills-{width}.png')
+                    page.get_by_role('button',name="Retour à l'accueil").click()
+                    expect(page.get_by_role('heading',name='Le market making, sans surveillance.')).to_be_visible()
+                    page.get_by_role('button',name='Connecter',exact=True).click()
+                    page.get_by_role('button',name='Test Wallet').click()
+                    expect(page.get_by_role('dialog')).not_to_be_visible()
                     expect(page.get_by_role('heading',name='Lancer, simplement.')).to_be_visible()
                     side=page.get_by_role('group',name='Côté Outcome',exact=True)
                     expect(side.get_by_role('button',name='No',exact=True)).to_have_attribute('aria-pressed','true')
@@ -107,30 +132,14 @@ def main():
                     if width==390:
                         assert side.get_by_role('button',name='No',exact=True).bounding_box()['height']>=44
                     page.evaluate('document.activeElement.blur(); window.scrollTo(0,0)')
-                    capture(page, f'run-disconnected-{width}.png')
-                    overflow=page.evaluate('''()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,
-                        elements:[...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>innerWidth+1||el.scrollWidth>el.clientWidth+2)
-                        .slice(0,20).map(el=>({tag:el.tagName,cls:el.className,right:el.getBoundingClientRect().right,scroll:el.scrollWidth,client:el.clientWidth}))})''')
-                    assert overflow['scroll']<=overflow['width'],overflow
-                    # Responsive layout and safe global search without a wallet.
-                    if width==1440:
-                        for check_width,check_height in ((360,800),(768,1024),(1280,720),(1920,1080),(640,360)):
-                            page.set_viewport_size({'width':check_width,'height':check_height})
-                            try:page.wait_for_function('document.documentElement.scrollWidth<=innerWidth',timeout=2500)
-                            except Exception:pass
-                            overflow=page.evaluate("""()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,elements:[...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>innerWidth+1 && getComputedStyle(el).position!=='fixed').slice(0,12).map(el=>({tag:el.tagName,cls:el.className,right:el.getBoundingClientRect().right,width:el.getBoundingClientRect().width}))})""")
-                            if overflow['scroll']>check_width:page.screenshot(path=str(folder/f'overflow-{check_width}.png'),full_page=True)
-                            assert overflow['scroll']<=check_width,overflow
-                        page.set_viewport_size({'width':width,'height':1000})
+                    capture(page, f'run-connected-{width}.png')
+                    # Safe global search after the wallet is connected.
                     page.get_by_role('button',name='Ouvrir la recherche',exact=True).click()
                     query=page.get_by_role('combobox',name='Recherche globale',exact=True)
                     query.fill('zzzz-no-result');expect(page.get_by_text('Aucun résultat.',exact=True)).to_be_visible();record(page)
                     query.fill('Sessions');page.keyboard.press('Enter')
                     expect(page.get_by_role('heading',name='Vos sessions.')).to_be_visible();record(page)
                     page.get_by_role('link',name='Lancer',exact=True).click()
-                    page.get_by_role('button',name='Connecter',exact=True).click()
-                    page.get_by_role('button',name='Test Wallet').click()
-                    expect(page.get_by_role('dialog')).not_to_be_visible()
                     # Real SIWE cookie, CSRF and encrypted agent preparation/approval.
                     page.get_by_role('button',name='Vérifier et lancer',exact=True).count()
                     page.get_by_role('button',name='Autoriser le trading',exact=True).click()

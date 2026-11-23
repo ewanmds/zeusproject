@@ -1,5 +1,7 @@
 import { strategies, nav, initial } from "./config";
 import { RunView } from "./views/RunView";
+import { LandingView } from "./views/LandingView";
+import { SkillsView } from "./views/SkillsView";
 
 import { lazy, Suspense, useEffect, useState, useRef } from "react";
 import { api, usd, short, clock } from "./data";
@@ -10,7 +12,7 @@ import { FeedbackButton } from "./components/FeedbackButton";
 import type { Draft, View, Session, Agent, Operation, Snapshot } from "./types";
 import { resolveStopSnapshot } from "./presentation/stop";
 import { sessionVisible } from "./presentation/session";
-import { NavDock } from "./components/layout";
+import { NavDock, PublicNav } from "./components/layout";
 import { Kbd } from "./components/fields";
 import { useMobile } from "./components/Dialog";
 import { InlineAlert, Notification, Skeleton } from "./components/feedback";
@@ -43,9 +45,11 @@ const PerformanceView = lazy(() =>
 );
 export default function App() {
   const w = useWorkspace();
-  const [view, setView] = useState<View>(
-    (location.hash.slice(1) as View) || "run",
-  );
+  const [view, setView] = useState<View>(() => {
+    const target = location.hash.slice(1);
+    if (target === "skills") return "skills";
+    return nav.some((n) => n.id === target) ? (target as View) : "run";
+  });
   const [walletModal, setWalletModal] = useState(false),
     [walletBusy, setWalletBusy] = useState("");
   const [walletError, setWalletError] = useState(""),
@@ -87,6 +91,10 @@ export default function App() {
   useEffect(() => {
     const change = () => {
       const target = location.hash.slice(1);
+      if (target === "skills") {
+        setView("skills");
+        return;
+      }
       setView(nav.some((n) => n.id === target) ? (target as View) : "run");
     };
     window.addEventListener("hashchange", change);
@@ -448,48 +456,52 @@ export default function App() {
             Zeus<span className="brand-sub">TRADING WORKSPACE</span>
           </span>
         </a>
-        <NavDock view={view} active={metrics?.active || 0} />
+        {owner ? (
+          <NavDock view={view} active={metrics?.active || 0} />
+        ) : (
+          <PublicNav view={view} />
+        )}
         <div className="header-actions">
-          <button
-            className={"live " + (owner && !stale ? "is-live" : "")}
-            onClick={reconnect}
-            title="Actualiser les données"
-          >
-            <i />
-            {owner
-              ? stale
-                ? "Flux retardé"
-                : w.connection === "live"
-                  ? "Live"
-                  : "Actualisation"
-              : "Mainnet"}
-          </button>
-          <button
-            className="icon-btn search-launch"
-            aria-label="Ouvrir la recherche"
-            onClick={() => setSearchOpen(true)}
-          >
-            <Icon name="search" size={19} />
-            <Kbd>/</Kbd>
-          </button>
           {owner ? (
-            <Suspense
-              fallback={
-                <button
-                  className="button wallet-connected"
-                  onClick={() => navigate("account")}
-                >
-                  {short(owner)}
-                </button>
-              }
-            >
-              <ProfileDropdown
-                address={owner}
-                onAccount={() => navigate("account")}
-                onLogout={w.logout}
-                notify={setNotice}
-              />
-            </Suspense>
+            <>
+              <button
+                className={"live " + (!stale ? "is-live" : "")}
+                onClick={reconnect}
+                title="Actualiser les données"
+              >
+                <i />
+                {stale
+                  ? "Flux retardé"
+                  : w.connection === "live"
+                    ? "Live"
+                    : "Actualisation"}
+              </button>
+              <button
+                className="icon-btn search-launch"
+                aria-label="Ouvrir la recherche"
+                onClick={() => setSearchOpen(true)}
+              >
+                <Icon name="search" size={19} />
+                <Kbd>/</Kbd>
+              </button>
+              <Suspense
+                fallback={
+                  <button
+                    className="button wallet-connected"
+                    onClick={() => navigate("account")}
+                  >
+                    {short(owner)}
+                  </button>
+                }
+              >
+                <ProfileDropdown
+                  address={owner}
+                  onAccount={() => navigate("account")}
+                  onLogout={w.logout}
+                  notify={setNotice}
+                />
+              </Suspense>
+            </>
           ) : (
             <button
               className="button primary compact"
@@ -507,21 +519,38 @@ export default function App() {
             {w.error}
           </InlineAlert>
         )}
-        {view === "run" && <RunView {...viewProps} />}
-        {view === "sessions" && (
-          <Suspense fallback={<Skeleton />}>
-            <SessionsView {...viewProps} />
-          </Suspense>
-        )}
-        {view === "performance" && (
-          <Suspense fallback={<Skeleton />}>
-            <PerformanceView {...viewProps} />
-          </Suspense>
-        )}
-        {view === "account" && (
-          <Suspense fallback={<Skeleton />}>
-            <AccountView {...viewProps} />
-          </Suspense>
+        {view === "skills" ? (
+          <SkillsView
+            connected={!!owner}
+            onConnect={() => setWalletModal(true)}
+            onHome={() => navigate("run")}
+            onHelp={() => setShowHelp(true)}
+          />
+        ) : !owner ? (
+          <LandingView
+            onConnect={() => setWalletModal(true)}
+            onSkills={() => navigate("skills")}
+            onHelp={() => setShowHelp(true)}
+          />
+        ) : (
+          <>
+            {view === "run" && <RunView {...viewProps} />}
+            {view === "sessions" && (
+              <Suspense fallback={<Skeleton />}>
+                <SessionsView {...viewProps} />
+              </Suspense>
+            )}
+            {view === "performance" && (
+              <Suspense fallback={<Skeleton />}>
+                <PerformanceView {...viewProps} />
+              </Suspense>
+            )}
+            {view === "account" && (
+              <Suspense fallback={<Skeleton />}>
+                <AccountView {...viewProps} />
+              </Suspense>
+            )}
+          </>
         )}
         <footer className="page-footer">
           <span>
