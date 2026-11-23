@@ -19,6 +19,20 @@ import requests
 # TLS handshake per book would dominate the auto-selection latency.
 _local = threading.local()
 
+# A modest cadence relaxation; the one-minute rate window and all book guards
+# stay unchanged. Share the age limit with cached/final candidate validation.
+FLOW_LIMITS = {
+    'min_event_seconds': 4,
+    'min_span_sec': 20,
+    'max_trade_age_sec': 45,
+    'min_active_bins_1m': 2,
+    'min_events_per_side_1m': 1,
+    'max_median_gap_sec': 45,
+}
+NO_ELIGIBLE_FLOW_REASON = (
+    'Flux trop irrégulier pour Auto : dernier trade ≤45 s et activité dans les deux sens sur 60 s.'
+)
+
 
 def _http():
     session = getattr(_local, "session", None)
@@ -62,12 +76,17 @@ def flow_metrics(trades, now):
     balanced = 2*buy*sell/(buy+sell) if buy+sell else 0
     coverage = min(1, len(bins)/6)
     score = balanced * coverage * math.exp(-age/20)
-    eligible = (len(events) >= 6 and span >= 30 and age <= 20 and len(bins) >= 3
-                and min(directions.values()) >= 2 and cadence <= 30)
+    eligible = (len(events) >= FLOW_LIMITS['min_event_seconds']
+                and span >= FLOW_LIMITS['min_span_sec']
+                and age <= FLOW_LIMITS['max_trade_age_sec']
+                and len(bins) >= FLOW_LIMITS['min_active_bins_1m']
+                and min(directions.values()) >= FLOW_LIMITS['min_events_per_side_1m']
+                and cadence <= FLOW_LIMITS['max_median_gap_sec'])
     return {"score": score, "eligible": eligible, "trades_5m": len(values),
             "events_5m": len(events), "active_bins_1m": len(bins), "span_sec": span,
             "buy_usd_1m": buy, "sell_usd_1m": sell, "volume_usd_1m": buy+sell,
             "balanced_usd_1m": balanced, "last_trade_age_sec": age,
+            "buy_events_1m": directions['B'], "sell_events_1m": directions['A'],
             "median_gap_sec": cadence,
             "buy_tokens_1m": sum(q for _, _, q, s in recent if s == "B"),
             "sell_tokens_1m": sum(q for _, _, q, s in recent if s == "A")}
@@ -295,7 +314,7 @@ class OutcomeFlowScanner:
             entry = self.snapshot_cache.get(key)
             cached_fresh = entry and all(
                 time.time()-r['book_updated_at'] <= 5 and
-                r['last_trade_age_sec']+time.time()-entry[1]['updated_at'] <= 20
+                r['last_trade_age_sec']+time.time()-entry[1]['updated_at'] <= FLOW_LIMITS['max_trade_age_sec']
                 for r in entry[1].get('candidates', []))
             if reusable and entry and cached_fresh and time.monotonic()-entry[0] < .4:
                 return copy.deepcopy(entry[1])
@@ -321,7 +340,8 @@ class OutcomeFlowScanner:
                       "catalog_stale": now-self.catalog_at >= 120,
                       "observed_sec": max(0, now-self.connected_at) if self.connected else 0,
                       "markets_observed": len(self.subscribed)//2, "markets_total": len(self.rows), "updated_at": now,
-                      "error": self.error, "candidates": [], "side": side}
+                      "error": self.error, "candidates": [], "side": side,
+                      "flow_thresholds": dict(FLOW_LIMITS)}
             suffix = "0" if side == "yes" else "1"
             history = {}
             for coin, trades in self.history.items():
@@ -349,7 +369,7 @@ class OutcomeFlowScanner:
             elif detail:
                 status["reason"] = "Aucun candidat: " + detail
             else:
-                status["reason"] = "Aucun flux deux sens dans les 5 dernières minutes"
+                status["reason"] = NO_ELIGIBLE_FLOW_REASON
             status["order_usd"] = order_usd
             status["max_spread_bps"] = max_spread_bps
             status["min_depth_usd"] = order_usd
@@ -434,7 +454,8 @@ class OutcomeFlowScanner:
             if not self.connected or self.generation != generation or time.time()-self.catalog_at >= 120:
                 return {**status, "connected": False}
             candidates = [r for r in candidates if int(r["market"][1:])//10 in self.rows]
-        candidates = [r for r in candidates if r["last_trade_age_sec"]+time.time()-now <= 20]
+        candidates = [r for r in candidates if
+                      r["last_trade_age_sec"]+time.time()-now <= FLOW_LIMITS['max_trade_age_sec']]
         completed = time.time()
         for row in candidates:
             row['last_trade_age_sec'] += completed-now
@@ -454,7 +475,7 @@ class OutcomeFlowScanner:
             if not parts and skipped_events:
                 parts.append("%d marché(s) sans flux récent" % skipped_events)
             reason = ("Aucun candidat: " + "; ".join(parts)) if parts else \
-                     "Aucun flux deux sens dans les 5 dernières minutes"
+                     NO_ELIGIBLE_FLOW_REASON
         return {**status, "ready": bool(candidates), "warming_up": False, "candidates": candidates,
                 "reason": reason,
                 "fees_not_covered": fees_not_covered, "cost_unavailable": cost_unavailable,
