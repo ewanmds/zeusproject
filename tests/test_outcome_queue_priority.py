@@ -1,5 +1,6 @@
 """Keep resting OIDs through book flicker and signing waits; fake exchange only."""
 from contextlib import contextmanager
+from itertools import count
 import tempfile
 import threading
 import time
@@ -37,7 +38,10 @@ class QueuePriorityTests(unittest.TestCase):
             st.position, st.available_position = 100, 0
             st.ask_oid, st.quoted_ask, st.ask_quantity, st.ask_order_ts = 123, .69879, 100, now-48
         bot.states = {'#101': st}
-        return bot, st, raw, now
+        # Start the simulated clock at the accepted book publication. On a
+        # high-resolution clock update_bbo() occurs after the earlier `now`;
+        # rewinding there would correctly reject the next mocked book as old.
+        return bot, st, raw, st.last_book_ts
 
     def test_unchanged_bid_and_ask_keep_original_oid_and_age_with_low_free_cash(self):
         for buy in (True, False):
@@ -67,7 +71,10 @@ class QueuePriorityTests(unittest.TestCase):
         raw.bulk_cancel.assert_not_called()
 
     def test_sustained_price_change_reprices_once_after_confirmation(self):
-        bot, st, raw, now = self.fixture()
+        # Exercise Linux-like submillisecond clock steps on every platform.
+        clock = count(time.time(), .0001)
+        with patch('zeus.bots.worldcup.time.time', side_effect=clock.__next__):
+            bot, st, raw, now = self.fixture()
         with patch('zeus.bots.worldcup.time.time', return_value=now):
             st.update_bbo(.69868, .69878)
             bot.place_bilateral(st)
