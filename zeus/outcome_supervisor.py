@@ -3,6 +3,7 @@ import logging
 import math
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -12,7 +13,7 @@ import uuid
 
 from zeus import PROJECT_ROOT
 from zeus.dashboard import localize_state
-from zeus.process_control import ProcessLock, account_key
+from zeus.process_control import ProcessLock, account_key, pid_alive
 from zeus.safety import atomic_json, finite, safe_error, read_json
 
 
@@ -622,6 +623,43 @@ class OutcomeSupervisor:
                              name='outcome-manual-close', daemon=True).start()
         return list(targets)
 
+    @staticmethod
+    def _worker_pid(record):
+        """A published worker PID, never the workspace process or a foreign one."""
+        if os.name == 'nt':
+            return None  # No safe command-line attestation; use tracked Popen only.
+        pid = record.get('pid')
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1 or pid == os.getpid():
+            return None
+        if not pid_alive(pid):
+            return None
+        try:
+            raw = Path('/proc/%d/cmdline' % pid).read_bytes().replace(b'\0', b' ').decode('utf-8', 'ignore')
+        except OSError:
+            return None
+        sid = str(record.get('session_id') or '')
+        if 'zeus.bots.outcome_worker' not in raw or (sid and sid not in raw):
+            return None
+        return pid
+
+    @staticmethod
+    def _terminate_worker(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            return
+        deadline = time.monotonic()+2
+        while time.monotonic() < deadline and pid_alive(pid):
+            time.sleep(.1)
+        if pid_alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                return
+            deadline = time.monotonic()+2
+            while time.monotonic() < deadline and pid_alive(pid):
+                time.sleep(.1)
+
     def _finish_manual_stop(self, sid, info):
         proc = info.get('proc')
         try:
@@ -632,23 +670,39 @@ class OutcomeSupervisor:
                     return
                 successor = latest.get('resumed_session_id')
                 if not successor and proc is not None and proc.poll() is None:
-                    # Give a healthy worker time to observe the durable marker
-                    # and finish its own cleanup. A worker that ignores the
-                    # explicit manual Stop is a phantom: terminate it, then let
-                    # the exit-only path reconcile the account independently.
-                    deadline = time.monotonic()+15
+                    # A healthy monitor sees the marker in 250 ms. Anything
+                    # slower is a stuck worker: stop it now and let the
+                    # exit-only worker reconcile the account.
+                    deadline = time.monotonic()+2
                     while time.monotonic() < deadline and not self._closed.wait(.2):
                         if proc.poll() is not None:
                             break
+                    match = next(((path, row) for path, row in self.records()
+                                  if row['session_id'] == sid), None)
+                    latest = read_json(match[0]) if match else latest
+                    if latest.get('cleanup_confirmed'):
+                        return
+                    successor = latest.get('resumed_session_id')
                     if proc.poll() is None:
                         try:
                             proc.terminate()
                             wait = getattr(proc, 'wait', None)
                             if callable(wait):
-                                wait(timeout=5)
+                                try:
+                                    wait(timeout=2)
+                                except Exception:
+                                    pass
                         except Exception:
+                            pass
+                        if proc.poll() is None:
                             try:
                                 proc.kill()
+                                wait = getattr(proc, 'wait', None)
+                                if callable(wait):
+                                    try:
+                                        wait(timeout=2)
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
                         match = next(((path, row) for path, row in self.records()
@@ -657,6 +711,12 @@ class OutcomeSupervisor:
                         if latest.get('cleanup_confirmed'):
                             return
                         successor = latest.get('resumed_session_id')
+                if not successor and proc is None:
+                    # An untracked orphan after a supervisor restart: verify
+                    # its exact command line before terminating the stale PID.
+                    orphan_pid = self._worker_pid(latest or info)
+                    if orphan_pid:
+                        self._terminate_worker(orphan_pid)
                 if not successor:
                     if (proc is not None and proc.poll() is None) or self._orphan_alive(info):
                         return  # its monitor observes the durable request
