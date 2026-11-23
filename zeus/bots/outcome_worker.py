@@ -50,7 +50,7 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         market_label=(public.get('auto_selection') or {}).get('name', ''),
         rotation_file=str(Path(stop_file).with_name("drain.json")) if stop_file else None,
         risk_pnl_carry=public.get("rotation_pnl_carry", 0),
-        inventory_stop_bps=min(500.0, max(50.0, float(public.get("inventory_stop_bps") or 200))),
+        inventory_stop_bps=min(500.0, max(50.0, float(public.get("inventory_stop_bps") or 100))),
         inventory_drain_timeout_sec=min(600.0, max(15.0, float(public.get("inventory_drain_timeout_sec") or 90))),
         inventory_exit_slippage_bps=min(200.0, max(20.0, float(public.get("inventory_exit_slippage_bps") or 50))),
         exit_policy=("maker_then_ioc" if str(public.get("exit_policy") or "maker_only").lower()

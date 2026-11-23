@@ -103,7 +103,7 @@ class OutcomeInventoryTests(unittest.TestCase):
             st.last_book_ts = now+6
             with patch('zeus.bots.worldcup.time.time', return_value=now+6):
                 self.assertIn(True, bot.bilateral_requests(st))
-        self.assertEqual(bot.cfg.inventory_stop_bps, 200)
+        self.assertEqual(bot.cfg.inventory_stop_bps, 100)
         self.assertEqual(bot.cfg.order_usd, 15)
 
     def test_inventory_stop_requests_maker_exit_without_any_ioc(self):
