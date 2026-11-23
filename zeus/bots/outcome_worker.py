@@ -94,7 +94,9 @@ def run_worker(config_path, bot_factory=None):
     def monitor():
         while not finished.wait(0.25):
             if bot is not None:
-                if stop_file.exists() or not supervisor_alive():
+                if stop_file.exists():
+                    getattr(bot, 'request_user_stop', bot.request_stop)()
+                elif not supervisor_alive():
                     bot.request_stop()
                 try:
                     publish()
@@ -120,7 +122,11 @@ def run_worker(config_path, bot_factory=None):
         bot = bot_factory(cfg)
         watcher = threading.Thread(target=monitor, daemon=True)
         watcher.start()
-        if stop_file.exists() or not supervisor_alive():
+        if metadata.get('manual_taker_close_requested'):
+            bot.safety.request_manual_taker_stop()
+        elif stop_file.exists():
+            getattr(bot, 'request_user_stop', bot.request_stop)()
+        elif not supervisor_alive():
             bot.request_stop()
         else:
             bot.run()

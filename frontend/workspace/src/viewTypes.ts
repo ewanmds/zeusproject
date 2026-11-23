@@ -30,7 +30,7 @@ export interface SessionsProps {
   now: number;
   w: Workspace;
   navigate: (view: View) => void;
-  setStop: Setter<Session | null>;
+  setStop: (session: Session | null) => void;
   setSelected: Setter<Session | null>;
   setNotice: Setter<string>;
   setWalletModal: Setter<boolean>;

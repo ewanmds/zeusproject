@@ -1,4 +1,7 @@
-"""Outcome is post-only end to end: entries, risk exits, Stop and resume."""
+"""Post-only entries/risk exits, legacy maker Stop and explicit maker resume.
+
+The separate manual cancel-and-market capability is covered by instant-stop tests.
+"""
 import json
 from pathlib import Path
 from types import SimpleNamespace

@@ -192,14 +192,18 @@ class Runtimes:
             self.invalidate(owner)
             return result
 
-    def stop(self, owner, session_id):
+    def stop(self, owner, session_id, *, immediate=False):
         with self.tenant_lock(owner):
             self.invalidate(owner)
             row = next((s for s in self.snapshot(owner)['sessions'] if s['id'] == session_id), None)
             if not row: raise KeyError('Session not found')
             if not row['running'] and row['cleanup_confirmed']: return self.snapshot(owner)
             manager = self.manager(owner)
-            if row['kind'] == 'outcome': manager.stop_worldcup(session_id)
+            if row['kind'] == 'outcome':
+                if immediate:
+                    manager.outcome.stop_now(session_id)
+                else:
+                    manager.stop_worldcup(session_id)
             else:
                 # Resolve only this tenant's known Grid identity to its actual token.
                 token = next((key for key, info in manager.obi_procs.items()

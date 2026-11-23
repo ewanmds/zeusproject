@@ -436,14 +436,14 @@ class BotManager:
             from zeus.process_control import OutcomeFunds
             OutcomeFunds(record["funds_root"], account, record["session_id"]).resolve(record.get("pending_cloids", []))
 
-    def _reserve_session(self, key, symbols, kind, ignore_session_id=None):
+    def _reserve_session(self, key, symbols, kind, ignore_session_id=None, ignore_session_ids=()):
         # A start decision must never use the dashboard's cached scan.
         records, corrupt = self._scan_session_files()
         self._corrupt_journals = corrupt
         if corrupt:
             raise RuntimeError("Unreadable session journal; manual verification required")
         for _, record in records:
-            if ignore_session_id and record.get("session_id") == ignore_session_id:
+            if record.get("session_id") in set(ignore_session_ids) | ({ignore_session_id} if ignore_session_id else set()):
                 continue  # an explicit resume replaces this exact session
             if record.get("key") == key and not record.get("cleanup_confirmed"):
                 raise RuntimeError("Previous session stop not confirmed; reconcile before starting")

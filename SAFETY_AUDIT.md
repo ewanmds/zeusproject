@@ -20,6 +20,8 @@ Implemented for Outcome and BBO/MID and their dashboard supervisor.
 ## Operator behavior
 
 - Stop disables quoting, cancels session orders and attempts to close inventory.
+  For Outcome, only an explicit manual `cancel_and_market` request grants the
+  attributed IOC close described below; a plain maker stop remains post-only.
 - BBO/MID execution errors follow the same safety sequence and require manual Start.
 - Outcome runtime errors keep the session alive in `recovering`, without automatic
   cancellation or liquidation. New execution is blocked until independent order
@@ -49,6 +51,32 @@ Implemented for Outcome and BBO/MID and their dashboard supervisor.
 - New sessions refuse pre-existing orders/inventory on their selected markets.
 - No deployment, service restart, or live exchange mutation is part of validation.
 
+## Manual instant stop (Outcome)
+
+- The workspace exposes one explicit action: `POST /api/v2/sessions/{id}/stop`
+  with `{"mode":"cancel_and_market"}`. The row is hidden optimistically, but the
+  stop is only confirmed from a fresh snapshot with `running=false` and
+  `cleanup_confirmed=true`.
+- The supervisor writes a durable per-session marker before spawning a cleanup
+  thread. The worker reads that marker itself, so a slow or absent monitor cannot
+  lose the request.
+- Cleanup cancels only OIDs/CLOIDs owned by that session. Any unrelated order on
+  the managed market blocks confirmation; it is never canceled.
+- The IOC sell size is the session's net inventory reconstructed from its own
+  fills (`tid`/`oid`) since the earliest recovery start. Pre-existing wallet
+  balance, unrelated fills, and an unresolved placement are never sold.
+- The sell is a sell-only IOC at most `inventory_exit_slippage_bps` below a fresh
+  best bid. A partial fill retries only the freshly read residual. An uncertain
+  response is never retried without independent reconciliation.
+- Confirmation requires a flat position and no open orders. Residual inventory,
+  a missing or ambiguous fill history, or an unrelated order leaves the session
+  visible and unconfirmed.
+- If the worker dies after the marker, backend recovery resumes an exit-only
+  manual-taker close. A plain maker stop or hard stop is never auto-traded.
+- The taker capability is thread-local, granted only for the explicit manual
+  stop, and accepts only a sell IOC during cleanup. Ordinary quoting remains
+  post-only.
+
 ## Outcome processes
 
 - The dashboard starts one `zeus.bots.outcome_worker` OS process per canonical
@@ -74,10 +102,13 @@ Implemented for Outcome and BBO/MID and their dashboard supervisor.
   phases, recovery errors, freshness and final accounting. Aggregates summarize
   the latest session of each market, including its retained final results. Cost/M
   is calculated from total net PnL and volume, never by summing per-bot ratios.
-- On server restart, journals/stats restore the last market cards. Interrupted
-  sessions are not relaunched or auto-attached. Only exchange verification and
-  process termination can clear an unconfirmed session. Legacy multi-market
-  journals continue blocking every market they covered until reconciled.
+- On server restart, journals/stats restore the last market cards. Crash-
+  interrupted sessions are auto-recovered by the backend, never by a UI button.
+  A manual maker stop is resumed only as an exit; an explicit
+  `cancel_and_market` marker is completed as an exit-only attributed IOC close;
+  a plain hard stop is never auto-traded. Only exchange verification and process
+  termination can clear an unconfirmed session. Legacy multi-market journals
+  continue blocking every market they covered until reconciled.
 - New Outcome submissions hold an account-wide process lock across fresh balance
   reads and signing/submission. The same lock serializes signer nonces. Uncertain
   buys retain durable CLOID/USD reservations, conservatively deducted from free

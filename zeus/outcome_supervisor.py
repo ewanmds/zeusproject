@@ -1,5 +1,6 @@
 """Per-market Outcome process supervisor and durable snapshot reader."""
 import logging
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -21,6 +22,22 @@ def duration(seconds):
 
 
 class OutcomeSupervisor:
+    @staticmethod
+    def _attribution_started(record, records):
+        family = {record['session_id']}
+        history = [record]
+        while True:
+            parents = [row for row in records if row.get('resumed_session_id') in family
+                       and row.get('session_id') not in family and row.get('account') == record.get('account')
+                       and row.get('symbols') == record.get('symbols')]
+            if not parents:
+                break
+            history.extend(parents)
+            family.update(row['session_id'] for row in parents)
+        stamps = [row.get('attribution_started') or row.get('started') for row in history]
+        return min((stamp for stamp in stamps if isinstance(stamp, (float, int))
+                    and math.isfinite(stamp) and stamp > 0), default=None)
+
     def __init__(self, manager):
         self.manager = manager
         self.procs = {}
@@ -115,10 +132,23 @@ class OutcomeSupervisor:
                 stop_file = Path(record["stop_file"]) if record.get("stop_file") else None
                 if stop_file is None:
                     continue
+                manual_taker = False
                 if stop_file.exists():
-                    continue  # explicit hard shutdown, never auto-trade again
+                    try:
+                        marker = read_json(stop_file)
+                    except (OSError, ValueError):
+                        marker = {}
+                    marker = marker if isinstance(marker, dict) else {}
+                    manual_taker = (marker.get('mode') == 'cancel_and_market'
+                                    and marker.get('session_id') == sid
+                                    and marker.get('market') == market)
+                    if not manual_taker:
+                        continue  # explicit hard shutdown, never auto-trade again
                 meta = read_json(path) if Path(path).exists() else record
                 meta = meta if isinstance(meta, dict) else record
+                # The explicit taker grant is durable in the journal even when
+                # a repeated crash leaves no marker on the successor runtime.
+                manual_taker = manual_taker or bool(meta.get('manual_taker_close_requested'))
                 drain_file = stop_file.with_name("drain.json")
                 drain = read_json(drain_file) if drain_file.exists() else {}
                 drain = drain if isinstance(drain, dict) else {}
@@ -128,7 +158,7 @@ class OutcomeSupervisor:
                 risk_exit = reason_l.startswith(("session stop loss", "session take profit",
                                                  "inventory stop"))
                 rotation = reason_l.startswith("low executed")
-                if manual or risk_exit:
+                if manual_taker or manual or risk_exit:
                     exit_only = True
                 elif rotation:
                     # A rotation drain must not end the logical session after a
@@ -144,10 +174,14 @@ class OutcomeSupervisor:
                 if now < state.get("next_at", 0):
                     continue
                 try:
-                    self._resume(sid, exit_only=exit_only)
+                    if manual_taker:
+                        self._resume(sid, exit_only=True, manual_taker=True)
+                    else:
+                        self._resume(sid, exit_only=exit_only)
                     self._recovery.pop(sid, None)
                     logging.getLogger(__name__).warning(
-                        "Outcome auto-recovery started %s (exit_only=%s)", sid, exit_only)
+                        "Outcome auto-recovery started %s (exit_only=%s, manual_taker=%s)",
+                        sid, exit_only, manual_taker)
                 except Exception as exc:
                     failures = int(state.get("failures", 0)) + 1
                     detail = safe_error(exc)
@@ -225,15 +259,26 @@ class OutcomeSupervisor:
         # Resolve/read metadata above without holding the rotation/UI lock.
         # Admission, spawn and registration below are atomic against Stop.
         with ProcessLock(self.root / "admission" / f"{account_key(account)}-{market[1:]}.lock"), self.rotation.lock, self.manager.lock:
+            resume_from = (seed or {}).get("resume_from")
+            records = self.records()
+            replaced = {resume_from} if resume_from else set()
+            # Only the exact published recovery lineage may remain unresolved.
+            # Another session on this account/market still blocks admission.
+            while resume_from:
+                ancestors = {r['session_id'] for _, r in records
+                             if r.get('resumed_session_id') in replaced
+                             and r.get('account') == account and r.get('symbols') == [market]}
+                if ancestors.issubset(replaced):
+                    break
+                replaced.update(ancestors)
             for info in self.procs.values():
                 if info["market"] == market:
                     if info["proc"].poll() is None:
                         raise RuntimeError("A bot is already running on this Outcome market")
-                    if not self.manager._session_status(info["safety_file"]).get("cleanup_confirmed"):
+                    if info['session_id'] not in replaced and not self.manager._session_status(info["safety_file"]).get("cleanup_confirmed"):
                         raise RuntimeError("Previous Outcome stop not confirmed on this market")
-            resume_from = (seed or {}).get("resume_from")
-            for _, record in self.records():
-                if resume_from and record.get("session_id") == resume_from:
+            for _, record in records:
+                if record.get("session_id") in replaced:
                     continue  # the explicit resume replaces this interrupted session
                 if market in record.get("symbols", []) and not record.get("cleanup_confirmed"):
                     raise RuntimeError("Previous Outcome session is not reconciled on this market")
@@ -244,7 +289,7 @@ class OutcomeSupervisor:
             runtime.mkdir(parents=True, exist_ok=False)
             journal = self.manager._reserve_session(
                 "outcome:" + market, [market], "outcome",
-                ignore_session_id=(seed or {}).get("resume_from"))
+                ignore_session_id=(seed or {}).get("resume_from"), ignore_session_ids=replaced)
             journal = journal or self.root / (session_id + ".json")
             stop_file, stats_file = runtime / "stop", runtime / "stats.json"
             record = {"session_id": session_id, "key": "outcome:" + market, "symbols": [market],
@@ -255,7 +300,8 @@ class OutcomeSupervisor:
                       "stop_file": str(stop_file), "stats_file": str(stats_file), "pid": os.getpid()}
             # A resumed exit must be able to claim exactly the inventory and
             # client IDs the interrupted session already published.
-            for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids"):
+            for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids",
+                        "manual_taker_close_requested", "stop_reason", "attribution_started"):
                 if seed and key in seed:
                     record[key] = seed[key]
             atomic_json(journal, record)
@@ -276,8 +322,9 @@ class OutcomeSupervisor:
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             except Exception as exc:
+                confirmed = not bool(seed and (seed.get('exposure_started') or seed.get('pending_cloids')))
                 atomic_json(journal, {**record, "phase": "failed", "error": safe_error(exc),
-                                     "cleanup_confirmed": True, "can_start": True, "pid": None})
+                                     "cleanup_confirmed": confirmed, "can_start": confirmed, "pid": None})
                 raise
             # The child owns journal publication after launch. Do not overwrite a
             # racing first worker snapshot with the parent's connecting state.
@@ -532,6 +579,90 @@ class OutcomeSupervisor:
             pending = [info for info in pending if info["proc"].poll() is None]
         return [info["session_id"] for info in targets]
 
+    def stop_now(self, session_id):
+        """Durable one-click intent; worker cancels owned orders then closes IOC."""
+        children = self.rotation.cancel(session_id)
+        with self.manager.lock:
+            attached = [info for sid, info in self.procs.items()
+                if sid == session_id or sid in children
+                or (info.get('config') or {}).get('auto_group_id') == session_id]
+        all_records = {row['session_id']: dict(row, safety_file=str(path)) for path, row in self.records()}
+        records = [row for row in all_records.values() if row.get('session_id') == session_id
+            or (row.get('config') or {}).get('auto_group_id') == session_id]
+        targets = {row['session_id']: row for row in records if not row.get('cleanup_confirmed')}
+        targets.update({row['session_id']: row for row in attached})
+        for row in list(targets.values()):
+            visited = set()
+            while row.get('resumed_session_id') in all_records:
+                child = all_records[row['resumed_session_id']]
+                if child['session_id'] in visited or child.get('account') != row.get('account') or child.get('symbols') != row.get('symbols'):
+                    break
+                visited.add(child['session_id'])
+                if not child.get('cleanup_confirmed'):
+                    targets[child['session_id']] = self.procs.get(child['session_id'], child)
+                row = child
+        if not targets:
+            if records and all(row.get('cleanup_confirmed') for row in records):
+                return [session_id]
+            raise RuntimeError('Session unavailable; stop cannot be attributed')
+        requests = []
+        for sid, info in targets.items():
+            stop_path = info.get('stop_file')
+            market = info.get('market') or (info.get('symbols') or [''])[0]
+            if not stop_path or not market:
+                raise RuntimeError('Incomplete session stop attribution')
+            started = self._attribution_started(all_records.get(sid, info), all_records.values())
+            requests.append((sid, stop_path, market, started))
+        for sid, stop_path, market, started in requests:
+            atomic_json(Path(stop_path), dict(mode='cancel_and_market', requested_at=time.time(),
+                                             session_id=sid, market=market, attribution_started=started))
+        for sid, info in targets.items():
+            # One slow market must not delay the other members of a bot group.
+            threading.Thread(target=self._finish_manual_stop, args=(sid, info),
+                             name='outcome-manual-close', daemon=True).start()
+        return list(targets)
+
+    def _finish_manual_stop(self, sid, info):
+        proc = info.get('proc')
+        try:
+            with self._recovery_lock:
+                match = next(((path, row) for path, row in self.records() if row['session_id'] == sid), None)
+                latest = read_json(match[0]) if match else {}
+                if latest.get('cleanup_confirmed'):
+                    return
+                successor = latest.get('resumed_session_id')
+                if not successor:
+                    if (proc is not None and proc.poll() is None) or self._orphan_alive(info):
+                        return  # its monitor observes the durable request
+                    successor = self._resume(sid, exit_only=True, manual_taker=True)['session_id']
+            # The exit-only successor inherits every owned OID/CLOID.
+            # Delegate confirmation only for this exact account/market.
+            deadline = time.monotonic()+30
+            while time.monotonic() < deadline and not self._closed.wait(.2):
+                rows = {row['session_id']: (path, row) for path, row in self.records()}
+                parent, child = rows.get(sid), rows.get(successor)
+                if not parent or not child:
+                    return
+                path, old = parent
+                _, confirmed = child
+                if confirmed.get('cleanup_confirmed') and not confirmed.get('pending_cloids'):
+                    if old.get('account') != confirmed.get('account') or old.get('symbols') != confirmed.get('symbols'):
+                        raise RuntimeError('Close confirmation attribution mismatch')
+                    old.update(cleanup_confirmed=True, pending_cloids=[], phase='stopped',
+                               cleanup_error='', can_start=True)
+                    atomic_json(path, old)
+                    return
+        except Exception as exc:
+            path = info.get('safety_file')
+            if path:
+                try:
+                    row = read_json(path)
+                    if not row.get('cleanup_confirmed'):
+                        row.update(cleanup_error=safe_error(exc), cleanup_confirmed=False)
+                        atomic_json(path, row)
+                except (OSError, ValueError):
+                    pass
+
     def resume_exit(self, session_id):
         """Start an exit-only worker for a stopped, unconfirmed Outcome session."""
         return self._resume(session_id, exit_only=True)
@@ -540,7 +671,7 @@ class OutcomeSupervisor:
         """Resume normal bid+ask trading on the same market with attribution."""
         return self._resume(session_id, exit_only=False)
 
-    def _resume(self, session_id, *, exit_only):
+    def _resume(self, session_id, *, exit_only, manual_taker=False):
         matching = [(p, r) for p, r in self.records()
                     if r.get("session_id") == session_id
                     or (r.get("config") or {}).get("auto_group_id") == session_id]
@@ -585,8 +716,14 @@ class OutcomeSupervisor:
         seed = {key: old.get(key) for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids")
                 if key in old}
         seed["resume_from"] = session_id
+        seed['attribution_started'] = self._attribution_started(old, [row for _, row in self.records()])
         seed["group_id"] = config.get("auto_group_id") or session_id
         seed["resume_rotation"] = (not exit_only) and bool(config.get("auto_rotate", True))
+        if manual_taker:
+            if not exit_only:
+                raise ValueError('Manual taker recovery must be exit-only')
+            seed['manual_taker_close_requested'] = True
+            seed['stop_reason'] = 'Manual stop: cancel and market close'
         result = self.start(WorldcupStartRequest(**values), seed=seed)
         # Keep an audit link without ever claiming the old session is verified.
         try:
@@ -594,7 +731,8 @@ class OutcomeSupervisor:
             if isinstance(journal, dict):
                 journal.update(
                     resumed_session_id=result["session_id"],
-                    reason=("Sortie maker reprise explicitement" if exit_only
+                    reason=("Arrêt et clôture au marché demandés" if manual_taker else
+                            "Sortie maker reprise explicitement" if exit_only
                             else "Session reprise en trading"))
                 atomic_json(journal_path, journal)
         except (OSError, ValueError):

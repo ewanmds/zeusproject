@@ -5,10 +5,13 @@ Target verified from this checkout's service/Caddy definitions:
 `3-113-242-142.sslip.io`. The remote machine has not been inspected or changed
 from this coding session; the script verifies its prerequisites when run there.
 
-First stop live bots from their UI and verify their cleanup. During deployment,
-stopping the old service invokes its normal cancellation/inventory cleanup and
-can close positions. Journals, `.env`, database contents and agent keys are
-preserved. The deployment does not start a trading session.
+First stop live bots from their UI and verify their cleanup. The workspace Stop
+action is an explicit one-click manual close: it cancels session-owned orders and
+may sell session-attributable Outcome inventory with a bounded IOC; pre-existing
+wallet inventory is never included. During deployment, stopping the old service
+invokes its normal cancellation/inventory cleanup and can close positions.
+Journals, `.env`, database contents and agent keys are preserved. The deployment
+does not start a trading session.
 
 ```bash
 cd /home/ec2-user/zeusproject

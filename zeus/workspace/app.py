@@ -58,6 +58,10 @@ class Signature(Input):
     signature: str = Field(min_length=132, max_length=132, pattern=r'^0x[0-9a-fA-F]{130}$')
 
 
+class StopRequest(Input):
+    mode: Literal['maker', 'cancel_and_market'] = 'maker'
+
+
 class Launch(Input):
     strategy: Literal['outcome', 'bbo', 'mid']
     order_usd: float = Field(ge=10.5, le=1000000, allow_inf_nan=False)
@@ -306,8 +310,11 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         return {'command': key, 'phase': row['phase'], 'result': row['result']}
 
     @app.post('/api/v2/sessions/{sid}/stop')
-    def stop(sid: str, who=Depends(mutation)):
-        try: return runtimes.stop(who['wallet'], sid)
+    def stop(sid: str, body: StopRequest, who=Depends(mutation)):
+        try:
+            if body.mode == 'cancel_and_market':
+                return runtimes.stop(who['wallet'], sid, immediate=True)
+            return runtimes.stop(who['wallet'], sid)
         except KeyError: raise HTTPException(404, 'Session not found')
 
     @app.post('/api/v2/sessions/{sid}/resume-exit')

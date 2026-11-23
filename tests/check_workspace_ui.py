@@ -190,8 +190,8 @@ def main():
                     capture(page, f'review-{width}.png')
                     page.get_by_role('dialog').get_by_role('button',name='Lancer la session',exact=True).click()
                     if width==1440:
-                        expect(page.get_by_text('Lancement à vérifier',exact=True)).to_be_visible()
-                        page.get_by_role('button',name='Vérifier',exact=True).click()
+                        expect(page.get_by_text('Résultat en attente. Vérifiez la session avant de réessayer.',exact=True)).to_be_visible()
+                        page.get_by_role('link',name='Sessions',exact=False).click()
                     expect(page.get_by_role('heading',name='Vos sessions.')).to_be_visible()
                     card=page.locator('.session-card');expect(card).to_have_count(1)
                     expect(card).to_contain_text('$25.00')
@@ -239,10 +239,11 @@ def main():
                     page.get_by_role('link',name='Sessions',exact=False).click()
                     card.get_by_role('button',name='Arrêter',exact=True).click()
                     record(page)
-                    page.get_by_role('button',name='Confirmer l’arrêt',exact=True).click()
+                    expect(page.get_by_role('alertdialog')).to_have_count(0)
                     if width==1440:
-                        expect(page.get_by_role('alertdialog')).to_contain_text('Arrêt non confirmé.');record(page)
-                        page.get_by_role('button',name='Confirmer l’arrêt',exact=True).click()
+                        expect(card).to_have_count(1)
+                        expect(page.locator('.inline-alert').filter(has_text='Arrêt non confirmé.')).to_be_visible();record(page)
+                        card.get_by_role('button',name='Arrêter',exact=True).click()
                     expect(card).to_have_count(0)
                     page.get_by_role('button',name='Terminées',exact=True).click();expect(card).to_have_count(1)
                     # Change wallet: clear A's live rows and caches immediately.
@@ -259,6 +260,9 @@ def main():
                     context.close()
                 manifest=json.loads((ROOT/'frontend/workspace/layro-components.json').read_text('utf-8'))['components']
                 expected={item['id'] for item in manifest}
+                # Stop is now one click; this unused confirmation component is
+                # retained in the library but intentionally absent from the flow.
+                expected.discard('preetsuthar17/alert-dialog')
                 missing=expected-seen
                 (folder/'layro-coverage.json').write_text(json.dumps({'expected':len(expected),'observed':len(expected&seen),'missing':sorted(missing),'sources':sorted(seen)},indent=2),encoding='utf-8')
                 assert not missing,sorted(missing)

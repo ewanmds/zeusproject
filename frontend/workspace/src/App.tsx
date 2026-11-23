@@ -1,7 +1,7 @@
 import { strategies, nav, initial } from "./config";
 import { RunView } from "./views/RunView";
 
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, useRef } from "react";
 import { api, usd, short, clock } from "./data";
 import { useWorkspace } from "./useWorkspace";
 import { signAgentApproval } from "./authorization";
@@ -11,7 +11,7 @@ import type { Draft, View, Session, Agent, Operation, Snapshot } from "./types";
 import { resolveStopSnapshot } from "./presentation/stop";
 import { NavDock } from "./components/layout";
 import { Kbd } from "./components/fields";
-import { AlertDialog, useMobile } from "./components/Dialog";
+import { useMobile } from "./components/Dialog";
 import { InlineAlert, Notification, Skeleton } from "./components/feedback";
 
 const SessionsView = lazy(() =>
@@ -56,8 +56,9 @@ export default function App() {
   const [review, setReview] = useState<any>(null),
     [busy, setBusy] = useState(""),
     [notice, setNotice] = useState("");
-  const [selected, setSelected] = useState<Session | null>(null),
-    [stop, setStop] = useState<Session | null>(null);
+  const [selected, setSelected] = useState<Session | null>(null);
+  const [pendingStops, setPendingStops] = useState<Record<string, number>>({});
+  const stopRequests = useRef(new Set<string>());
   const [filter, setFilter] = useState("active"),
     [period, setPeriod] = useState(7),
     [now, setNow] = useState(Date.now());
@@ -69,6 +70,8 @@ export default function App() {
   });
   const mobile = useMobile();
   const owner = w.identity?.wallet;
+  const currentOwner = useRef(owner);
+  currentOwner.current = owner;
   const sessions = w.snapshot?.sessions || [];
   const metrics = w.snapshot?.metrics;
   const stale =
@@ -104,7 +107,8 @@ export default function App() {
     setActionErrors({ run: "", account: "", stop: "" });
     setReview(null);
     setSelected(null);
-    setStop(null);
+    setPendingStops({});
+    stopRequests.current.clear();
     setScanner(null);
     setMarkets([]);
     setHydrated(false);
@@ -321,29 +325,51 @@ export default function App() {
       setBusy("");
     }
   };
-  const stopSession = async () => {
-    if (!stop) return;
-    setBusy("stop");
+  const stopSession = async (session: Session) => {
+    if (stopRequests.current.has(session.id)) return;
+    stopRequests.current.add(session.id);
+    setPendingStops((old) => ({ ...old, [session.id]: Date.now() }));
+    setSelected(null);
+    setNotice("Arrêt demandé : annulation des ordres et fermeture au marché.");
     setActionErrors((old) => ({ ...old, stop: "" }));
     try {
       const snapshot = await api<Snapshot>(
-        "/sessions/" + encodeURIComponent(stop.id) + "/stop",
-        {},
+        "/sessions/" + encodeURIComponent(session.id) + "/stop",
+        { mode: "cancel_and_market" },
       );
-      const resolution = resolveStopSnapshot(snapshot, stop.id);
-      setStop(null);
-      setSelected(null);
+      if (currentOwner.current !== owner) return;
+      const resolution = resolveStopSnapshot(snapshot, session.id);
       // A 200 only records the request; never claim a verified stop until the
       // returned snapshot proves it.
-      setNotice(resolution.message);
+      setNotice(resolution.confirmed ? "Arrêt et clôture confirmés." : "Arrêt demandé : clôture au marché en cours.");
       w.refresh();
     } catch (e: any) {
+      if (currentOwner.current !== owner) return;
+      stopRequests.current.delete(session.id);
+      setPendingStops((old) => { const next = { ...old }; delete next[session.id]; return next; });
+      setNotice("Arrêt non confirmé : " + e.message);
       setActionErrors((old) => ({ ...old, stop: e.message }));
       w.refresh();
-    } finally {
-      setBusy("");
     }
   };
+
+  useEffect(() => {
+    if (!Object.keys(pendingStops).length) return;
+    const next = { ...pendingStops };
+    let changed = false;
+    for (const [id, started] of Object.entries(pendingStops)) {
+      const resolution = resolveStopSnapshot(w.snapshot, id);
+      if (resolution.confirmed || now-started >= 30000) {
+        delete next[id];
+        stopRequests.current.delete(id);
+        changed = true;
+        if (!resolution.confirmed) {
+          setNotice("Arrêt non confirmé après 30 s : la session reste visible pour vérifier les ordres et l’inventaire.");
+        }
+      }
+    }
+    if (changed) setPendingStops(next);
+  }, [w.snapshot, now, pendingStops]);
 
   const reconnect = () => {
     w.refresh();
@@ -353,10 +379,10 @@ export default function App() {
     (w.balance?.agent?.status ?? w.identity?.agent?.status) === "ready";
   const filtered = sessions.filter(
     (s) =>
-      filter === "all" ||
+      !pendingStops[s.id] && (filter === "all" ||
       (filter === "active"
         ? s.running || !s.cleanup_confirmed
-        : !s.running && s.cleanup_confirmed),
+        : !s.running && s.cleanup_confirmed)),
   );
   const history = sessions.filter(
     (s) => s.started >= now / 1000 - period * 86400,
@@ -393,7 +419,7 @@ export default function App() {
     filter,
     setFilter,
     now,
-    setStop,
+    setStop: (session: Session | null) => { if (session) void stopSession(session); },
     setSelected,
     setNotice,
     setWalletModal,
@@ -730,38 +756,6 @@ export default function App() {
         </Modal>
       )}
 
-      {owner && stop && (
-        <AlertDialog
-          title="Arrêter cette session ?"
-          onClose={() => !busy && setStop(null)}
-          locked={!!busy}
-        >
-          <p className="modal-description">{stop.name}</p>
-          <p>
-            Le moteur annule ses ordres et applique sa procédure de sortie.
-            L’arrêt reste en cours jusqu’à sa vérification.
-          </p>
-          {actionErrors.stop && <InlineAlert>{actionErrors.stop}</InlineAlert>}
-          <div className="dialog-actions">
-            <button
-              className="button secondary"
-              onClick={() => setStop(null)}
-              disabled={!!busy}
-            >
-              Continuer la session
-            </button>
-            <FeedbackButton
-              className="button danger"
-              onClick={stopSession}
-              disabled={!!busy}
-              loading={busy === "stop"}
-              loadingLabel="Arrêt en cours"
-            >
-              Confirmer l’arrêt
-            </FeedbackButton>
-          </div>
-        </AlertDialog>
-      )}
       {showHelp && (
         <Modal
           title="Trois étapes pour commencer."

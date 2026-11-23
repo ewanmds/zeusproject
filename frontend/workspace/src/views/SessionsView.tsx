@@ -64,6 +64,9 @@ export function SessionsView({
         </button>
       ) : !s.cleanup_confirmed ? (
         <div className="row-actions">
+          <button className="button danger small" onClick={() => setStop(s)}>
+            Arrêter et clôturer
+          </button>
           <button
             className="button secondary small"
             disabled={!!checking}

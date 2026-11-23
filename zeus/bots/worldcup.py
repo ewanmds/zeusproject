@@ -695,6 +695,28 @@ class HyperliquidSpreadBot:
     def request_stop(self):
         self.safety.stop()
 
+    def request_user_stop(self):
+        """Validate the tenant supervisor's persisted per-session instruction."""
+        try:
+            request = read_json(self.cfg.stop_file) if self.cfg.stop_file else {}
+            authorized = (isinstance(request, dict) and request.get('mode') == 'cancel_and_market'
+                and request.get('session_id') == self.safety.session_id
+                and request.get('market') in self.cfg.symbols)
+        except (OSError, ValueError, TypeError):
+            authorized = False
+        if authorized:
+            started = request.get('attribution_started')
+            if isinstance(started, (float, int)) and math.isfinite(started) and started > 0:
+                current = (self.safety.metadata.get('attribution_started')
+                           or self.safety.metadata.get('started'))
+                if (isinstance(current, (float, int)) and math.isfinite(current)
+                        and current > 0):
+                    started = min(current, started)
+                self.safety.metadata['attribution_started'] = started
+            self.safety.request_manual_taker_stop()
+        else:
+            self.request_stop()
+
     def _pause_execution(self, error, pending_cloids=()):
         if not self.cfg.worldcup:
             self.safety.fail(error)
@@ -800,11 +822,30 @@ class HyperliquidSpreadBot:
                                                time.time() + self.cfg.maker_opening_rest_sec)
 
     def _cleanup_close(self, symbol, position):
-        # Fatal Outcome shutdown cancels owned orders and reports residual
-        # exposure; a running exit-only worker is required to manage a maker
-        # order. HIP-3 keeps its original explicit reduce-only close.
+        # Fatal shutdown alone cannot liquidate Outcome. The new one-click
+        # manual Stop grants an attributed IOC sell. HIP-3 retains its
+        # original explicit reduce-only close.
         if self.cfg.worldcup:
-            raise SubmissionSkipped("Outcome cleanup cannot liquidate; resume the maker exit explicitly")
+            if not self.safety.manual_taker_close_requested:
+                raise SubmissionSkipped("Outcome cleanup cannot liquidate; resume the maker exit explicitly")
+            if symbol not in self.cfg.symbols or position <= 0:
+                raise SubmissionSkipped('Manual Outcome close requires owned long inventory')
+            from zeus.outcome_stop import attributable_inventory
+            metadata = self.safety.metadata
+            attributable = attributable_inventory(self.info, self.cfg.account_address, symbol,
+                self.safety.owned, metadata.get('attribution_started') or metadata.get('started'))
+            if attributable <= 0 or position+1e-9 < attributable:
+                raise RuntimeError('Outcome balance does not match attributable session inventory')
+            bid, ask = self.fetch_rest_bbo(symbol)
+            if bid <= 0 or ask < bid:
+                raise RuntimeError('Cannot market-close: no fresh Outcome book')
+            quantity = float(math.floor(min(position, attributable)))
+            if quantity < 1:
+                raise RuntimeError('Residual Outcome dust: manual reconciliation required')
+            slip = max(0, self.cfg.inventory_exit_slippage_bps)/10000
+            px = round_outcome_sell_px(bid*(1-slip))
+            return self._submit_order(name=symbol, is_buy=False, sz=quantity, limit_px=px,
+                                      order_type={'limit': {'tif': 'Ioc'}}, reduce_only=False)
         if self.rotation_requested() and not (self.cfg.stop_file and os.path.exists(self.cfg.stop_file)):
             raise RuntimeError("Rotation requires flat inventory; automatic taker liquidation is disabled")
         bid, ask = self.fetch_rest_bbo(symbol)
@@ -817,11 +858,17 @@ class HyperliquidSpreadBot:
                             order_type={"limit": {"tif": "Ioc"}}, reduce_only=True)
 
     def shutdown(self, *_: Any) -> None:
+        # The execution gate can observe the marker before the monitor does.
+        # Read its attributed intent here too, before cleanup becomes final.
+        if self.cfg.stop_file and os.path.exists(self.cfg.stop_file):
+            self.request_user_stop()
         self.request_stop()
         if self.cfg.live:
-            self.safety.cleanup(self._cleanup_snapshot,
+            authorized = self.cfg.worldcup and self.safety.manual_taker_close_requested
+            with self.safety.manual_close_scope() if authorized else nullcontext():
+                self.safety.cleanup(self._cleanup_snapshot,
                                 lambda rows: self.exchange.bulk_cancel([{"coin": symbol, "oid": oid} for symbol, oid in rows]),
-                                self._cleanup_close, allow_close=not self.cfg.worldcup)
+                                self._cleanup_close, allow_close=not self.cfg.worldcup or authorized)
         else:
             self.safety.cleanup_confirmed = True
             self.safety.phase = "failed" if self.safety.error else "stopped"

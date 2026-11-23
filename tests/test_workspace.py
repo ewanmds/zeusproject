@@ -39,7 +39,8 @@ class FakeManager:
     def __init__(self, state_dir, account_context):
         self.state_dir, self.account_context = state_dir, account_context
         self.rows = []; self.obi_procs = {}
-        self.outcome = SimpleNamespace(records=lambda: [], procs={}, rotation=SimpleNamespace(close=lambda: None))
+        self.outcome = SimpleNamespace(records=lambda: [], procs={}, rotation=SimpleNamespace(close=lambda: None),
+                                       stop_now=self.stop_worldcup)
 
     def get_worldcup_stats(self): return {'display_bots': self.rows}
     def get_grid_stats(self): return {'bots': []}
@@ -88,6 +89,25 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/v2/workspace').status_code, 401)
         self.assertEqual(self.client.post('/api/v2/sessions/x/stop', json={}).status_code, 401)
         self.assertEqual(self.client.get('/api/outcomes/status').status_code, 404)
+
+    def test_manual_market_stop_is_explicit_and_tenant_scoped(self):
+        self.login(self.client, self.a)
+        self.authorize(self.client, self.a)
+        launch = self.client.post('/api/v2/sessions', json={'strategy':'outcome','order_usd':25,'position_cap':200},
+                                  headers={'Idempotency-Key':'market-stop-command-1234'}).json()
+        sid = self.client.get('/api/v2/workspace').json()['sessions'][0]['id']
+        manager = self.app.state.runtimes.manager(self.a.address.lower())
+        with patch.object(manager.outcome, 'stop_now') as market_stop, patch.object(manager, 'stop_worldcup') as maker_stop:
+            path = '/api/v2/sessions/'+sid+'/stop'
+            self.assertEqual(self.client.post(path, json={'mode':'bad'}).status_code, 422)
+            self.assertEqual(self.client.post(path, json={'mode':'cancel_and_market'}, headers={'X-Zeus-CSRF':'wrong'}).status_code, 403)
+            self.assertEqual(self.client.post('/api/v2/sessions/foreign/stop', json={'mode':'cancel_and_market'}).status_code, 404)
+            market_stop.assert_not_called()
+            self.assertEqual(self.client.post(path, json={'mode':'cancel_and_market'}).status_code, 200)
+            market_stop.assert_called_once_with(sid)
+            maker_stop.assert_not_called()
+            self.assertEqual(self.client.post(path, json={}).status_code, 200)
+            maker_stop.assert_called_once_with(sid)
 
     def test_observed_list_marks_occupied_markets_without_launching(self):
         self.login(self.client, self.a)

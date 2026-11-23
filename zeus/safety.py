@@ -210,6 +210,7 @@ class SafetyLatch:
         # An ordinary failure, signal, or cleanup never grants market execution.
         # A new runtime must observe a fresh explicit manual-stop request.
         self.manual_stop_requested = False
+        self.manual_taker_close_requested = False
         self.phase = "connecting"
         self.error = ""
         self.cleanup_error = ""
@@ -240,6 +241,7 @@ class SafetyLatch:
                     quoting_enabled=not self.stopped.is_set() and self.phase == "running" and not draining,
                     recovery_error=self.recovery_error,
                     passive_only=self.passive_only, manual_stop_requested=self.manual_stop_requested,
+                    manual_taker_close_requested=self.manual_taker_close_requested,
                     strict_maker_spot=self.strict_maker_spot,
                     exit_requested=bool(self.metadata.get("exit_requested")),
                     stop_reason=self.metadata.get("stop_reason", ""))
@@ -284,9 +286,17 @@ class SafetyLatch:
         self.manual_stop_requested = True
         self.stop(error)
 
+    def request_manual_taker_stop(self):
+        """Only an explicit, attributed user Stop grants spot IOC cleanup."""
+        self.manual_taker_close_requested = True
+        self.metadata['manual_taker_close_requested'] = True
+        self.metadata['stop_reason'] = 'Manual stop: cancel and market close'
+        self.request_manual_stop()
+
     @contextmanager
     def manual_close_scope(self):
-        """Narrow capability for a manual Stop's explicit reduce-only close.
+        """Narrow capability for an explicit manual close (reduce-only perps,
+        or an attributed IOC sell for Outcome spot).
 
         cleanup_scope only permits requests after Stop; it does not itself
         permit crossing orders. The capability is thread-local and reentrant.
@@ -335,12 +345,18 @@ class SafetyLatch:
         closing_only = self.stopped.is_set() or getattr(self.local,"cleanup",False)
         for order_type,reduce_only,is_buy in requests:
             if self.strict_maker_spot:
-                if closing_only:
+                taker_close = (manual and getattr(self.local, 'cleanup', False)
+                    and self.manual_taker_close_requested
+                    and is_buy is False and isinstance(order_type, dict)
+                    and order_type == {'limit': {'tif': 'Ioc'}})
+                if closing_only and not taker_close:
                     raise SubmissionSkipped("Outcome hard shutdown blocks new orders; resume the maker exit explicitly")
                 if is_buy not in (True, False) or not isinstance(is_buy, bool):
                     raise SubmissionSkipped("Outcome orders require an explicit buy/sell direction")
                 if is_buy and not self.opening_allowed():
                     raise SubmissionSkipped("Outcome maker exit requested; new purchases are blocked")
+                if taker_close:
+                    continue
             elif closing_only and reduce_only is not True:
                 raise SubmissionSkipped("A stopped passive session permits only explicit reduce-only closing orders")
             if not isinstance(order_type,dict) or set(order_type)!={"limit"} or not isinstance(order_type["limit"],dict):
