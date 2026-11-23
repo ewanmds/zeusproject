@@ -23,7 +23,7 @@ def main():
         sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
     origin=f'http://127.0.0.1:{port}'
     temporary=tempfile.TemporaryDirectory()
-    app=create_app(Settings(Path(temporary.name),origin=origin,warm_catalogs=False),
+    app=create_app(Settings(Path(temporary.name),origin=origin,ws_origin=origin,warm_catalogs=False),
                    accounts_factory=FakeAccounts,manager_factory=FakeManager)
     server=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=port,log_level='error'))
     thread=threading.Thread(target=server.run,daemon=True);thread.start()

@@ -455,15 +455,12 @@ export default function App() {
           {owner ? (
             <>
               <button
-                className={
-                  "live " +
-                  (!stale && w.connection === "live" ? "is-live" : "")
-                }
+                className={"live " + (!stale ? "is-live" : "")}
                 onClick={reconnect}
                 title="Actualiser les données"
               >
                 <i />
-                {!stale && w.connection === "live" ? "Live" : "Actualisation"}
+                {stale ? "Actualisation" : "Live"}
               </button>
               <button
                 className="icon-btn search-launch"

@@ -138,7 +138,8 @@ export function useWorkspace() {
     let alive = true,
       socket: WebSocket | null = null,
       reconnect = 0,
-      reconnectAttempt = 0;
+      reconnectAttempt = 0,
+      wsFailures = 0;
     const accept = (value: Snapshot) => {
       if (alive && generation === epoch.current && store.accept(value)) {
         setSnapshot(value);
@@ -170,6 +171,13 @@ export function useWorkspace() {
     };
     const scheduleReconnect = () => {
       if (!alive) return;
+      wsFailures += 1;
+      if (wsFailures >= 3) {
+        // Three failed handshakes are enough. Keep the REST stream live and
+        // quiet; a page reload can retry the direct socket.
+        setConnection("polling");
+        return;
+      }
       const delay = Math.min(10000, 1000 * 2 ** Math.min(reconnectAttempt, 3));
       reconnectAttempt += 1;
       reconnect = window.setTimeout(() => void open(), delay);
@@ -201,6 +209,7 @@ export function useWorkspace() {
       ws.onopen = () => {
         if (!alive || socket !== ws) return;
         reconnectAttempt = 0;
+        wsFailures = 0;
         setConnection("live");
       };
       ws.onmessage = (e) => {
@@ -225,8 +234,8 @@ export function useWorkspace() {
     void funds();
     void open();
     const timer = window.setInterval(() => {
-      if (!document.hidden && Date.now() - store.received > 2000) void poll();
-    }, 3000);
+      if (!document.hidden && Date.now() - store.received > 1500) void poll();
+    }, 2000);
     const balanceTimer = window.setInterval(funds, 20000);
     const visible = () => {
       if (!document.hidden) {
