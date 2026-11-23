@@ -4,6 +4,7 @@ No order signing here. Stop cancels the complete rotation chain; a stopped
 server never resumes old groups implicitly. Public scanner is shared by all.
 """
 from collections import deque
+import math
 import os
 from pathlib import Path
 import threading
@@ -77,6 +78,17 @@ class OutcomeRotation:
             return True
         group = self.groups[group_id]
         return group.get("cooldown", {}).get(market, 0) <= (time.time() if now is None else now)
+
+    @staticmethod
+    def rotation_inventory_reason(current):
+        """Low throughput may reselect a flat worker, never liquidate inventory."""
+        position = current.get('position_usd')
+        if (current.get('position_known') is not True or isinstance(position, bool)
+                or not isinstance(position, (int, float)) or not math.isfinite(position)):
+            return "Rotation: vérification de l'inventaire"
+        if abs(position) > 1e-9:
+            return "Rotation différée: vente de l'inventaire en cours"
+        return ''
 
     def describe(self, session_id):
         with self.lock:
@@ -220,6 +232,10 @@ class OutcomeRotation:
                     if group["fill_rate"] >= threshold:
                         group["reason"] = ""
                         continue
+                    inventory_reason = self.rotation_inventory_reason(current)
+                    if inventory_reason:
+                        group['reason'] = inventory_reason
+                        continue
             context = getattr(getattr(self.owner, 'manager', None), 'account_context', None)
             account = context.account if context else os.getenv('WALLET_ADDRESS_OUTCOME', '').strip()
             snapshot = scanner.snapshot(config["outcome_side"], config["order_size_usd"],
@@ -232,11 +248,21 @@ class OutcomeRotation:
             top = next((r for r in ranked if r["market"] not in busy
                         and r["market"] != current["market"]
                         and self.candidate_allowed(group_id, r["market"], now)), None)
+            # Scanner reads can take time. A fill during that read must not
+            # turn a low-volume rotation into an involuntary inventory exit.
+            latest = next((b for b in self.owner.status()['bots']
+                           if b['session_id'] == current_id), None)
             with self.lock:
                 group = self.groups[group_id]
                 if group["cancelled"] or current_id != group["current"] or self.closed.is_set():
                     continue
                 if group["state"] == "observing":
+                    if not latest or not latest.get('running') or latest.get('phase') != 'running' or latest.get('stale'):
+                        continue
+                    inventory_reason = self.rotation_inventory_reason(latest)
+                    if inventory_reason:
+                        group['reason'] = inventory_reason
+                        continue
                     if top is None:
                         group["reason"] = "Low fills: waiting for another eligible $/min market"
                         continue

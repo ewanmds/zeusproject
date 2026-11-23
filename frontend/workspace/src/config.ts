@@ -49,7 +49,7 @@ export const phaseText: Record<string, string> = {
   rotating: "Changement de marché",
   recovering: "Vérification",
   stopping: "Arrêt en cours",
-  draining: "Sortie maker en cours",
+  draining: "Vente",
   stopped: "Arrêt confirmé",
   failed: "À vérifier",
 };
@@ -65,9 +65,9 @@ export const stateText: Record<string, string> = {
   "Fees unavailable": "En cours",
   "Risk paused": "En cours",
   "Inventory stop": "En cours",
-  "Draining inventory": "Sortie maker en cours",
-  "Exit pending": "Sortie maker en cours",
-  "Maker exit pending": "Sortie maker en cours",
+  "Draining inventory": "Vente",
+  "Exit pending": "Vente",
+  "Maker exit pending": "Vente",
   "Building inventory": "En cours",
   Rotating: "En cours",
 };

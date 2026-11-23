@@ -1578,19 +1578,20 @@ class HyperliquidSpreadBot:
         available = min(math.floor(st.available_position + held_ask), math.floor(st.position))
         sell_qty = available if draining else min(
             available,
-            max(1, math.ceil(self.cfg.min_order_usd / ask), math.floor(self.cfg.order_usd / ask)))
+            max(1, math.ceil(10.0 / ask), math.floor(self.cfg.order_usd / ask)))
         risk_exit = self.risk_block_reason(st, closing_inventory=False)
         full_size = self.cfg.full_size_quotes
-        partial_ask = (full_size and st.ask_oid and 0 < st.ask_quantity*st.quoted_ask < self.cfg.min_order_usd
+        partial_ask = (full_size and st.ask_oid and 0 < st.ask_quantity*st.quoted_ask < 10.0
                        and st.ask_quantity <= min(st.position, st.available_position+held_ask)
                        and st.quoted_ask > st.bid and not draining and not risk_exit)
         if partial_ask:
             requests_out[False] = {"coin": st.spec.symbol, "is_buy": False, "sz": float(st.ask_quantity),
                 "limit_px": st.quoted_ask, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
         elif sell_qty >= 1 and (not full_size or draining or risk_exit
-                                or sell_qty*ask >= self.cfg.min_order_usd*0.9):
-            # 69,46 $ d'inventaire pour un ordre de 70 $ ne doit pas attendre
-            # le centime exact : les tokens sont entiers et le prix bouge.
+                                or sell_qty*ask >= 10.0):
+            # The configured opening size is not the exchange's sell minimum.
+            # Sell executable partial inventory instead of waiting for 90% of
+            # another full order. Existing sub-minimum resting asks keep queue.
             requests_out[False] = {"coin": st.spec.symbol, "is_buy": False, "sz": float(sell_qty),
                 "limit_px": ask, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
         if draining or risk_exit:
@@ -2288,7 +2289,7 @@ class HyperliquidSpreadBot:
             return "Ask working", risk or ""
         if risk:
             return "Spread too wide" if risk.startswith(("auto spread", "spread ")) else "Risk paused", risk
-        if st.position > 0 and self.cfg.full_size_quotes and st.position*st.ask < self.cfg.min_order_usd*0.9:
+        if st.position > 0 and self.cfg.full_size_quotes and st.position*st.ask < 10.0:
             return "", ""
         if st.position <= 0 and getattr(self, "available_usdc", 0) < math.ceil(self.cfg.min_order_usd/st.bid)*st.bid:
             return "", ""

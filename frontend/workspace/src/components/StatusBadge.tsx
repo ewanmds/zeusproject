@@ -21,18 +21,19 @@ export function sessionStatus(
     return { tone: "degraded", label: "Données retardées" };
   const phaseLabel =
     phaseText[session.phase] || session.phase || "État à vérifier";
-  const makerExit =
-    session.phase === "draining" ||
-    session.exit_requested === true ||
-    (!!session.stop_reason && session.cleanup_confirmed !== true);
-  if (makerExit && session.running)
-    return { tone: "online", label: "Sortie maker en cours" };
   if (!session.running && !session.cleanup_confirmed)
     return { tone: "degraded", label: "Arrêt non confirmé" };
   if (["error", "failed"].includes(session.phase))
     return {
       tone: "offline",
       label: session.phase === "error" ? "Erreur" : phaseLabel,
+    };
+  const makerExit =
+    session.phase === "draining" || session.exit_requested === true;
+  if (makerExit && session.running)
+    return {
+      tone: "maintenance",
+      label: session.state === "Ask working" ? "Ask" : "Vente",
     };
   if (session.running)
     return {

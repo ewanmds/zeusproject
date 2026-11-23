@@ -1,0 +1,162 @@
+"""Targeted volume fixes against the restored release; no exchange I/O."""
+from collections import deque
+import json
+from pathlib import Path
+import tempfile
+import time
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+
+from test_outcome_maker_exit import make_bot
+from zeus.bots.worldcup import MarketSpec, MarketState
+from zeus.outcome_rotation import OutcomeRotation
+from zeus.safety import SafetyLatch
+
+
+class FlatRotationTests(unittest.TestCase):
+    def fixture(self, folder, **overrides):
+        now = time.time()
+        row = dict(session_id='one', market='#101', running=True, phase='running',
+                   cleanup_confirmed=False, stale=False, position_known=True,
+                   position_usd=0.0, volume_usd=206, fills=5,
+                   execution_state='Bid working', last_fill_at=now-100)
+        row.update(overrides)
+        owner = SimpleNamespace(procs={'one': {'stop_file': str(Path(folder)/'stop')}},
+                                status=Mock(return_value={'bots': [row]}), start=Mock())
+        rotation = OutcomeRotation(owner)
+        with patch.object(rotation, '_loop'):
+            rotation.register({'session_id': 'one'}, dict(selection_mode='auto', auto_rotate=True,
+                order_size_usd=70, outcome_side='no', auto_rotation_after_sec=60), group_id='group')
+        group = rotation.groups['group']
+        group['started'] = now-300
+        group['samples'] = deque([(now-65, 200)])
+        return rotation, owner, row, now
+
+    def scan(self, now):
+        return dict(ready=True, updated_at=now,
+                    candidates=[dict(market='#111', queue_proxy_sec=10)])
+
+    def test_slow_volume_with_inventory_keeps_trading_without_forced_exit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, owner, row, now = self.fixture(folder, position_usd=73.70)
+            with patch('zeus.outcome_flow.scanner.snapshot') as scan:
+                rotation.tick(now=now)
+            scan.assert_not_called()
+            self.assertFalse((Path(folder)/'drain.json').exists())
+            self.assertEqual(rotation.groups['group']['state'], 'observing')
+            self.assertFalse(rotation.groups['group']['cancelled'])
+            owner.start.assert_not_called()
+            rotation.close()
+
+    def test_unknown_or_invalid_position_never_authorizes_rotation(self):
+        for value, known in ((None, True), (0, False), (float('nan'), True), (False, True)):
+            with self.subTest(position=value, known=known), tempfile.TemporaryDirectory() as folder:
+                rotation, _, _, now = self.fixture(folder, position_usd=value, position_known=known)
+                with patch('zeus.outcome_flow.scanner.snapshot') as scan:
+                    rotation.tick(now=now)
+                scan.assert_not_called()
+                self.assertFalse((Path(folder)/'drain.json').exists())
+                rotation.close()
+
+    def test_flat_worker_can_still_rotate_and_only_requests_order_cleanup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, owner, _, now = self.fixture(folder)
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=self.scan(now)):
+                rotation.tick(now=now)
+            drain = json.loads((Path(folder)/'drain.json').read_text())
+            self.assertEqual(drain['next_market'], '#111')
+            self.assertEqual(rotation.groups['group']['state'], 'draining')
+            self.assertFalse((Path(folder)/'stop').exists())
+            owner.start.assert_not_called()  # old worker has not confirmed cleanup
+            rotation.close()
+
+    def test_fill_during_slow_scan_cancels_the_rotation_decision(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, _, row, now = self.fixture(folder)
+            def scan(*args, **kwargs):
+                row['position_usd'] = 20
+                return self.scan(now)
+            with patch('zeus.outcome_flow.scanner.snapshot', side_effect=scan):
+                rotation.tick(now=now)
+            self.assertFalse((Path(folder)/'drain.json').exists())
+            self.assertEqual(rotation.groups['group']['state'], 'observing')
+            rotation.close()
+
+    def test_manual_stop_during_scan_still_prevents_replacement(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, _, _, now = self.fixture(folder)
+            def scan(*args, **kwargs):
+                rotation.cancel('group')
+                return self.scan(now)
+            with patch('zeus.outcome_flow.scanner.snapshot', side_effect=scan):
+                rotation.tick(now=now)
+            self.assertFalse((Path(folder)/'drain.json').exists())
+            self.assertTrue(rotation.groups['group']['cancelled'])
+            rotation.close()
+
+
+class PartialMakerVolumeTests(unittest.TestCase):
+    def fixture(self, quantity):
+        bot = make_bot(order_size_usd=70, max_position_usd=120)
+        bot.available_usdc = 31.86
+        st = MarketState(MarketSpec('#101', 0, balance_coin='+101'),
+                         position=quantity, available_position=quantity)
+        st.update_bbo(.5, .5001)
+        return bot, st
+
+    def test_partial_inventory_is_offered_without_waiting_for_a_full_order(self):
+        bot, st = self.fixture(40)  # $20, below the previous $63 threshold
+        plan = bot.bilateral_requests(st)
+        self.assertEqual(plan[False]['sz'], 40)
+        self.assertEqual(plan[False]['limit_px'], st.ask)
+        self.assertEqual(plan[False]['order_type']['limit']['tif'], 'Alo')
+        self.assertNotIn(True, plan)  # $31.86 is not permission to resize a $70 buy
+        self.assertEqual(bot.cfg.order_usd, 70)
+        self.assertEqual(bot.cfg.max_position_usd, 120)
+
+    def test_sub_minimum_new_sale_is_not_submitted_but_existing_residual_keeps_queue(self):
+        bot, st = self.fixture(10)  # about $5
+        self.assertNotIn(False, bot.bilateral_requests(st))
+        st.ask_oid, st.ask_quantity, st.quoted_ask = 123, 10, .5002
+        st.available_position = 0
+        order = bot.bilateral_requests(st)[False]
+        self.assertEqual(order['sz'], 10)
+        self.assertEqual(order['limit_px'], .5002)
+
+    def test_executable_partial_ask_tracks_touch_instead_of_sticking_at_old_price(self):
+        bot, st = self.fixture(40)
+        st.ask_oid, st.ask_quantity, st.quoted_ask = 123, 40, .5002
+        st.available_position = 0
+        self.assertEqual(bot.bilateral_requests(st)[False]['limit_px'], st.ask)
+
+    def test_available_tokens_and_order_size_bound_the_sale(self):
+        for quantity, free in ((40, 20), (400, 400)):
+            with self.subTest(quantity=quantity):
+                bot, st = self.fixture(quantity)
+                st.available_position = free
+                order = bot.bilateral_requests(st)[False]
+                self.assertLessEqual(order['sz'], free)
+                self.assertLessEqual(order['sz']*order['limit_px'], 70)
+
+    def test_resting_partial_ask_at_touch_is_not_cancelled_or_duplicated(self):
+        bot, st = self.fixture(40)
+        bot.safety = SafetyLatch(strict_maker_spot=True)
+        bot.safety.phase = 'running'
+        bot.running = True
+        bot.exchange = SimpleNamespace(bulk_cancel=Mock(), order=Mock())
+        bot.can_send_action = Mock(return_value=True)
+        st.ask_oid, st.ask_quantity, st.quoted_ask = 123, 40, st.ask
+        st.available_position = 0
+        bot.place_bilateral(st)
+        bot.exchange.bulk_cancel.assert_not_called()
+        bot.exchange.order.assert_not_called()
+
+    def test_manual_exit_and_stop_loss_remain_sell_only_and_passive(self):
+        bot, st = self.fixture(40)
+        bot.exit_reason = 'Manual stop: maker exit'
+        bot.stats.gross_closed_pnl = -60
+        plan = bot.bilateral_requests(st)
+        self.assertNotIn(True, plan)
+        self.assertEqual(plan[False]['sz'], 40)
+        self.assertEqual(plan[False]['order_type']['limit']['tif'], 'Alo')
