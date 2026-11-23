@@ -746,7 +746,12 @@ class HyperliquidSpreadBot:
                 resolved = set()
                 live_orders = set()
                 for cloid in sorted(gate.pending_cloids):
-                    oid, status = confirmed_client_order(self.info, self.cfg.account_address, cloid, self.states)
+                    try:
+                        oid, status = confirmed_client_order(self.info, self.cfg.account_address, cloid, self.states)
+                    except RuntimeError as exc:
+                        if str(exc) == "Placement still unconfirmed; awaiting client order ID":
+                            continue  # _cleanup_snapshot clears it only when flat
+                        raise
                     gate.owned.add(oid)
                     if status == "open":
                         live_orders.add(oid)
@@ -780,11 +785,17 @@ class HyperliquidSpreadBot:
                 return False
 
     def _cleanup_snapshot(self):
-        resolved, live_orders = set(), set()
+        resolved, live_orders, unresolved = set(), set(), set()
         if (self.safety.stopped.is_set() or self.cfg.resume_exit
                 or self.cfg.resume_trading or self.rotation_requested()):
             for cloid in sorted(self.safety.pending_cloids):
-                oid, status = confirmed_client_order(self.info, self.cfg.account_address, cloid, self.states)
+                try:
+                    oid, status = confirmed_client_order(self.info, self.cfg.account_address, cloid, self.states)
+                except RuntimeError as exc:
+                    if str(exc) == "Placement still unconfirmed; awaiting client order ID":
+                        unresolved.add(cloid)
+                        continue
+                    raise
                 self.safety.owned.add(oid)
                 if status == "open":
                     live_orders.add(oid)
@@ -792,6 +803,18 @@ class HyperliquidSpreadBot:
         rows = account_snapshot(self.info, self.cfg.account_address, list(self.states),
                                 spot=self.cfg.worldcup,
                                 balances={s.spec.symbol: s.spec.balance_coin for s in self.states.values()})
+        if unresolved:
+            open_cloids = {str(order.get("cloid", "")).lower()
+                           for _, _, orders in rows for order in orders if order.get("cloid")}
+            flat = all(abs(finite(position)) <= 1e-9 for _, position, _ in rows)
+            no_orders = all(not orders for _, _, orders in rows)
+            if not (flat and no_orders
+                    and all(str(cloid).lower() not in open_cloids for cloid in unresolved)):
+                raise RuntimeError("Placement still unconfirmed; manual reconciliation required")
+            # The exchange has no open order and the account is flat: the
+            # placement never became an order. Release its reservation instead
+            # of leaving the session blocked forever.
+            resolved.update(unresolved)
         if live_orders - {int(order["oid"]) for _, _, orders in rows for order in orders}:
             raise RuntimeError("Order changed during stop verification")
         if resolved and getattr(self, "funds", None):

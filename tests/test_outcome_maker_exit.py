@@ -391,6 +391,13 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
             sup._auto_recover()
             sup._resume.assert_not_called()
 
+    def test_pending_placement_is_not_auto_resumed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': True,
+                                           'pending_cloids': ['0xabc']})
+            sup._auto_recover()
+            sup._resume.assert_not_called()
+
     def test_unattributed_session_is_left_unresolved(self):
         with tempfile.TemporaryDirectory() as folder:
             sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': False})

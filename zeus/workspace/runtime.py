@@ -7,6 +7,7 @@ import time
 import uuid
 
 from .accounts import AccountContext
+from zeus.safety import safe_error
 
 
 def visible_session(row, kind):
@@ -18,6 +19,13 @@ def visible_session(row, kind):
     config = {k: cfg.get(k) for k in ('selection_mode', 'exec_mode', 'order_size_usd',
               'max_position_usd', 'outcome_side', 'strategy', 'offset_bps', 'auto_max_spread_bps',
               'session_duration_sec', 'target_volume_usd', 'session_expires_at', 'session_stop_loss_usd') if k in cfg}
+    reason = (row.get('error') or row.get('cleanup_error') or row.get('blocked_reason')
+              or row.get('auto_rotation_reason') or row.get('stop_reason') or '')
+    reason = safe_error(reason) if reason else ''
+    if reason.startswith('Placement still unconfirmed'):
+        reason = 'Placement non confirmé : vérification du CLOID en cours'
+    elif reason.startswith('Placement client IDs remain unconfirmed'):
+        reason = 'Placement non confirmé : réconciliation manuelle requise'
     return {'id': row.get('session_id') or row.get('key') or row.get('token'), 'kind': kind,
         'strategy': 'outcome' if kind == 'outcome' else cfg.get('strategy', 'bbo'),
         'name': row.get('market_name') or row.get('symbol') or row.get('market') or row.get('token', 'Session'),
@@ -30,8 +38,7 @@ def visible_session(row, kind):
         'position_usd': row.get('position_usd'), 'stale': bool(row.get('stale')),
         'accounting_complete': bool(complete), 'config': config, 'quotes': row.get('quotes', []),
         'state': row.get('execution_state') or row.get('action') or phase,
-        'reason': row.get('error') or row.get('cleanup_error') or row.get('blocked_reason')
-                  or row.get('auto_rotation_reason') or row.get('stop_reason') or '',
+        'reason': reason,
         'exit_requested': bool(row.get('exit_requested') or phase == 'draining'),
         'stop_reason': row.get('stop_reason') or '',
         'rotations': row.get('auto_rotations', 0)}

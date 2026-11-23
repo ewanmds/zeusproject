@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from zeus.bots.worldcup import HyperliquidSpreadBot
+from zeus.bots.worldcup import HyperliquidSpreadBot, MarketState, MarketSpec
 from zeus.bots.outcome_worker import run_worker
 from zeus.outcome_supervisor import OutcomeSupervisor
 from zeus.outcome_stop import attributable_inventory
@@ -40,6 +40,36 @@ class InventoryAttributionTests(unittest.TestCase):
             info = Mock(user_fills_by_time=Mock(side_effect=pages))
             with self.assertRaises(RuntimeError):
                 attributable_inventory(info, 'wallet', '#101', {7}, 1)
+
+
+class PendingPlacementTests(unittest.TestCase):
+    def bot(self):
+        bot = make_bot()
+        bot.info = Mock()
+        bot.cfg.account_address = 'wallet'
+        st = MarketState(MarketSpec('#101', 0, balance_coin='+101'))
+        bot.states = {'#101': st}
+        bot.safety = SafetyLatch(strict_maker_spot=True)
+        bot.safety.pending_cloids.add('0xabc')
+        bot.rotation_requested = lambda: True
+        return bot
+
+    def test_unknown_cloid_is_cleared_only_when_flat_and_orderless(self):
+        bot = self.bot()
+        with patch('zeus.bots.worldcup.confirmed_client_order',
+                   side_effect=RuntimeError('Placement still unconfirmed; awaiting client order ID')), \
+             patch('zeus.bots.worldcup.account_snapshot', return_value=[('#101', 0, [])]):
+            self.assertEqual(bot._cleanup_snapshot(), [('#101', 0, [])])
+        self.assertFalse(bot.safety.pending_cloids)
+
+    def test_unknown_cloid_with_inventory_stays_unconfirmed(self):
+        bot = self.bot()
+        with patch('zeus.bots.worldcup.confirmed_client_order',
+                   side_effect=RuntimeError('Placement still unconfirmed; awaiting client order ID')), \
+             patch('zeus.bots.worldcup.account_snapshot', return_value=[('#101', 10, [])]):
+            with self.assertRaises(RuntimeError):
+                bot._cleanup_snapshot()
+        self.assertIn('0xabc', bot.safety.pending_cloids)
 
 
 class ManualCloseTests(unittest.TestCase):

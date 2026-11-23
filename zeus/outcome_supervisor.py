@@ -147,6 +147,11 @@ class OutcomeSupervisor:
                         continue  # explicit hard shutdown, never auto-trade again
                 meta = read_json(path) if Path(path).exists() else record
                 meta = meta if isinstance(meta, dict) else record
+                if meta.get('pending_cloids') or record.get('pending_cloids'):
+                    # A fresh worker cannot resolve an unknown placement; keep
+                    # one stable unconfirmed row instead of spawning repeatedly.
+                    self._recovery.pop(sid, None)
+                    continue
                 # The explicit taker grant is durable in the journal even when
                 # a repeated crash leaves no marker on the successor runtime.
                 manual_taker = manual_taker or bool(meta.get('manual_taker_close_requested'))
