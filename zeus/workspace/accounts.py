@@ -41,9 +41,6 @@ class HyperliquidAccounts:
 
     @staticmethod
     def _post(path, data):
-        if path == '/info':
-            from zeus.network import request_info
-            return request_info('https://api.hyperliquid.xyz', data, timeout=8, critical=True)
         r = requests.post('https://api.hyperliquid.xyz'+path, json=data, timeout=8)
         r.raise_for_status(); return r.json()
 

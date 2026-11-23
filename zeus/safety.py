@@ -84,28 +84,9 @@ def supervisor_alive():
 
 
 def safe_error(error):
-    """One bounded sentence; never dump SDK tuples, headers or payloads."""
     text = str(error)
-    status = getattr(error, "status_code", None)
-    response = getattr(error, "response", None)
-    if status is None and response is not None:
-        status = getattr(response, "status_code", None)
-    if status is None:
-        match = re.match(r"^\(?(\d{3})\b", text)
-        if match:
-            status = int(match.group(1))
-    if status == 429:
-        return "Limitation Hyperliquid (429). Reprise automatique."
-    if isinstance(status, int) and status >= 500:
-        return f"Hyperliquid indisponible ({status}). Reprise automatique."
-    if status in (400, 401, 403, 404, 422):
-        return f"Requête Hyperliquid refusée ({status})."
-    # Hyperliquid's ClientError string embeds the full HTTP response mapping.
-    text = re.split(r"\{['\"]Content-Type", text, maxsplit=1)[0]
     text = re.sub(r"(?:0x)?[0-9a-fA-F]{64}\b", "[redacted]", text)
-    text = re.sub(r"(?i)(token|api[_-]?key|private[_-]?key|password|secret)([=: ]+)[^\s&,]+",
-                  r"\1\2[redacted]", text)
-    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"(?i)(token|api[_-]?key|private[_-]?key|password|secret)([=: ]+)[^\s&,]+", r"\1\2[redacted]", text)
     return text[:240]
 
 
@@ -304,16 +285,6 @@ class SafetyLatch:
         self.stop(error)
 
     @contextmanager
-    def bounded_exit_scope(self):
-        """Narrow capability for one post-timeout, sell-only IOC exit."""
-        previous = getattr(self.local, "bounded_exit", False)
-        self.local.bounded_exit = True
-        try:
-            yield
-        finally:
-            self.local.bounded_exit = previous
-
-    @contextmanager
     def manual_close_scope(self):
         """Narrow capability for a manual Stop's explicit reduce-only close.
 
@@ -376,10 +347,6 @@ class SafetyLatch:
                 raise SubmissionSkipped("Passive-only session blocks trigger or implicit market orders")
             tif = order_type["limit"].get("tif")
             if tif == "Alo":
-                continue
-            if (self.strict_maker_spot and getattr(self.local, "bounded_exit", False)
-                    and is_buy is False and tif == "Ioc"):
-                # One bounded, sell-only fallback after the maker timeout.
                 continue
             if not self.strict_maker_spot and manual and reduce_only is True and tif in {"Ioc","Gtc"}:
                 continue

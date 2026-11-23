@@ -1,15 +1,10 @@
 import { usd } from "../../data";
-import { phaseText } from "../../config";
 import type { Session } from "../../types";
 import { DetailTabs } from "../DetailTabs";
 import { SessionProgress } from "../SessionProgress";
 import { InlineAlert } from "../feedback";
 export function SessionDetails({ session }: { session: Session }) {
   const s = session;
-  const volumePerMin =
-    s.volume_usd != null && s.duration_sec > 0
-      ? s.volume_usd / (s.duration_sec / 60)
-      : null;
   const values = (items: [string, string | number][]) => (
     <dl className="summary-list">
       {items.map(([label, value]) => (
@@ -32,14 +27,7 @@ export function SessionDetails({ session }: { session: Session }) {
               <>
                 {values([
                   ["Volume exécuté", usd(s.volume_usd)],
-                  ["Volume / min", usd(volumePerMin)],
-                  ["Volume / heure observé", usd(volumePerMin !== null ? volumePerMin * 60 : null)],
-                  ["Transport d’exécution", s.execution_transport || "—"],
                   ["Fills", s.fills ?? "—"],
-                  [
-                    "Ordres / annulations",
-                    `${s.orders_sent ?? "—"} / ${s.cancels_sent ?? "—"}`,
-                  ],
                   ["Coût / 1M", usd(s.cost_per_1m)],
                 ])}
                 <div className="quote-box">
@@ -79,8 +67,6 @@ export function SessionDetails({ session }: { session: Session }) {
               ["Position valorisée", usd(s.position_usd)],
               ["PnL brut avant frais", usd(s.net_pnl !== null && s.fees !== null ? s.net_pnl + s.fees : null)],
               ["PnL réalisé net", usd(s.net_pnl)],
-              ["PnL latent au bid", usd(s.unrealized_pnl)],
-              ["PnL réalisé + latent", usd(s.marked_net_pnl)],
               ["Frais", usd(s.fees)],
             ]),
           },
@@ -95,7 +81,6 @@ export function SessionDetails({ session }: { session: Session }) {
                   : s.strategy.toUpperCase(),
               ],
               ["Marché", s.market],
-              ["État", phaseText[s.phase] || s.phase || "État à vérifier"],
               ["Côté", s.config.outcome_side || s.config.side || "—"],
               [
                 "Montant par ordre",
@@ -113,20 +98,7 @@ export function SessionDetails({ session }: { session: Session }) {
           },
         ]}
       />
-      {s.stop_reason && (
-        <InlineAlert tone="info">
-          <strong>Motif d’arrêt :</strong> {s.stop_reason}
-        </InlineAlert>
-      )}
-      {s.strategy === "outcome" && !s.running && !s.cleanup_confirmed && (
-        <InlineAlert tone="warning">
-          Arrêt non confirmé. L’inventaire résiduel et les ordres doivent être
-          vérifiés. Un arrêt immédiat conserve les positions et interdit la reprise automatique.
-        </InlineAlert>
-      )}
-      {s.reason && s.reason !== s.stop_reason && (
-        <InlineAlert tone="warning">{s.reason}</InlineAlert>
-      )}
+      {s.reason && <InlineAlert tone="warning">{s.reason}</InlineAlert>}
       <p className="session-id">SESSION {s.id}</p>
     </>
   );

@@ -19,19 +19,13 @@ describe("session status evidence", () => {
     for (const state of ["Fees exceed spread", "Fees unavailable", "Risk paused"])
       expect(sessionStatus({ ...active, state }, false).tone).toBe("online");
   });
-  it("shows a maker exit as pending maintenance, not a false stop", () => {
+  it("shows a maker exit as active, not as a delay", () => {
     expect(
       sessionStatus(
         { ...active, phase: "draining", exit_requested: true },
         false,
       ),
-    ).toEqual({ tone: "maintenance", label: "Sortie maker en cours" });
-    expect(
-      sessionStatus(
-        { ...active, running: false, phase: "failed", stop_reason: "Manual stop" },
-        false,
-      ),
-    ).toEqual({ tone: "degraded", label: "Sortie maker en cours" });
+    ).toEqual({ tone: "online", label: "Sortie maker en cours" });
   });
   it("lets workspace and worker staleness override a working bid", () => {
     for (const [session, stale] of [
@@ -66,11 +60,5 @@ describe("session status evidence", () => {
     expect(sessionStatus({ ...active, phase: "failed" }, false).tone).toBe(
       "offline",
     );
-  });
-  it("distinguishes an unknown phase from a working quote", () => {
-    expect(sessionStatus({ ...active, phase: "mystery" }, false)).toEqual({
-      tone: "degraded",
-      label: "État à vérifier",
-    });
   });
 });

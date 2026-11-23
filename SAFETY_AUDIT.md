@@ -2,27 +2,6 @@
 
 Implemented for Outcome and BBO/MID and their dashboard supervisor.
 
-## 23 November 2026 update
-
-- Outcome Stop now has two explicit modes: `graceful` (maker exit; idempotent)
-  and `cancel_only` (cancel owned orders immediately, no taker sale).
-- Rotation for low volume is flat-only: inventory is never liquidated by a
-  rotation decision. A better market must settle for 30 s and offer a cycle at
-  least 25 % shorter.
-- New Outcome sessions may use `maker_then_ioc`: after 90 s of maker exit, one
-  sell-only IOC may run at most 20 bps below the fresh best bid, bounded by the
-  remaining stop-loss and at most three attempts per minute. Historical
-  sessions without an explicit policy remain `maker_only`.
-- A 40 bps / 10 s adverse move pauses new bids for 8 s; exits, rotation drains
-  and the bounded IOC are never blocked. The IOC fallback is also deferred while
-  the spread exceeds 80 bps.
-- Resume preserves stop-loss, budgets, duration/volume objectives, deadline and
-  counters. Crash recovery remains backend-owned; a hard stop is never resumed.
-- Network 429/5xx errors are classified; `Retry-After`, jittered backoff and
-  interruptible waits replace raw SDK response dumps in the UI.
-- SDK `0.24.0` and `eth-account` `0.13.7` are pinned.
-- Full details and remaining limits: `docs/OUTCOME_HARDENING.md`.
-
 | Defect | Protection |
 | --- | --- |
 | Outcome could submit with `running=False` | Engine check plus serialized exchange gate |

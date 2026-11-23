@@ -174,107 +174,6 @@ class OutcomeQuoteTests(unittest.TestCase):
         self.assertEqual(plan[False]['order_type']['limit']['tif'], 'Alo')
 
 
-class AdverseMoveGuardTests(unittest.TestCase):
-    def test_fast_drop_pauses_bids_but_never_the_exit(self):
-        bot = make_bot()
-        st = MarketState(MarketSpec('#101', 0, balance_coin='+101'),
-                         position=10, available_position=10)
-        st.update_bbo(.30, .3003)
-        now = time.time()
-        st.mid_history = [(now - 5, .34), (now, .30)]
-        st.last_book_ts = now
-        self.assertIn('adverse move', bot.risk_block_reason(st, closing_inventory=False))
-        self.assertIsNone(bot.risk_block_reason(st, closing_inventory=True))
-        # A bid can't be planned while the exit ask remains allowed.
-        plan = bot.bilateral_requests(st)
-        self.assertNotIn(True, plan)
-        self.assertIn(False, plan)
-
-    def test_ioc_fallback_waits_when_spread_is_too_wide(self):
-        bot, st = BoundedExitTests().bot()
-        st.update_bbo(.30, .303)  # ~100 bps > 80 bps exit limit
-        bot.maybe_bounded_exit(st)
-        bot._submit_order.assert_not_called()
-        self.assertIn('spread', st.exit_ioc_blocked)
-
-
-class BoundedExitTests(unittest.TestCase):
-    def bot(self, *, avg_entry=.32, qty=10, bid=.30):
-        bot = HyperliquidSpreadBot.__new__(HyperliquidSpreadBot)
-        bot.cfg = make_config(exit_policy='maker_then_ioc', maker_exit_timeout_sec=90,
-                              exit_slippage_bps=20, exit_taker_fee_bps=10,
-                              session_stop_loss_usd=50)
-        bot.cfg.live = True
-        bot.running = True
-        bot.safety = SafetyLatch(strict_maker_spot=True)
-        bot.safety.phase = 'running'
-        bot.stats = SessionStats()
-        bot.exit_reason = 'Manual stop: maker exit'
-        bot.exit_started = time.time() - 100
-        bot.rotation_requested = lambda: True
-        bot.sync_account = Mock(return_value=True)
-        bot.cancel_all = Mock()
-        bot._submit_order = Mock(return_value={'status': 'ok', 'response': {'data': {
-            'statuses': [{'filled': {'oid': 1}}]}}})
-        bot._parse_order_response = Mock()
-        st = MarketState(MarketSpec('#101', 0, balance_coin='+101'),
-                         position=qty, available_position=qty,
-                         avg_entry_px=avg_entry, entry_basis_source='exchange')
-        st.update_bbo(bid, bid + .0001)
-        bot.states = {'#101': st}
-        return bot, st
-
-    def test_bounded_ioc_is_sell_only_and_respects_20bps(self):
-        latch = SafetyLatch(strict_maker_spot=True)
-        with self.assertRaises(SubmissionSkipped):
-            latch.assert_allowed_action('order', (), {
-                'is_buy': False, 'order_type': {'limit': {'tif': 'Ioc'}}})
-        with latch.bounded_exit_scope():
-            latch.assert_allowed_action('order', (), {
-                'is_buy': False, 'order_type': {'limit': {'tif': 'Ioc'}}})
-            with self.assertRaises(SubmissionSkipped):
-                latch.assert_allowed_action('order', (), {
-                    'is_buy': True, 'order_type': {'limit': {'tif': 'Ioc'}}})
-
-    def test_fallback_sends_one_ioc_below_best_bid_after_timeout(self):
-        bot, st = self.bot()
-        bot.maybe_bounded_exit(st)
-        bot._submit_order.assert_called_once()
-        kwargs = bot._submit_order.call_args.kwargs
-        self.assertFalse(kwargs['is_buy'])
-        self.assertEqual(kwargs['order_type']['limit']['tif'], 'Ioc')
-        self.assertLessEqual(kwargs['limit_px'], .30 * (1 - .002) + 1e-9)
-        self.assertEqual(bot.stats.orders_sent, 1)
-        self.assertEqual(st.last_inventory_exit['submission'], 'bounded_ioc_started')
-
-    def test_loss_budget_blocks_the_fallback(self):
-        bot, st = self.bot(avg_entry=1.0, qty=100, bid=.30)
-        bot.maybe_bounded_exit(st)
-        bot._submit_order.assert_not_called()
-        self.assertIn('budget de perte', st.exit_ioc_blocked)
-
-    def test_unknown_entry_or_rate_limit_blocks(self):
-        bot, st = self.bot(avg_entry=0.0)
-        bot.maybe_bounded_exit(st)
-        bot._submit_order.assert_not_called()
-        self.assertIn('coût d’entrée', st.exit_ioc_blocked)
-        bot, st = self.bot()
-        st.ioc_attempts = [time.time(), time.time(), time.time()]
-        bot.maybe_bounded_exit(st)
-        bot._submit_order.assert_not_called()
-        self.assertIn('3 tentatives', st.exit_ioc_blocked)
-
-    def test_no_fallback_before_timeout_or_for_maker_only(self):
-        bot, st = self.bot()
-        bot.exit_started = time.time()
-        bot.maybe_bounded_exit(st)
-        bot._submit_order.assert_not_called()
-        bot, st = self.bot()
-        bot.cfg.exit_policy = 'maker_only'
-        bot.maybe_bounded_exit(st)
-        bot._submit_order.assert_not_called()
-
-
 class SupervisorEntryTests(unittest.TestCase):
     def supervisor(self):
         sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
@@ -331,21 +230,6 @@ class SupervisorStopTests(unittest.TestCase):
             self.assertFalse(stop_file.exists())
             self.assertTrue(json.loads(drain.read_text())['manual'])
 
-    def test_cancel_only_touches_the_hard_sentinel_without_a_drain(self):
-        with tempfile.TemporaryDirectory() as folder:
-            stop_file = Path(folder) / 'stop'
-            sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
-            sup.manager = SimpleNamespace(lock=threading.RLock())
-            sup.records = lambda: []
-            sup.rotation = SimpleNamespace(cancel=lambda sid: [])
-            sup.procs = {'s1': {'session_id': 's1', 'stop_file': str(stop_file),
-                                'safety_file': str(Path(folder) / 'journal.json'),
-                                'market': '#101',
-                                'proc': SimpleNamespace(poll=lambda: 0)}}
-            sup.stop('s1', mode='cancel_only')
-            self.assertTrue(stop_file.exists())
-            self.assertFalse((Path(folder) / 'drain.json').exists())
-
     def test_stop_is_idempotent_for_a_dead_unconfirmed_session(self):
         with tempfile.TemporaryDirectory() as folder:
             stop_file = Path(folder) / 'stop'
@@ -371,14 +255,12 @@ class SupervisorStopTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sup.resume_exit('s1')
 
-    def test_resume_trading_preserves_old_objectives_and_deadline(self):
+    def test_resume_trading_starts_bid_ask_worker_without_old_targets(self):
         with tempfile.TemporaryDirectory() as folder:
             journal = Path(folder) / 'journal.json'
             journal.write_text(json.dumps({
                 'session_id': 's1', 'exposure_started': True, 'owned_oids': [7],
-                'cloids': ['0xabc'], 'pending_cloids': [],
-                'session_accounting': {'volume_usd': 200, 'net_pnl': -3},
-                'inventory_since': {'#101': 123}, 'exit_started_at': 456}))
+                'cloids': ['0xabc'], 'pending_cloids': []}))
             sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
             sup.procs = {}
             sup.manager = SimpleNamespace(lock=threading.RLock())
@@ -400,15 +282,11 @@ class SupervisorStopTests(unittest.TestCase):
             self.assertTrue(request.resume_trading)
             self.assertFalse(request.resume_exit)
             self.assertTrue(request.auto_rotate)
-            self.assertEqual(request.target_volume_usd, 100)
-            self.assertIsNotNone(request.session_expires_at)
+            self.assertIsNone(request.target_volume_usd)
+            self.assertIsNone(request.session_expires_at)
             seed = sup.start.call_args.kwargs['seed']
             self.assertEqual(seed['resume_from'], 's1')
             self.assertTrue(seed['exposure_started'])
-            self.assertEqual(request.session_volume_carry, 200)
-            self.assertEqual(seed['rotation_pnl_carry'], -3)
-            self.assertEqual(seed['inventory_since'], {'#101': 123})
-            self.assertEqual(seed['exit_started_at'], 456)
 
     def test_resume_starts_exit_only_worker_with_attribution_seed(self):
         with tempfile.TemporaryDirectory() as folder:

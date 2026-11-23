@@ -67,10 +67,6 @@ export default function App() {
     account: "",
     stop: "",
   });
-  const [stopFeedback, setStopFeedback] = useState<{
-    tone: "info" | "warning" | "error";
-    message: string;
-  } | null>(null);
   const mobile = useMobile();
   const owner = w.identity?.wallet;
   const sessions = w.snapshot?.sessions || [];
@@ -106,7 +102,6 @@ export default function App() {
     setSearchOpen(false);
     setNotice("");
     setActionErrors({ run: "", account: "", stop: "" });
-    setStopFeedback(null);
     setReview(null);
     setSelected(null);
     setStop(null);
@@ -319,33 +314,21 @@ export default function App() {
       setBusy("");
     }
   };
-  const stopSession = async (mode: "graceful" | "cancel_only" = "graceful") => {
+  const stopSession = async () => {
     if (!stop) return;
     setBusy("stop");
     setActionErrors((old) => ({ ...old, stop: "" }));
     try {
       const snapshot = await api<Snapshot>(
-        "/sessions/" +
-          encodeURIComponent(stop.id) +
-          "/stop?mode=" +
-          mode,
+        "/sessions/" + encodeURIComponent(stop.id) + "/stop",
         {},
       );
       const resolution = resolveStopSnapshot(snapshot, stop.id);
       setStop(null);
       setSelected(null);
       // A 200 only records the request; never claim a verified stop until the
-      // returned snapshot proves it. Keep the pending state visible in the
-      // workspace, not only in a transient toast.
-      setActionErrors((old) => ({ ...old, stop: "" }));
-      setStopFeedback({
-        tone: resolution.confirmed ? "info" : "warning",
-        message: resolution.confirmed
-          ? resolution.message
-          : mode === "cancel_only"
-            ? "Annulation immédiate demandée. Les ordres de la session sont annulés ; l’inventaire résiduel reste affiché."
-            : resolution.message,
-      });
+      // returned snapshot proves it.
+      setNotice(resolution.message);
       w.refresh();
     } catch (e: any) {
       setActionErrors((old) => ({ ...old, stop: e.message }));
@@ -489,14 +472,6 @@ export default function App() {
         {w.error && (
           <InlineAlert tone="warning" onClose={() => w.setError("")}>
             {w.error}
-          </InlineAlert>
-        )}
-        {stopFeedback && (
-          <InlineAlert
-            tone={stopFeedback.tone}
-            onClose={() => setStopFeedback(null)}
-          >
-            {stopFeedback.message}
           </InlineAlert>
         )}
         {view === "run" && <RunView {...viewProps} />}
@@ -687,18 +662,6 @@ export default function App() {
                     : review.config.market}
                 </dd>
               </div>
-              {review.config.strategy === "outcome" && (
-                <>
-                  <div>
-                    <dt>Sortie</dt>
-                    <dd>Maker puis IOC après 90 s · max 20 bps</dd>
-                  </div>
-                  <div>
-                    <dt>Rotation</dt>
-                    <dd>Uniquement à plat, meilleur marché stable</dd>
-                  </div>
-                </>
-              )}
               <div>
                 <dt>Solde spot disponible</dt>
                 <dd>{usd(review.usdc_available)}</dd>
@@ -768,41 +731,26 @@ export default function App() {
         >
           <p className="modal-description">{stop.name}</p>
           <p>
-            <strong>Arrêter et sortir</strong> bloque les nouveaux achats et
-            vend l’inventaire en post-only au meilleur ask, même à perte.
-            L’arrêt reste en cours jusqu’à vérification du compte.
-          </p>
-          <p>
-            <strong>Arrêt immédiat</strong> annule les ordres de la session sans
-            vente au marché. Tout inventaire résiduel reste affiché et non
-            confirmé.
+            Le moteur annule ses ordres et applique sa procédure de sortie.
+            L’arrêt reste en cours jusqu’à sa vérification.
           </p>
           {actionErrors.stop && <InlineAlert>{actionErrors.stop}</InlineAlert>}
           <div className="dialog-actions">
             <button
-              className="button subtle"
+              className="button secondary"
               onClick={() => setStop(null)}
               disabled={!!busy}
             >
-              Continuer
+              Continuer la session
             </button>
             <FeedbackButton
-              className="button secondary"
-              onClick={() => stopSession("cancel_only")}
-              disabled={!!busy}
-              loading={busy === "stop"}
-              loadingLabel="Annulation en cours"
-            >
-              Arrêt immédiat
-            </FeedbackButton>
-            <FeedbackButton
               className="button danger"
-              onClick={() => stopSession("graceful")}
+              onClick={stopSession}
               disabled={!!busy}
               loading={busy === "stop"}
-              loadingLabel="Sortie maker en cours"
+              loadingLabel="Arrêt en cours"
             >
-              Arrêter et sortir
+              Confirmer l’arrêt
             </FeedbackButton>
           </div>
         </AlertDialog>

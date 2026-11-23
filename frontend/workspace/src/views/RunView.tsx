@@ -9,7 +9,6 @@ import { SegmentedControl } from "../components/SegmentedControl";
 import { FeedbackButton } from "../components/FeedbackButton";
 import { usd, short } from "../data";
 import { strategies } from "../config";
-import { describeScannerDiagnostic } from "../presentation/scanner";
 import type { RunProps } from "../viewTypes";
 const MarketSelect = lazy(() =>
   import("../components/MarketSelect").then((m) => ({
@@ -328,27 +327,16 @@ export function RunView({
                     ? scanner.candidates.length + " éligibles"
                     : scanner?.warming_up
                       ? "Observation…"
-                      : "Vérification des carnets"}
+                      : "En attente de flux"}
                 </span>
               </div>
-              {!scanner?.ready && (
-                (() => {
-                  const diagnostic = describeScannerDiagnostic(
-                    scanner,
-                    draft.spread_bps,
-                  );
-                  return diagnostic ? (
-                    <InlineAlert tone="warning">{diagnostic}</InlineAlert>
-                  ) : null;
-                })()
+              {!scanner?.ready && scanner?.reason && (
+                <InlineAlert tone="warning">{scanner.reason}</InlineAlert>
               )}
               {!!scanner?.candidates?.length && (
                 <DataTable<any>
                   caption="Candidats observés · marché actif dans Sessions"
-                  rows={[...scanner.candidates]
-                    .sort((a, b) => b.volume_usd_1m - a.volume_usd_1m)
-                    .slice(0, 8)}
-                  defaultSort={{ id: "volume", direction: "desc" }}
+                  rows={scanner.candidates.slice(0, 8)}
                   rowKey={(m) => m.market}
                   columns={[
                     {
@@ -395,8 +383,6 @@ export function RunView({
               <RichPopover label="Comprendre le scanner">
                 Le débit est le volume observé en une minute. La file est une
                 estimation ; elle ne garantit pas l’exécution d’un ordre.
-                Le flux reste informatif : aucun volume minimum ni historique
-                de trades n’est requis pour proposer un carnet valide.
                 Le net estimé déduit les frais de clôture du spread ; il ne
                 prévoit pas les variations de prix après l’entrée.
                 Cette estimation ne bloque pas le lancement Auto.

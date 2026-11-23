@@ -1,6 +1,6 @@
 """Public, read-only Outcome taker-flow scanner. Importing opens no sockets.
 
-Executed flow informs ranking; it never blocks book-eligible markets.
+Rank repeated two-way *executed* flow, not resting orders or claimed bots.
 One shared websocket, bounded history, bounded REST shortlist. Never signs.
 """
 from collections import defaultdict, deque
@@ -95,15 +95,6 @@ def before_event(row, now):
     return row.get("category") != "sports" or "scheduledStart" in fields
 
 
-def unobserved_flow():
-    """Unknown activity is diagnostic, never fabricated into eligible trades."""
-    return {"score": 0.0, "eligible": False, "trades_5m": 0, "events_5m": 0,
-            "active_bins_1m": 0, "span_sec": 0, "buy_usd_1m": 0.0,
-            "sell_usd_1m": 0.0, "volume_usd_1m": 0.0, "balanced_usd_1m": 0.0,
-            "last_trade_age_sec": None, "median_gap_sec": None,
-            "buy_tokens_1m": 0.0, "sell_tokens_1m": 0.0}
-
-
 class OutcomeFlowScanner:
     def __init__(self):
         self.lock = threading.RLock()
@@ -121,11 +112,6 @@ class OutcomeFlowScanner:
         self.generation = 0
         self.error = ""
         self.books = {}
-        self.book_targets = set()
-        self.book_retry_at = {}
-        self.preferred_books = set()
-        self.book_cursor = 0
-        self.book_selection_at = 0.0
         self.book_lock = threading.Lock()
         self.snapshot_lock = threading.Lock()
         self.snapshot_cache = {}
@@ -186,8 +172,6 @@ class OutcomeFlowScanner:
                         while not self.stop.is_set() and self.ws is ws and self.connected:
                             with self.lock:
                                 wanted = {f"#{10*outcome+side}" for outcome in self.rows for side in (0, 1)}
-                                wanted = {("trades", c) for c in wanted} | {
-                                    ("l2Book", c) for c in self.book_targets if int(c[1:])//10 in self.rows}
                             # Incremental catalog updates preserve all other queues
                             # and observation history instead of restarting warmup.
                             changes = [("unsubscribe", c) for c in sorted(sent-wanted)]
@@ -195,7 +179,7 @@ class OutcomeFlowScanner:
                             # Send modest batches instead of one frame per 200 ms:
                             # 380 subscriptions used to take 76 s, delaying
                             # readiness long past the 60 s observation window.
-                            for index, (method, (kind, coin)) in enumerate(changes):
+                            for index, (method, coin) in enumerate(changes):
                                 if index and index % 20 == 0:
                                     if self.stop.wait(.5) or self.ws is not ws or not self.connected:
                                         return
@@ -205,9 +189,9 @@ class OutcomeFlowScanner:
                                     valid = int(coin[1:])//10 in self.rows
                                 if method == "subscribe" and not valid:
                                     continue
-                                ws.send(json.dumps({"method": method, "subscription": {"type": kind, "coin": coin}}))
-                                if method == "subscribe": sent.add((kind, coin))
-                                else: sent.discard((kind, coin))
+                                ws.send(json.dumps({"method": method, "subscription": {"type": "trades", "coin": coin}}))
+                                if method == "subscribe": sent.add(coin)
+                                else: sent.discard(coin)
                                 if time.monotonic()-last_ping >= 20:
                                     ws.send(json.dumps({"method": "ping"}))
                                     last_ping = time.monotonic()
@@ -225,9 +209,6 @@ class OutcomeFlowScanner:
             def message(ws, raw):
                 try:
                     payload = json.loads(raw)
-                    if payload.get("channel") == "l2Book":
-                        self.ingest_book(payload.get("data", {}))
-                        return
                     if payload.get("channel") == "subscriptionResponse":
                         subscription = payload.get("data", {}).get("subscription", {})
                         if subscription.get("type") == "trades":
@@ -287,35 +268,19 @@ class OutcomeFlowScanner:
                 except (KeyError, TypeError, ValueError):
                     continue
 
-    def ingest_book(self, book):
-        """Keep exchange timestamps; a stale websocket snapshot stays stale."""
-        try:
-            coin, stamp = str(book["coin"]), float(book["time"])/1000
-            if not math.isfinite(stamp) or not -1 <= time.time()-stamp <= 5:
-                return
-            with self.lock:
-                previous = self.books.get(coin)
-                if previous and float(previous[1].get("time", 0)) > float(book["time"]):
-                    return
-                self.books[coin] = (time.time(), book)
-        except (KeyError, TypeError, ValueError):
-            return
-
     def _book(self, coin):
         with self.lock:
             cached = self.books.get(coin)
-            if cached and time.time()-cached[0] < 4:
-                return cached[1]
-            if time.time() < self.book_retry_at.get(coin, 0):
-                return None
-            self.book_retry_at[coin] = time.time()+5
+        if cached and time.time()-cached[0] < 1:
+            return cached[1]
         try:
-            from zeus.network import request_info
-            book = request_info("https://api.hyperliquid.xyz", {"type": "l2Book", "coin": coin}, timeout=3)
+            r = _http().post("https://api.hyperliquid.xyz/info", json={"type": "l2Book", "coin": coin}, timeout=3)
+            r.raise_for_status()
+            book = r.json()
             with self.lock:
                 self.books[coin] = (time.time(), book)
             return book
-        except (requests.RequestException, RuntimeError, ValueError):
+        except (requests.RequestException, ValueError):
             return None
 
     def snapshot(self, side="no", order_usd=50, max_spread_bps=10, *, account=None):
@@ -325,10 +290,12 @@ class OutcomeFlowScanner:
         with self.snapshot_lock:
             with self.lock:
                 key = (side, order_usd, max_spread_bps, base_rate, self.generation, self.catalog_revision)
-                reusable = self.connected and time.time()-self.catalog_at < 120
+                reusable = (self.connected and time.time()-self.catalog_at < 120
+                            and len(self.subscribed) == 2*len(self.rows))
             entry = self.snapshot_cache.get(key)
             cached_fresh = entry and all(
-                time.time()-r['book_updated_at'] <= 5
+                time.time()-r['book_updated_at'] <= 5 and
+                r['last_trade_age_sec']+time.time()-entry[1]['updated_at'] <= 20
                 for r in entry[1].get('candidates', []))
             if reusable and entry and cached_fresh and time.monotonic()-entry[0] < .4:
                 return copy.deepcopy(entry[1])
@@ -346,20 +313,15 @@ class OutcomeFlowScanner:
             raise ValueError("Invalid Outcome side")
         now = time.time()
         with self.lock:
-            ready = self.connected and bool(self.rows) and now-self.catalog_at < 120
+            ready = (self.connected and bool(self.rows) and len(self.subscribed) == 2*len(self.rows)
+                     and now-self.connected_at >= 60 and now-self.catalog_at < 120)
             generation = self.generation
             status = {"ready": False, "connected": self.connected,
-                      "warming_up": False, "flow_policy": "informational",
+                      "warming_up": self.connected and (now-self.connected_at < 60 or len(self.subscribed) != 2*len(self.rows)),
                       "catalog_stale": now-self.catalog_at >= 120,
                       "observed_sec": max(0, now-self.connected_at) if self.connected else 0,
                       "markets_observed": len(self.subscribed)//2, "markets_total": len(self.rows), "updated_at": now,
-                      "error": self.error, "candidates": [], "side": side,
-                      # Cost never gates volume mode; it is reported only.
-                      "cost_policy": "informational",
-                      # Counts are diagnostic only; limits below are unchanged.
-                      "rejections": {"spread": 0, "depth": 0, "stale": 0, "book": 0,
-                                     "flow": 0, "events": 0, "warmup": 0,
-                                     "catalog": int(now-self.catalog_at >= 120)}}
+                      "error": self.error, "candidates": [], "side": side}
             suffix = "0" if side == "yes" else "1"
             history = {}
             for coin, trades in self.history.items():
@@ -382,56 +344,34 @@ class OutcomeFlowScanner:
                 status["reason"] = "Flux public déconnecté; reconnexion en cours"
             elif status.get("catalog_stale"):
                 status["reason"] = "Catalogue HIP-4 ancien (plus de 120 s); rechargement"
+            elif status.get("warming_up"):
+                status["reason"] = "Observation initiale: %d s / 60 s" % int(status.get("observed_sec") or 0)
             elif detail:
                 status["reason"] = "Aucun candidat: " + detail
             else:
-                status["reason"] = "Aucun carnet frais disponible avec ces paramètres"
+                status["reason"] = "Aucun flux deux sens dans les 5 dernières minutes"
             status["order_usd"] = order_usd
             status["max_spread_bps"] = max_spread_bps
             status["min_depth_usd"] = order_usd
-            status["thresholds"] = {"order_usd": order_usd,
-                                    "min_depth_usd": order_usd,
-                                    "max_spread_bps": max_spread_bps}
-            status["rejections"] = dict(status.get("rejections") or {})
-            status["rejection_counts"] = dict(status["rejections"])
             return status
 
         if not ready:
             return not_ready()
         shortlist = []
         skipped_events = 0
-        for outcome, row in rows.items():
-            coin = f"#{10*outcome+int(suffix)}"
-            if not before_event(row, now):
+        for coin, trades in history.items():
+            row = rows.get(int(coin[1:])//10)
+            if not row or not before_event(row, now):
                 skipped_events += 1
                 continue
-            metric = flow_metrics(history.get(coin, []), now) or unobserved_flow()
-            shortlist.append({**metric, "market": coin, "name": row["name"],
-                              "fee_scale": row.get("fee_scale"),
-                              "deployer_fee_scale": row.get("deployer_fee_scale")})
+            metric = flow_metrics(trades, now)
+            if metric and metric["eligible"]:
+                shortlist.append({**metric, "market": coin, "name": row["name"],
+                                  "fee_scale": row.get("fee_scale"),
+                                  "deployer_fee_scale": row.get("deployer_fee_scale")})
         shortlist.sort(key=lambda r: (-r["volume_usd_1m"], -r["score"], r["market"]))
-        # Observed volume ranks markets; only book/schedule guards admit them.
-        with self.lock:
-            # Keep valid candidates stable for launch/rotation; use remaining
-            # slots to explore the catalog even when no trades were observed.
-            head = [r for r in shortlist if r["volume_usd_1m"] > 0][:16]
-            selected = {r["market"] for r in head}
-            head += [r for r in shortlist if r["market"] not in selected
-                     and r["market"] in self.preferred_books][:max(0, 16-len(head))]
-            selected = {r["market"] for r in head}
-            rest = [r for r in shortlist if r["market"] not in selected]
-            retained = [r for r in shortlist if r["market"] in self.book_targets]
-            if now-self.book_selection_at < 5 and retained:
-                # A newly active high-volume market must not wait behind the
-                # previous exploration batch or a previously pinned candidate.
-                targets = head + [r for r in retained if r["market"] not in selected][:24-len(head)]
-            else:
-                cursor = self.book_cursor % max(1, len(rest))
-                tail = (rest[cursor:]+rest[:cursor])[:24-len(head)]
-                self.book_cursor = (cursor+len(tail)) % max(1, len(rest))
-                targets = head+tail
-                self.book_selection_at = now
-            self.book_targets = {r["market"] for r in targets}
+        # Dollar/minute first; retain freshness, spread, depth and two-way guards.
+        targets = shortlist[:24]
         pool = self._book_executor()
         if pool is None:
             status["connected"] = False
@@ -441,7 +381,7 @@ class OutcomeFlowScanner:
         candidates = []
         fees_not_covered = 0
         cost_unavailable = 0
-        rejected_book = rejected_stale = rejected_depth = rejected_spread = 0
+        rejected_book = rejected_depth = rejected_spread = 0
         widest_spread = 0.0
         deepest_book = 0.0
         for item, book in zip(targets, books):
@@ -453,11 +393,8 @@ class OutcomeFlowScanner:
                 spread = 10000*(ask-bid)/((bid+ask)/2)
                 depth = min(bq*bid, aq*ask)
                 if (not all(map(math.isfinite, (bid, ask, bq, aq, age, spread)))
-                        or not 0 < bid < ask < 1):
+                        or not 0 < bid < ask < 1 or not -1 <= age <= 5):
                     rejected_book += 1
-                    continue
-                if not -1 <= age <= 5:
-                    rejected_stale += 1
                     continue
                 widest_spread = max(widest_spread, spread)
                 deepest_book = max(deepest_book, depth)
@@ -469,15 +406,12 @@ class OutcomeFlowScanner:
                     continue
                 # Queue clearance proxy, not a fill promise; use token flow so
                 # quote token prices cannot distort the displayed queue size.
-                wait_buy = (60*(bq+order_usd/bid)/item["sell_tokens_1m"]
-                            if item["sell_tokens_1m"] > 0 else None)
-                wait_sell = (60*(aq+order_usd/ask)/item["buy_tokens_1m"]
-                             if item["buy_tokens_1m"] > 0 else None)
-                queue = max(wait_buy, wait_sell) if wait_buy is not None and wait_sell is not None else None
+                wait_buy = 60*(bq+order_usd/bid)/item["sell_tokens_1m"]
+                wait_sell = 60*(aq+order_usd/ask)/item["buy_tokens_1m"]
                 item.update(bid=bid, ask=ask, spread_bps=spread,
                     depth_bid_usd=bq*bid, depth_ask_usd=aq*ask,
                     book_updated_at=float(book['time'])/1000,
-                    queue_proxy_sec=queue)
+                    queue_proxy_sec=max(wait_buy, wait_sell))
                 try:
                     item.update(candidate_cost(item, base_rate))
                 except (ValueError, TypeError, KeyError):
@@ -488,64 +422,47 @@ class OutcomeFlowScanner:
                     fees_not_covered += not item['fees_covered']
                 # Cost is informational in volume mode. Neither a negative
                 # estimate nor unavailable fee metadata rejects eligible flow.
-                item["score"] /= (1+(queue or 60)/60)*(1+spread/10)
-                item["flow_eligible"] = item["eligible"]
-                item["eligible"] = True  # admission is established by the book
+                item["score"] /= (1+max(wait_buy, wait_sell)/60)*(1+spread/10)
                 candidates.append(item)
             except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
                 continue
-        # Public USD/min is the primary Auto ranking; queue is a tie breaker.
-        candidates.sort(key=lambda r: (-r["volume_usd_1m"],
-                                       r["queue_proxy_sec"] if r["queue_proxy_sec"] is not None else math.inf,
-                                       -r["score"], r["spread_bps"],
-                                       -min(r["depth_bid_usd"], r["depth_ask_usd"]), r["market"]))
+        # Fills first: the shortest estimated touch queue wins. The balanced-flow
+        # score breaks ties so a dead or one-way book never leads on a stale quote.
+        candidates.sort(key=lambda r: (r["queue_proxy_sec"], -r["score"],
+                                       -r["volume_usd_1m"], r["market"]))
         with self.lock:
             if not self.connected or self.generation != generation or time.time()-self.catalog_at >= 120:
                 return {**status, "connected": False}
             candidates = [r for r in candidates if int(r["market"][1:])//10 in self.rows]
-        candidates = [r for r in candidates if time.time()-r['book_updated_at'] <= 5]
+        candidates = [r for r in candidates if r["last_trade_age_sec"]+time.time()-now <= 20]
         completed = time.time()
         for row in candidates:
-            if row['last_trade_age_sec'] is not None:
-                row['last_trade_age_sec'] += completed-now
-        with self.lock:
-            self.preferred_books = {r["market"] for r in candidates[:12]}
-        rejections = {**status.get("rejections", {}),
-                      "spread": rejected_spread, "depth": rejected_depth,
-                      "stale": rejected_stale, "book": rejected_book,
-                      "flow": 0, "events": skipped_events,
-                      "warmup": 0, "catalog": 0}
+            row['last_trade_age_sec'] += completed-now
         reason = ""
         if not candidates:
             parts = []
             if len(shortlist):
-                parts.append("%d marché(s) examiné(s)" % len(shortlist))
+                parts.append("%d marché(s) avec flux" % len(shortlist))
             if rejected_book:
-                parts.append("%d carnet(s) absent(s) ou invalide(s)" % rejected_book)
-            if rejected_stale:
-                parts.append("%d carnet(s) périmé(s)" % rejected_stale)
+                parts.append("%d carnet(s) absent(s) ou périmé(s)" % rejected_book)
             if rejected_depth:
                 parts.append("%d profondeur(s) < %g $ (max %g $)"
                              % (rejected_depth, order_usd, round(deepest_book, 2)))
             if rejected_spread:
                 parts.append("%d spread(s) > %g bps (min observé %g bps)"
                              % (rejected_spread, max_spread_bps, round(widest_spread, 2)))
+            if not parts and skipped_events:
+                parts.append("%d marché(s) sans flux récent" % skipped_events)
             reason = ("Aucun candidat: " + "; ".join(parts)) if parts else \
-                     "Aucun carnet frais disponible avec ces paramètres"
+                     "Aucun flux deux sens dans les 5 dernières minutes"
         return {**status, "ready": bool(candidates), "warming_up": False, "candidates": candidates,
                 "reason": reason,
-                "rejections": rejections, "rejection_counts": dict(rejections),
-                "thresholds": {"order_usd": order_usd, "min_depth_usd": order_usd,
-                               "max_spread_bps": max_spread_bps,
-                               "widest_spread_bps": round(widest_spread, 2),
-                               "deepest_book_usd": round(deepest_book, 2)},
                 "fees_not_covered": fees_not_covered, "cost_unavailable": cost_unavailable,
                 "cost_policy": "informational",
                 "order_usd": order_usd, "max_spread_bps": max_spread_bps,
                 "min_depth_usd": order_usd,
-                "updated_at": completed, "ranking": "volume_usd_1m",
-                "flow_candidates": sum(r["trades_5m"] > 0 for r in shortlist),
-                "markets_checked": len(shortlist), "books_checked": len(books)}
+                "updated_at": completed, "ranking": "queue_proxy_sec",
+                "flow_candidates": len(shortlist), "books_checked": len(books)}
 
     def close(self):
         self.stop.set()
@@ -600,7 +517,7 @@ def no_fill_grace(config, selection):
     queue = float((selection or {}).get('queue_proxy_sec') or 0)
     # Give a newly joined queue a reasonable chance; never extend the user's
     # configured observation window. This remains an estimate, not a promise.
-    return min(window, max(180, queue*1.25))
+    return min(window, max(60, queue*1.25))
 
 
 def candidate_rank(candidate, results, now):
@@ -608,7 +525,5 @@ def candidate_rank(candidate, results, now):
     failures = min(3, previous.get('zero_fill_attempts', 0))
     age = max(0, now-previous.get('updated_at', now))
     penalty = 1+failures*math.exp(-age/1800)
-    queue = candidate.get('queue_proxy_sec')
-    return (-float(candidate.get('volume_usd_1m', 0)),
-            (float(queue) if queue is not None else math.inf)*penalty,
-            -float(candidate.get('score', 0)), candidate['market'])
+    return (float(candidate.get('queue_proxy_sec', math.inf))*penalty,
+            -float(candidate.get('score', 0)), -float(candidate.get('volume_usd_1m', 0)), candidate['market'])

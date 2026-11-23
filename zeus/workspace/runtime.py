@@ -7,7 +7,6 @@ import time
 import uuid
 
 from .accounts import AccountContext
-from zeus.safety import safe_error
 
 
 def visible_session(row, kind):
@@ -19,9 +18,6 @@ def visible_session(row, kind):
     config = {k: cfg.get(k) for k in ('selection_mode', 'exec_mode', 'order_size_usd',
               'max_position_usd', 'outcome_side', 'strategy', 'offset_bps', 'auto_max_spread_bps',
               'session_duration_sec', 'target_volume_usd', 'session_expires_at', 'session_stop_loss_usd') if k in cfg}
-    reason = (row.get('error') or row.get('cleanup_error') or row.get('startup_wait') or row.get('blocked_reason')
-              or row.get('auto_rotation_reason') or row.get('stop_reason') or '')
-    reason = safe_error(reason) if reason else ''
     return {'id': row.get('session_id') or row.get('key') or row.get('token'), 'kind': kind,
         'strategy': 'outcome' if kind == 'outcome' else cfg.get('strategy', 'bbo'),
         'name': row.get('market_name') or row.get('symbol') or row.get('market') or row.get('token', 'Session'),
@@ -30,16 +26,12 @@ def visible_session(row, kind):
         'started': row.get('started', 0), 'duration_sec': row.get('duration_sec', 0),
         'volume_usd': row.get('volume_usd') if complete else None,
         'net_pnl': row.get('net_pnl') if complete else None, 'fees': row.get('fees') if complete else None,
-        'fills': row.get('fills') if complete else None,
-        'orders_sent': row.get('orders_sent'), 'cancels_sent': row.get('cancels_sent'),
-        'cost_per_1m': row.get('cost_per_1m') if complete else None,
+        'fills': row.get('fills') if complete else None, 'cost_per_1m': row.get('cost_per_1m') if complete else None,
         'position_usd': row.get('position_usd'), 'stale': bool(row.get('stale')),
-        'unrealized_pnl': row.get('unrealized_pnl') if not row.get('stale') else None,
-        'marked_net_pnl': row.get('marked_net_pnl') if complete else None,
-        'execution_transport': row.get('execution_transport'),
         'accounting_complete': bool(complete), 'config': config, 'quotes': row.get('quotes', []),
         'state': row.get('execution_state') or row.get('action') or phase,
-        'reason': reason,
+        'reason': row.get('error') or row.get('cleanup_error') or row.get('blocked_reason')
+                  or row.get('auto_rotation_reason') or row.get('stop_reason') or '',
         'exit_requested': bool(row.get('exit_requested') or phase == 'draining'),
         'stop_reason': row.get('stop_reason') or '',
         'rotations': row.get('auto_rotations', 0)}
@@ -53,14 +45,6 @@ class Runtimes:
         self.guard = threading.RLock()
         self.source = uuid.uuid4().hex
         self.revisions = {}
-        self.recovery_enabled = False
-
-    def start_recovery(self):
-        self.recovery_enabled = True
-        for manager in list(self.items.values()):
-            start = getattr(manager.outcome, 'start_recovery', None)
-            if callable(start):
-                start()
 
     def tenant_lock(self, owner):
         with self.guard: return self.locks.setdefault(owner, threading.RLock())
@@ -76,10 +60,6 @@ class Runtimes:
                 context = AccountContext(owner, owner, agent['address'] if agent else '',
                                          agent['private_key'] if agent else '')
                 self.items[owner] = factory(state_dir=self.root/'tenants'/owner[2:], account_context=context)
-                if getattr(self, 'recovery_enabled', False):
-                    start = getattr(self.items[owner].outcome, 'start_recovery', None)
-                    if callable(start):
-                        start()
             return self.items[owner]
 
     def invalidate(self, owner):
@@ -182,9 +162,6 @@ class Runtimes:
         return result
 
     def launch(self, owner, payload):
-        from zeus.maintenance import maintenance_active
-        if maintenance_active():
-            raise ValueError('Mise à jour du workspace en cours ; lancement temporairement suspendu')
         from zeus.server import WorldcupStartRequest, GridStartRequest, manager as legacy
         with self.tenant_lock(owner):
             context = self.accounts.context(owner)  # Independently verify current approval before launch.
@@ -203,8 +180,6 @@ class Runtimes:
                       # session stays visible under one auto_group_id; it never
                       # ends unless the user presses Stop.
                       auto_rotate=True, auto_rotation_after_sec=180,
-                      exit_policy='maker_then_ioc', maker_exit_timeout_sec=90,
-                      exit_slippage_bps=20,
                       session_duration_sec=payload.get('duration_sec'), target_volume_usd=payload.get('target_volume_usd'),
                       session_stop_loss_usd=payload.get('stop_loss_usd', 50))
                 result = manager.start_worldcup(req)
@@ -217,16 +192,14 @@ class Runtimes:
             self.invalidate(owner)
             return result
 
-    def stop(self, owner, session_id, mode='graceful'):
-        if mode not in ('graceful', 'cancel_only'):
-            raise ValueError('Unknown Outcome stop mode')
+    def stop(self, owner, session_id):
         with self.tenant_lock(owner):
             self.invalidate(owner)
             row = next((s for s in self.snapshot(owner)['sessions'] if s['id'] == session_id), None)
             if not row: raise KeyError('Session not found')
             if not row['running'] and row['cleanup_confirmed']: return self.snapshot(owner)
             manager = self.manager(owner)
-            if row['kind'] == 'outcome': manager.stop_worldcup(session_id, mode)
+            if row['kind'] == 'outcome': manager.stop_worldcup(session_id)
             else:
                 # Resolve only this tenant's known Grid identity to its actual token.
                 token = next((key for key, info in manager.obi_procs.items()

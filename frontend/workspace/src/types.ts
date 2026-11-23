@@ -29,7 +29,6 @@ export interface Balance {
 }
 export interface Config {
   walletconnect_project_id: string;
-  ws_origin?: string;
   features: { pause: boolean; session_targets: boolean };
 }
 export interface Draft {
@@ -68,13 +67,8 @@ export interface Session {
   net_pnl: number | null;
   fees: number | null;
   fills: number | null;
-  orders_sent?: number | null;
-  cancels_sent?: number | null;
   cost_per_1m: number | null;
   position_usd: number | null;
-  unrealized_pnl?: number | null;
-  marked_net_pnl?: number | null;
-  execution_transport?: string;
   stale: boolean;
   accounting_complete: boolean;
   state: string;

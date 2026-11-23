@@ -22,7 +22,6 @@ from typing import Literal
 
 from zeus import PROJECT_ROOT
 from zeus.safety import safe_error
-from zeus.network import HyperliquidError
 from .storage import Store
 from .accounts import HyperliquidAccounts
 from .runtime import Runtimes
@@ -37,19 +36,13 @@ class Settings:
     walletconnect_id: str = ''
     production: bool = False
     warm_catalogs: bool = True
-    extra_origins: str = ''
-    # Public origin the browser should open the WebSocket against when the
-    # frontend is served from another host (Vercel). Empty means same-origin.
-    ws_origin: str = ''
 
     @classmethod
     def environment(cls):
         return cls(Path(os.getenv('ZEUS_WORKSPACE_STATE', PROJECT_ROOT/'.zeus-workspace')),
                    os.getenv('ZEUS_WORKSPACE_ORIGIN', 'http://127.0.0.1:8081').rstrip('/'),
                    os.getenv('ZEUS_WORKSPACE_DATABASE_URL', ''), os.getenv('ZEUS_WORKSPACE_KEY', ''),
-                   os.getenv('ZEUS_WALLETCONNECT_PROJECT_ID', ''), os.getenv('ZEUS_WORKSPACE_PRODUCTION') == '1',
-                   extra_origins=os.getenv('ZEUS_WORKSPACE_EXTRA_ORIGINS', 'https://3-113-242-142.sslip.io'),
-                   ws_origin=os.getenv('ZEUS_WORKSPACE_WS_ORIGIN', 'wss://3-113-242-142.sslip.io'))
+                   os.getenv('ZEUS_WALLETCONNECT_PROJECT_ID', ''), os.getenv('ZEUS_WORKSPACE_PRODUCTION') == '1')
 
 
 class Input(BaseModel):
@@ -98,18 +91,13 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
     store = Store(url, settings.encryption_key)
     accounts = accounts_factory(store)
     runtimes = Runtimes(settings.root, store, accounts, manager_factory)
-    allowed_origins = {settings.origin.rstrip('/')}
-    allowed_origins.update(origin.strip().rstrip('/') for origin in settings.extra_origins.split(',')
-                           if origin.strip())
+    allowed_origins = {settings.origin}
     if not settings.production: allowed_origins.update({'http://127.0.0.1:5173', 'http://localhost:5173'})
     secure = settings.origin.startswith('https://')
     cookie = 'zeus_workspace'
-    ws_tickets = {}
-    ws_tickets_lock = threading.Lock()
 
     @asynccontextmanager
     async def lifespan(app):
-        runtimes.start_recovery()
         # Scanner/catalog lifetime belongs to this process, not the old server.
         from zeus.server import _warm_public_catalogs, public_catalogs
         warming = asyncio.create_task(_warm_public_catalogs()) if settings.warm_catalogs else None
@@ -153,14 +141,6 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
     async def invalid(request, exc):
         return JSONResponse({'detail': safe_error(exc)}, status_code=400)
 
-    @app.exception_handler(HyperliquidError)
-    async def read_unavailable(request, exc):
-        status = 429 if exc.status == 429 else 503
-        headers = ({'Retry-After': str(max(1, int(exc.retry_after + .999)))}
-                   if exc.retry_after is not None else {})
-        return JSONResponse({'detail': safe_error(exc), 'kind': exc.kind},
-                            status_code=status, headers=headers)
-
     async def exchange_unavailable(request, exc):
         return JSONResponse({'detail': 'Hyperliquid temporarily unavailable. Verify the last operation before retrying.'}, status_code=503)
     for error_type in requests_error_types():
@@ -168,11 +148,8 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
 
     @app.get('/api/v2/config')
     def config():
-        from zeus.version import build_revision
         return {'walletconnect_project_id': settings.walletconnect_id, 'origin': settings.origin,
-                'ws_origin': settings.ws_origin.rstrip('/'),
-                'features': {'pause': False, 'session_targets': True}, 'version': 'workspace-1',
-                'build_revision': build_revision()}
+                'features': {'pause': False, 'session_targets': True}, 'version': 'workspace-1'}
 
     attempts = {}
     attempts_lock = threading.Lock()
@@ -315,9 +292,8 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         return {'command': key, 'phase': row['phase'], 'result': row['result']}
 
     @app.post('/api/v2/sessions/{sid}/stop')
-    def stop(sid: str, mode: Literal['graceful', 'cancel_only'] = 'graceful',
-             who=Depends(mutation)):
-        try: return runtimes.stop(who['wallet'], sid, mode)
+    def stop(sid: str, who=Depends(mutation)):
+        try: return runtimes.stop(who['wallet'], sid)
         except KeyError: raise HTTPException(404, 'Session not found')
 
     @app.post('/api/v2/sessions/{sid}/resume-exit')
@@ -336,45 +312,17 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
     def reconcile(who=Depends(mutation)):
         return runtimes.reconcile(who['wallet'])
 
-    @app.get('/api/v2/ws-ticket')
-    def ws_ticket(who=Depends(identity)):
-        """Short ticket so a cross-host frontend can open the WS directly."""
-        now = time.time()
-        with ws_tickets_lock:
-            for key, (_, expires) in list(ws_tickets.items()):
-                if expires < now: ws_tickets.pop(key, None)
-            ticket = secrets.token_urlsafe(32)
-            ws_tickets[ticket] = (who['wallet'], now + 60)
-        origin = (settings.ws_origin or settings.origin).rstrip('/')
-        origin = origin.replace('https://', 'wss://', 1).replace('http://', 'ws://', 1)
-        return {'ticket': ticket, 'url': origin + '/api/v2/ws?ticket=' + ticket,
-                'expires_in': 60}
-
     @app.websocket('/api/v2/ws')
     async def live(ws: WebSocket):
         if ws.headers.get('origin') not in allowed_origins:
             await ws.close(code=1008); return
         token = ws.cookies.get(cookie)
-        ticket = ws.query_params.get('ticket', '')
-        wallet = None
-        if ticket:
-            with ws_tickets_lock:
-                entry = ws_tickets.pop(ticket, None)
-            if entry and entry[1] >= time.time():
-                wallet = entry[0]
-        if wallet is None:
-            who = await asyncio.to_thread(store.identity, token)
-            if not who: await ws.close(code=1008); return
-            wallet = who['wallet']
-            valid = lambda: bool(store.identity(token))
-        else:
-            # A one-time ticket authenticates this connection; it never grants
-            # HTTP mutation rights and expires after 60 seconds at exchange.
-            valid = lambda: True
+        who = await asyncio.to_thread(store.identity, token)
+        if not who: await ws.close(code=1008); return
         await ws.accept()
         try:
-            while await asyncio.to_thread(valid):
-                try: await ws.send_json(await asyncio.to_thread(runtimes.snapshot, wallet))
+            while await asyncio.to_thread(store.identity, token):
+                try: await ws.send_json(await asyncio.to_thread(runtimes.snapshot, who['wallet']))
                 except (OSError, ValueError): await ws.send_json({'type': 'delayed'})
                 await asyncio.sleep(1)
             await ws.close(code=1008)

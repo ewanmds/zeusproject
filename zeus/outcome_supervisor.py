@@ -37,16 +37,9 @@ class OutcomeSupervisor:
         self._recovery = {}
         self._recovery_lock = threading.Lock()
         self._closed = threading.Event()
-        self._recovery_thread = None
-
-    def start_recovery(self):
-        """Enable recovery only in a running backend, never on import/audit."""
-        with self._recovery_lock:
-            if self._closed.is_set() or self._recovery_thread is not None:
-                return
-            self._recovery_thread = threading.Thread(
-                target=self._recovery_loop, name="outcome-auto-recover", daemon=True)
-            self._recovery_thread.start()
+        self._recovery_thread = threading.Thread(
+            target=self._recovery_loop, name="outcome-auto-recover", daemon=True)
+        self._recovery_thread.start()
 
     def records(self):
         return [(p, r) for p, r in self.manager._session_files() if r.get("account_kind") == "outcome"]
@@ -67,28 +60,12 @@ class OutcomeSupervisor:
             self._stats_cache[path] = (key, snap)
         return snap
 
-    @staticmethod
-    def _drain_intent(record):
-        """Read the persisted maker-exit request, if any. Never blocks."""
-        stop_file = record.get("stop_file")
-        if not stop_file:
-            return {}
-        path = Path(stop_file).with_name("drain.json")
-        try:
-            if not path.exists():
-                return {}
-            request = read_json(path)
-        except (OSError, ValueError):
-            # A file racing an atomic replace is not proof of an exit request.
-            return {}
-        return request if isinstance(request, dict) else {}
-
     def close(self):
         self._closed.set()
-        self.rotation.close()  # close replacement admission before waiting on I/O
         thread = getattr(self, "_recovery_thread", None)
         if thread is not None and thread.is_alive():
             thread.join(timeout=2)
+        self.rotation.close()
 
     def _recovery_loop(self):
         log = logging.getLogger(__name__)
@@ -183,9 +160,6 @@ class OutcomeSupervisor:
                         "Outcome auto-recovery %s failed (%s): %s", sid, failures, detail)
 
     def start(self, request, *, rotation_group=None, seed=None):
-        from zeus.maintenance import maintenance_active
-        if maintenance_active() and not getattr(request, 'resume_exit', False):
-            raise ValueError('Mise à jour du workspace en cours ; nouvelles entrées suspendues')
         self.rotation.assert_admission(rotation_group)
         from zeus import outcomes
         if getattr(request, "exec_mode", "maker") != "maker":
@@ -206,7 +180,7 @@ class OutcomeSupervisor:
                               and self.rotation.candidate_allowed(rotation_group, r["market"])), None)
             if not snapshot["ready"]:
                 raise ValueError(snapshot.get('reason') or snapshot.get('error')
-                                 or "No fresh market book within the spread and depth limits.")
+                                 or "No eligible recent two-way flow within the spread and depth limits. Wait for observation.")
             if selection is None:
                 raise ValueError("Tous les marchés éligibles sont déjà occupés par une session")
             selected = selection["market"]
@@ -238,10 +212,6 @@ class OutcomeSupervisor:
             public['session_expires_at'] = time.time()+public['session_duration_sec']
         public["market"] = market
         public["outcome_side"] = side
-        # Every Outcome leg is an exit-capable post-only maker quoting at the
-        # touch; drafts cannot select taker or a wider offset.
-        public["exec_mode"] = "maker"
-        public["maker_spread_pct"] = None
         if selection is not None:
             public["two_sided"] = True
             public["rotation_pnl_carry"] = self.rotation.groups[rotation_group].get("pnl_carry", 0) if rotation_group else 0
@@ -249,8 +219,6 @@ class OutcomeSupervisor:
             public["auto_selection"] = {**selection, "selected_at": time.time()}
             # Quote at touch instead of improving a spread chosen in a draft.
             public["maker_spread_pct"] = None
-        if seed and "rotation_pnl_carry" in seed:
-            public["rotation_pnl_carry"] = finite(seed["rotation_pnl_carry"])
         if self.root is None:
             self.temporary = tempfile.TemporaryDirectory(prefix="zeus-offline-")
             self.root = Path(self.temporary.name)
@@ -287,7 +255,7 @@ class OutcomeSupervisor:
                       "stop_file": str(stop_file), "stats_file": str(stats_file), "pid": os.getpid()}
             # A resumed exit must be able to claim exactly the inventory and
             # client IDs the interrupted session already published.
-            for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids", "inventory_since", "exit_started_at"):
+            for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids"):
                 if seed and key in seed:
                     record[key] = seed[key]
             atomic_json(journal, record)
@@ -350,19 +318,11 @@ class OutcomeSupervisor:
         # Keep metadata frozen, but use the newest real lifecycle publication.
         lifecycle = snap if snap.get("ts", 0) >= (record.get("ts") or 0) else record
         phase = lifecycle.get("phase", phase)
-        drain = self._drain_intent(record)
-        drain_reason = str(drain.get("reason") or "")
-        hard_stop = bool(record.get("stop_file") and Path(record["stop_file"]).exists())
-        confirmed = not alive and record.get("cleanup_confirmed") is True
-        exit_requested = bool(lifecycle.get("exit_requested") or drain) and not confirmed
-        # The persisted drain request is authoritative even before the worker
-        # publishes its own exit intent. A hard-stop sentinel keeps precedence.
-        if alive and exit_requested and not hard_stop and phase != "failed":
-            phase = "draining"
         if lifecycle.get("exit_requested") and phase == "running":
             phase = "draining"
         if not alive and not record.get("cleanup_confirmed"):
             phase = "failed"
+        confirmed = not alive and record.get("cleanup_confirmed") is True
         complete = all(key in snap for key in ("volume_usd", "net_pnl", "fees", "fills", "duration_sec"))
         # "Stale" means the worker stopped publishing, never that accounting is
         # still being completed. A warm worker whose first snapshot lacks a
@@ -370,8 +330,6 @@ class OutcomeSupervisor:
         # the launch time is the reference with a short startup grace.
         last_ts = float(snap.get("ts", 0) or 0)
         reference = last_ts or float(record.get("started", 0) or 0)
-        if phase == "connecting" and lifecycle.get("startup_wait") and not lifecycle.get("exposure_started"):
-            reference = float(lifecycle.get("ts", reference))
         stale = bool(alive and reference and time.time() - reference > 10)
         entry = {**record, **snap, "session_id": session_id, "market": record.get("symbols", [""])[0],
                  "config": record.get("config", {}), "started": record.get("started", snap.get("started", 0)),
@@ -381,13 +339,11 @@ class OutcomeSupervisor:
                  "pid": info["proc"].pid if info else record.get("pid"), "running": alive,
                  "phase": phase, "stale": stale, "cleanup_confirmed": confirmed,
                  "can_start": confirmed, "accounting_complete": complete,
-                 "exit_requested": bool(exit_requested or (alive and phase == "draining")),
-                 "stop_reason": (drain_reason or lifecycle.get("stop_reason")
-                                 or record.get("stop_reason") or ""),
-                 # A draining session may still sell inventory passively, but
-                 # it must never be presented as quoting normally.
-                 "quoting_enabled": bool(alive and not stale and phase == "running"
-                                          and not exit_requested),
+                 "exit_requested": bool(lifecycle.get("exit_requested")
+                                        or (alive and phase == "draining")),
+                 "stop_reason": lifecycle.get("stop_reason", ""),
+                 "quoting_enabled": bool(alive and not stale
+                                          and phase in {"running", "draining"}),
                  "position_known": confirmed or bool(lifecycle.get("position_known") and not stale
                                                        and snap.get("position_usd") is not None)}
         for key in ("volume_usd", "net_pnl", "fees", "fills", "duration_sec"):
@@ -480,9 +436,7 @@ class OutcomeSupervisor:
             "active_markets": metrics["active_markets"],
             "can_start": not self.manager._corrupt_journals,
             "phase": "running" if metrics["running"] else "stopped",
-            # Aggregate every tracked member, including an older leg that a
-            # newer confirmed sibling must never hide.
-            "cleanup_confirmed": all(e["cleanup_confirmed"] for e in all_entries.values()),
+            "cleanup_confirmed": all(b["cleanup_confirmed"] for b in bots),
             "stale": metrics["stale"],
             "partial_stale": any(b["stale"] for b in bots),
             "accounting_complete": metrics["accounting_complete"],
@@ -521,76 +475,35 @@ class OutcomeSupervisor:
             return True
 
     def _request_maker_exit(self, info, reason):
-        """Persist an exit-only intent. Never kills the worker or sells taker."""
+        """Record an exit-only intent. Never kills the worker and never sells taker."""
         path = self._drain_path(info)
         if path is None:
             return
         try:
-            # Rewriting the same durable request is idempotent. Include both
-            # `manual_stop` (task contract) and `manual` (existing consumers).
-            atomic_json(path, {"requested_at": time.time(), "reason": reason,
-                               "session_finished": True, "manual_stop": True,
-                               "manual": True})
+            if not path.exists():
+                atomic_json(path, {"requested_at": time.time(), "reason": reason,
+                                   "session_finished": True, "manual": True})
         except OSError as exc:
             raise RuntimeError("Outcome exit journal unavailable: " + safe_error(exc)) from exc
 
-    def _stop_or_force(self, info, reason, *, targeted=False, mode="graceful"):
-        """Graceful persists a maker exit; cancel_only closes the execution gate.
+    def stop(self, session_id=None):
+        """Record a maker-exit request. Returns ids whose request was accepted.
 
-        `graceful` is idempotent: repeated clicks rewrite the same request and
-        never change the policy. `cancel_only` touches the hard-stop sentinel,
-        which cancels owned orders without any taker sale and leaves any
-        residual inventory unresolved and visible.
+        A 200 here means "exit requested", not "position closed". The worker
+        keeps running and publishes phase=draining until an independent flat
+        account confirms the stop. Repeated clicks are idempotent.
         """
-        if mode == "cancel_only":
-            stop_file = info.get("stop_file")
-            if stop_file:
-                try:
-                    Path(stop_file).touch()
-                except OSError as exc:
-                    raise RuntimeError("Outcome stop signal unavailable: "
-                                       + safe_error(exc)) from exc
-            return "cancelled"
-        self._request_maker_exit(info, reason)
-        return "requested"
-
-    def stop(self, session_id=None, mode="graceful"):
-        """Record an exit request and return without waiting for the worker.
-
-        `graceful` means "stop and exit": cancel orders, sell inventory maker,
-        and fall back to a bounded IOC after the configured delay. `cancel_only`
-        means "immediate stop": close entries, cancel owned orders, and report
-        residual inventory without any taker sale. A 200 only records the
-        request; the snapshot proves the account state.
-        """
-        if mode not in {"graceful", "cancel_only"}:
-            raise ValueError("Unknown Outcome stop mode")
-        # cancel() takes the same lock used for replacement admission, so no
-        # rotation launch can slip behind this Stop.
         chain_targets = self.rotation.cancel(session_id)
-        # An archived confirmed leg may still own an active descendant through
-        # its logical auto group. Include that whole chain, not just the exact
-        # worker id that was clicked.
-        related = [(p, r) for p, r in self.records()
-                   if session_id is None or r.get("session_id") == session_id
-                   or (r.get("config") or {}).get("auto_group_id") == session_id]
-        group_ids = {session_id} if session_id is not None else set()
-        for _, record in related:
-            group = (record.get("config") or {}).get("auto_group_id")
-            if group:
-                group_ids.add(group)
-        if group_ids:
-            related = [(p, r) for p, r in self.records()
-                       if r.get("session_id") in group_ids
-                       or (r.get("config") or {}).get("auto_group_id") in group_ids]
         with self.manager.lock:
             targets = [info for sid, info in self.procs.items()
                        if session_id is None or sid == session_id or sid in chain_targets
-                       or (info.get("config") or {}).get("auto_group_id") in group_ids]
-        reason = ("Immediate cancel: cancel orders" if mode == "cancel_only"
-                  else "Manual stop: maker exit")
+                       or (info.get("config") or {}).get("auto_group_id") == session_id]
+        reason = ("Manual stop: maker exit" if session_id is not None
+                  else "Stop all: maker exit")
         if session_id is not None and not targets:
-            matching = [r for _, r in related]
+            matching = [r for _, r in self.records()
+                        if r.get("session_id") == session_id
+                        or (r.get("config") or {}).get("auto_group_id") == session_id]
             if not matching:
                 raise RuntimeError("Session unavailable or interrupted; reconcile its stop first")
             # A grouped row must surface its unconfirmed leg, never a hidden
@@ -601,21 +514,23 @@ class OutcomeSupervisor:
                     raise RuntimeError("An Outcome worker is still active on this market; stop it first")
                 return [session_id]
             for record in pending:
-                self._stop_or_force(record, reason, targeted=True, mode=mode)
-            return list(dict.fromkeys([session_id]
-                                      + [r.get("session_id") for r in pending
-                                         if r.get("session_id")]))
-        requested_ids = []
+                self._request_maker_exit(record, reason)
+            return [session_id]
         for info in targets:
-            self._stop_or_force(info, reason, targeted=session_id is not None, mode=mode)
-            requested_ids.append(info["session_id"])
+            self._request_maker_exit(info, reason)
         if session_id is None:
             attached = {info["session_id"] for info in targets}
             for _, record in self.records():
                 if record.get("session_id") not in attached and not record.get("cleanup_confirmed"):
-                    self._stop_or_force(record, reason, mode=mode)
-                    requested_ids.append(record.get("session_id"))
-        return list(dict.fromkeys(sid for sid in requested_ids if sid))
+                    self._request_maker_exit(record, reason)
+        # Let a fast, already-flat exit confirm, but never kill a worker whose
+        # passive sell is still waiting for a counterparty.
+        deadline = time.monotonic() + 5
+        pending = [info for info in targets if info["proc"].poll() is None]
+        while pending and time.monotonic() < deadline:
+            time.sleep(0.2)
+            pending = [info for info in pending if info["proc"].poll() is None]
+        return [info["session_id"] for info in targets]
 
     def resume_exit(self, session_id):
         """Start an exit-only worker for a stopped, unconfirmed Outcome session."""
@@ -639,19 +554,8 @@ class OutcomeSupervisor:
         if record.get("account_kind") != "outcome":
             raise ValueError("Only Outcome sessions can be resumed")
         market = (record.get("symbols") or [""])[0]
-        if (not market or not market.startswith("#") or not market[1:].isdigit()
-                or int(market[1:]) % 10 not in (0, 1)):
-            raise ValueError("Session has no exact Outcome market")
-        if record.get("phase") and record.get("phase") not in {
-                "connecting", "running", "draining", "recovering", "stopping",
-                "failed", "stopped"}:
-            raise ValueError("Unknown Outcome session state; reconcile manually")
-        context = getattr(self.manager, "account_context", None)
-        expected_account = (context.account if context
-                            else os.getenv("WALLET_ADDRESS_OUTCOME", "").strip())
-        record_account = str(record.get("account") or "").strip()
-        if expected_account and record_account and record_account.lower() != expected_account.lower():
-            raise ValueError("Session belongs to a different Outcome account")
+        if not market:
+            raise ValueError("Session has no Outcome market")
         with self.manager.lock:
             for info in self.procs.values():
                 if info.get("market") == market and info["proc"].poll() is None:
@@ -659,38 +563,8 @@ class OutcomeSupervisor:
             previous = self.procs.get(record.get("resumed_session_id"))
             if previous is not None and previous["proc"].poll() is None:
                 raise RuntimeError("A resume is already running for this session")
-        # A dead journal can still describe a live orphan child. Check both the
-        # last published PID and the worker-lifetime lock before spawning.
-        if "pid" in record:
-            try:
-                pid = int(record.get("pid"))
-            except (TypeError, ValueError):
-                raise ValueError("Unknown worker PID; reconcile manually") from None
-            if pid <= 0:
-                raise ValueError("Unknown worker PID; reconcile manually")
-            from zeus.process_control import pid_alive
-            if pid_alive(pid):
-                raise RuntimeError("The Outcome worker is still active; stop it first")
-        if record_account and getattr(self, "root", None) is not None:
-            from zeus.process_control import ProcessLock, account_key
-            lock = Path(self.root) / "instances" / f"{account_key(record_account)}-{market[1:]}.lock"
-            try:
-                with ProcessLock(lock, timeout=0):
-                    pass
-            except TimeoutError:
-                raise RuntimeError("An Outcome worker is still active on this market") from None
-        for _, other in self.records():
-            if other.get("session_id") == record.get("session_id"):
-                continue
-            if (other.get("cleanup_confirmed") is not True
-                    and market in (other.get("symbols") or [])):
-                raise RuntimeError("Another Outcome session is still active on this market")
         from zeus.server import WorldcupStartRequest
         config = dict(record.get("config") or {})
-        if config.get("market") and config.get("market") != market:
-            raise ValueError("Session config and market do not match")
-        if config.get("outcome_side") not in (None, "yes", "no"):
-            raise ValueError("Unknown Outcome side; reconcile manually")
         side = config.get("outcome_side") or ("yes" if int(market[1:]) % 10 == 0 else "no")
         values = {k: v for k, v in config.items() if k in WorldcupStartRequest.model_fields}
         if values.get("maker_spread_pct") is None:
@@ -699,42 +573,21 @@ class OutcomeSupervisor:
                       selection_mode="manual", two_sided=True,
                       resume_exit=exit_only, resume_trading=not exit_only,
                       auto_rotate=not exit_only)
-        # Resume preserves stop-loss, budgets, duration/volume objectives, the
-        # original deadline and counters. A target already reached is finished,
-        # not silently reset.
+        if not exit_only:
+            # A resumed trading session must not immediately finish on an old
+            # duration/volume target; the user can stop it explicitly.
+            values.update(session_expires_at=None, target_volume_usd=None,
+                          session_volume_carry=0)
         old = read_json(journal_path) if Path(journal_path).exists() else {}
         old = old if isinstance(old, dict) else {}
-        if old.get("session_id") and old.get("session_id") != record.get("session_id"):
-            raise ValueError("Session journal identity does not match; reconcile manually")
-        if old.get("symbols") and market not in old.get("symbols"):
-            raise ValueError("Session journal market does not match; reconcile manually")
         if not old.get("exposure_started"):
             raise ValueError("Attribution incomplète: aucune exposition publiée par cette session; réconciliation manuelle requise")
-        seed = {key: old.get(key) for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids", "inventory_since", "exit_started_at")
+        seed = {key: old.get(key) for key in ("exposure_started", "owned_oids", "cloids", "pending_cloids")
                 if key in old}
-        accounting = old.get("session_accounting") or {}
-        stats_path = record.get("stats_file")
-        if stats_path and Path(stats_path).exists():
-            stats = read_json(stats_path)
-            if stats.get("session_id") == record.get("session_id") and stats.get("market") == market:
-                accounting = stats
-        values["session_volume_carry"] = finite(config.get("session_volume_carry", 0))+finite(accounting.get("volume_usd", 0))
-        seed["rotation_pnl_carry"] = finite(config.get("rotation_pnl_carry", 0))+finite(accounting.get("net_pnl", 0))
         seed["resume_from"] = session_id
         seed["group_id"] = config.get("auto_group_id") or session_id
         seed["resume_rotation"] = (not exit_only) and bool(config.get("auto_rotate", True))
         result = self.start(WorldcupStartRequest(**values), seed=seed)
-        if exit_only and getattr(self, "root", None) is not None and result.get("session_id"):
-            # Persist the exit intent before the new process can publish. The
-            # engine also enforces resume_exit at startup, independently.
-            try:
-                atomic_json(Path(self.root) / "runtime" / result["session_id"] / "drain.json",
-                            {"requested_at": time.time(),
-                             "reason": "Explicit resume-exit: maker exit",
-                             "session_finished": True, "manual_stop": True})
-            except OSError as exc:
-                raise RuntimeError("Resume-exit journal unavailable: "
-                                   + safe_error(exc)) from exc
         # Keep an audit link without ever claiming the old session is verified.
         try:
             journal = read_json(journal_path) if Path(journal_path).exists() else {}

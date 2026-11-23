@@ -20,7 +20,7 @@ from __future__ import annotations
 from zeus import PROJECT_ROOT
 from zeus.builder import outcome_builder
 from zeus.safety import SafetyLatch, account_snapshot, finite, confirmed_client_order, safe_error, supervisor_alive, atomic_json, read_json, SubmissionSkipped
-from zeus.network import retry_read, StartupReadCancelled, StartupNetworkError, request_info, instrument_info
+from zeus.network import retry_read, StartupReadCancelled
 from contextlib import nullcontext
 
 import argparse
@@ -259,18 +259,7 @@ class BotConfig:
     market_label: str = ""
     rotation_file: Optional[str] = None
     risk_pnl_carry: float = 0.0
-    # Outcome risk guards stop purchases and drain inventory with ALO first.
-    # `maker_then_ioc` permits one bounded IOC fallback after the timeout.
-    exit_policy: str = "maker_only"
-    maker_exit_timeout_sec: float = 90.0
-    exit_slippage_bps: float = 20.0
-    exit_taker_fee_bps: float = 10.0
-    # Do not buy into a fast adverse move. Exits are never blocked by this.
-    adverse_move_guard: bool = True
-    adverse_move_window_sec: float = 10.0
-    adverse_move_bps: float = 40.0
-    adverse_move_cooldown_sec: float = 8.0
-    exit_max_spread_bps: float = 80.0
+    # Outcome risk guards stop purchases and drain inventory with ALO only.
     resume_exit: bool = False
     resume_trading: bool = False
     inventory_stop_bps: float = 200.0
@@ -308,7 +297,6 @@ class MarketState:
     mid: float = 0.0
     spread_bps: float = math.inf
     last_book_ts: float = 0.0
-    last_ws_book_ts: float = 0.0
     book_revision: int = 0
     bid_oid: Optional[int] = None
     ask_oid: Optional[int] = None
@@ -337,15 +325,6 @@ class MarketState:
     reconcile_required: bool = False
     cancel_retry_until: float = 0.0
     opening_rearm_until: float = 0.0
-    ioc_attempts: list = field(default_factory=list)
-    ioc_next_at: float = 0.0
-    exit_ioc_blocked: str = ""
-    mid_history: list = field(default_factory=list)
-    adverse_until: float = 0.0
-    adverse_reason: str = ""
-    inventory_since: float = 0.0
-    inventory_exit_active: bool = False
-    ioc_cancel_pending: bool = False
 
     @property
     def has_bbo(self) -> bool:
@@ -370,12 +349,6 @@ class MarketState:
         self.mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else 0.0
         self.spread_bps = ((ask - bid) / self.mid * 10_000.0) if self.mid > 0 else math.inf
         self.last_book_ts = stamp
-        # Bounded mid history for the adverse-move guard. Only the last minute
-        # matters; stale observations are discarded on read.
-        if self.mid > 0:
-            self.mid_history.append((stamp, self.mid))
-            if len(self.mid_history) > 1200:
-                del self.mid_history[:200]
         return True
 
 
@@ -426,7 +399,6 @@ class HyperliquidSpreadBot:
             raise ValueError("Outcome requires maker / post-only execution")
         self.exit_reason = ""
         self.exit_started = 0.0
-        self._execution_transport = None
         self.console = Console()
         self.lock = threading.RLock()
         self.wake = threading.Event()
@@ -441,8 +413,7 @@ class HyperliquidSpreadBot:
         self.safety = SafetyLatch(self._halt, cfg.safety_file, is_running=lambda: self.running
                                  and not (cfg.stop_file and os.path.exists(cfg.stop_file)) and supervisor_alive(),
                                   strict_maker_spot=cfg.worldcup,
-                                  opening_allowed=lambda: not self.rotation_requested()
-                                  and not any(s.inventory_exit_active for s in getattr(self, "states", {}).values()))
+                                  opening_allowed=lambda: not self.rotation_requested())
         self.funds = None
         if cfg.funds_root:
             from zeus.process_control import OutcomeFunds
@@ -454,9 +425,6 @@ class HyperliquidSpreadBot:
         self._sdk_metadata = self._load_sdk_metadata() if cfg.worldcup and cfg.live else {}
         self.info = self._startup_read("SDK metadata", lambda: Info(
             cfg.base_url, skip_ws=True, perp_dexs=perp_dexs, timeout=10, **self._sdk_metadata))
-        if cfg.worldcup:
-            instrument_info(self.info, cfg.base_url,
-                            transport=lambda: self._execution_transport)
         self.outcome_meta: Optional[Dict[str, Any]] = None
         if cfg.worldcup:
             self.outcome_meta = self._startup_read("Outcome metadata", lambda: self.info.post(
@@ -466,15 +434,10 @@ class HyperliquidSpreadBot:
         self.wallet = None
         if cfg.live:
             self._init_exchange(perp_dexs)
-            if cfg.signing_root or cfg.worldcup:
+            if cfg.signing_root:
                 from zeus.signing import SigningCoordinator
-                signing = SigningCoordinator(cfg.signing_root or PROJECT_ROOT / ".zeus-state" / "signing", self.wallet.address)
-                if cfg.worldcup:
-                    from zeus.ws_execution import WebSocketExecution
-                    self._execution_transport = WebSocketExecution(cfg.base_url, final_gate=self._final_outcome_gate)
-                    signing.instrument_transport(self.exchange, self._execution_transport)
-                self.exchange = signing.wrap(self.exchange,
-                    before_send=lambda name, args, kwargs: self.safety.assert_allowed_action(name, args, kwargs))
+                self.exchange = SigningCoordinator(cfg.signing_root, self.wallet.address).wrap(
+                    self.exchange, before_send=lambda name, args, kwargs: self.safety.assert_allowed_action(name, args, kwargs))
             if self.funds:
                 self.exchange = self.funds.wrap(self.exchange)
             self.exchange = self.safety.wrap(
@@ -491,8 +454,7 @@ class HyperliquidSpreadBot:
         self.account_synced_at = 0.0
         self.last_fill_at = 0.0
         if cfg.worldcup:
-            self.account_reader = OutcomeAccountReads(cfg.base_url, cfg.account_address,
-                                                       read=self._read_info, parallel=False)
+            self.account_reader = OutcomeAccountReads(cfg.base_url, cfg.account_address)
 
         try:
             signal.signal(signal.SIGINT, self.shutdown)
@@ -502,9 +464,7 @@ class HyperliquidSpreadBot:
 
     def _startup_cancelled(self):
         return (not self.running or self.safety.stopped.is_set()
-                or bool(self.cfg.stop_file and os.path.exists(self.cfg.stop_file))
-                or bool(not self.safety.exposure_started and self.cfg.rotation_file
-                        and os.path.exists(self.cfg.rotation_file)) or not supervisor_alive())
+                or bool(self.cfg.stop_file and os.path.exists(self.cfg.stop_file)) or not supervisor_alive())
 
     def _startup_retry_wait(self, delay):
         deadline = time.monotonic()+delay
@@ -516,31 +476,11 @@ class HyperliquidSpreadBot:
     def _startup_read(self, label, operation):
         # Only constructors/metadata GET-equivalent reads use this helper.
         # A trading acknowledgement is never resent through this path.
-        while True:
-            try:
-                return retry_read(label, operation, cancelled=self._startup_cancelled, sleep=self._startup_retry_wait)
-            except StartupNetworkError as exc:
-                if not self.cfg.worldcup or exc.kind not in {"rate_limited", "timeout", "network_error", "exchange_unavailable"}:
-                    raise
-                self.status = str(exc)
-                self.safety.metadata.update(startup_wait=str(exc), retry_at=time.time()+(exc.retry_after or 30))
-                if not self.safety.publish():
-                    raise StartupReadCancelled("Startup journal unavailable") from exc
-                self._startup_retry_wait(exc.retry_after or 30)
-
-    def _read_info(self, base_url, payload, *, timeout=10):
-        transport = getattr(self, "_execution_transport", None)
-        if transport is not None and transport.state()["ready"]:
-            return transport.post_info(payload)
-        return request_info(base_url, payload, timeout=timeout, critical=True)
+        return retry_read(label, operation, cancelled=self._startup_cancelled, sleep=self._startup_retry_wait)
 
     def _load_sdk_metadata(self):
-        from zeus.read_cache import public_metadata
-        def load(kind):
-            return public_metadata(self.cfg.base_url, kind,
-                lambda: self._startup_read(kind, lambda: read_info(self.cfg.base_url, {"type": kind})),
-                cancelled=self._startup_cancelled)
-        meta, spot = load("meta"), load("spotMeta")
+        meta = self._startup_read("Native SDK metadata", lambda: read_info(self.cfg.base_url, {"type": "meta"}))
+        spot = self._startup_read("Spot SDK metadata", lambda: read_info(self.cfg.base_url, {"type": "spotMeta"}))
         if (not isinstance(meta, dict) or not isinstance(meta.get('universe'), list)
                 or not isinstance(spot, dict) or not isinstance(spot.get('tokens'), list)
                 or not isinstance(spot.get('universe'), list)):
@@ -582,39 +522,6 @@ class HyperliquidSpreadBot:
             order["builder"] = outcome_builder()
         return self.exchange.order(**order)
 
-    def _final_outcome_gate(self, payload):
-        """Recheck the signed order without changing it, immediately before WS send."""
-        action = payload.get("action", {})
-        if action.get("type") != "order":
-            return  # cancels remain available during cleanup
-        for order in action.get("orders", []):
-            asset = int(order["a"])
-            st = next((s for s in self.states.values() if
-                       outcome_asset_id(int(s.spec.symbol[1:])//10, int(s.spec.symbol[1:])%10) == asset), None)
-            if st is None or self._startup_cancelled():
-                raise SubmissionSkipped("Outcome stopped or asset changed before send")
-            if st.reconcile_required:
-                raise SubmissionSkipped("Outcome account changed before send")
-            if time.time()-st.last_book_ts > self.cfg.stale_sec or not st.has_bbo:
-                raise SubmissionSkipped("Outcome book stale before send")
-            buy, px, qty = order["b"], finite(order["p"]), finite(order["s"])
-            if buy and (not self.safety.opening_allowed() or self.risk_block_reason(st, False)):
-                raise SubmissionSkipped("Outcome entry blocked before send")
-            if not buy and qty > min(st.available_position, st.position)+1e-9:
-                raise SubmissionSkipped("Outcome inventory changed before sell")
-            tif = order.get("t", {}).get("limit", {}).get("tif")
-            self.safety.assert_allowed_action("order", (), {"is_buy": buy, "order_type": {"limit": {"tif": tif}}})
-            if tif == "Alo" and (px >= st.ask if buy else px <= st.bid):
-                raise SubmissionSkipped("Outcome post-only quote overtaken before send")
-            if tif == "Ioc" and px < st.bid*(1-self.cfg.exit_slippage_bps/10000)-1e-12:
-                raise SubmissionSkipped("Outcome IOC price outside slippage bound")
-            if tif == "Ioc":
-                fee_bps = st.last_inventory_exit.get("fee_bps", self.cfg.exit_taker_fee_bps)
-                loss = max(0, qty*(st.avg_entry_px-px*(1-fee_bps/10000)))
-                remaining = max(0, self.cfg.stop_loss_usd+self.stats.net_pnl+self.cfg.risk_pnl_carry)
-                if st.avg_entry_px <= 0 or loss > remaining:
-                    raise SubmissionSkipped("Outcome IOC loss budget changed before send")
-
     @staticmethod
     def patch_outcome_assets(info: Info, outcome_meta: Dict[str, Any]) -> None:
         """Teach the current SDK about HIP-4 #N outcome coins."""
@@ -653,9 +560,6 @@ class HyperliquidSpreadBot:
             self.exit_reason = getattr(self, "exit_reason", "") or reason
             self.exit_started = getattr(self, "exit_started", 0.0) or time.time()
             metadata = getattr(self.safety, "metadata", None)
-            if isinstance(metadata, dict):
-                self.exit_started = float(metadata.get("exit_started_at") or self.exit_started)
-                metadata["exit_started_at"] = self.exit_started
             if metadata is not None and not metadata.get("exit_requested"):
                 metadata.update(exit_requested=True, stop_reason=self.exit_reason)
                 publish = getattr(self.safety, "publish", None)
@@ -699,7 +603,7 @@ class HyperliquidSpreadBot:
             return None
         if not st.has_bbo or now - st.last_book_ts > self.cfg.stale_sec:
             return None
-        mark = st.bid  # risk uses the executable exit side, not an optimistic mid
+        mark = st.mid if st.mid > 0 else st.bid
         notional = st.position * mark
         if notional >= 2.0 and st.avg_entry_px > 0 and mark > 0:
             loss_bps = (st.avg_entry_px - mark) / st.avg_entry_px * 10_000.0
@@ -730,156 +634,6 @@ class HyperliquidSpreadBot:
             st.last_action = reason + ": maker exit"
             self.request_maker_exit(reason)
         return False
-
-    def maybe_bounded_exit(self, st: MarketState) -> None:
-        """Maker-first exit, then one bounded sell-only IOC after the timeout."""
-        if (not self.cfg.worldcup or self.cfg.exit_policy != "maker_then_ioc"
-                or not self.running or self.safety.stopped.is_set()):
-            return
-        now = time.time()
-        self._track_inventory(st)
-        requested = self.rotation_requested()
-        started = getattr(self, "exit_started", 0.0) if requested else st.inventory_since
-        if not started or now - started < self.cfg.maker_exit_timeout_sec:
-            return
-        if st.position < 1:
-            return
-        st.inventory_exit_active = True
-        if now < st.ioc_next_at or st.reconcile_required or now < st.pending_until:
-            return
-        st.ioc_cancel_pending = False
-        st.ioc_attempts = [stamp for stamp in st.ioc_attempts if now - stamp < 60]
-        if len(st.ioc_attempts) >= 3:
-            st.ioc_next_at = now + 5
-            st.exit_ioc_blocked = "secours IOC limité à 3 tentatives par minute"
-            return
-        if not self.sync_account():
-            return
-        held = st.ask_quantity if st.ask_oid else 0
-        qty = float(math.floor(max(0.0, min(st.available_position+held, st.position))))
-        if qty < 1:
-            st.exit_ioc_blocked = ""
-            return
-        if not math.isfinite(st.avg_entry_px) or st.avg_entry_px <= 0:
-            st.exit_ioc_blocked = "coût d’entrée inconnu: secours IOC bloqué"
-            st.ioc_next_at = now + 30
-            return
-        if st.bid <= 0 or now - st.last_book_ts > self.cfg.stale_sec:
-            st.exit_ioc_blocked = "carnet absent ou périmé: secours IOC reporté"
-            st.ioc_next_at = now + 5
-            return
-        if st.spread_bps > self.cfg.exit_max_spread_bps:
-            st.exit_ioc_blocked = (f"spread {st.spread_bps:.1f}bps > "
-                                   f"{self.cfg.exit_max_spread_bps:.0f}bps: secours IOC reporté")
-            st.ioc_next_at = now + 5
-            return
-        # Round UP so token precision cannot widen the authorized slippage.
-        px = round_outcome_buy_px(st.bid * (1 - self.cfg.exit_slippage_bps / 10_000))
-        notional = qty * px
-        try:
-            fee_bps = self._bounded_exit_fee_bps(st)
-        except Exception:
-            st.exit_ioc_blocked = "frais taker non vérifiés: secours IOC reporté"
-            st.ioc_next_at = now + 30
-            return
-        fee = notional * fee_bps / 10_000
-        proceeds = notional - fee
-        cost = qty * st.avg_entry_px
-        estimated_loss = max(0.0, cost - proceeds)
-        remaining = self.cfg.stop_loss_usd + (self.stats.net_pnl + self.cfg.risk_pnl_carry)
-        if estimated_loss > max(0.0, remaining):
-            st.exit_ioc_blocked = (
-                f"budget de perte insuffisant: perte {estimated_loss:.2f} > reste {max(0.0, remaining):.2f}")
-            st.ioc_next_at = now + 30
-            return
-        if st.bid_oid or st.ask_oid:
-            # Do not repost the maker ask in the cancel -> IOC window. Also
-            # check the budget before cancelling so a blocked IOC keeps queue.
-            st.ioc_cancel_pending = True
-            self.cancel_all("bounded exit", [st.spec.symbol])
-            st.ioc_next_at = now + .4
-            return
-        st.exit_ioc_blocked = ""
-        st.ioc_attempts.append(now)
-        st.ioc_next_at = now + 5
-        st.last_inventory_exit = {
-            "requested_at": now, "reason": getattr(self, "exit_reason", "") or "bounded exit",
-            "entry_px": st.avg_entry_px, "entry_basis_source": st.entry_basis_source,
-            "bid": st.bid, "ask": st.ask, "quantity": qty,
-            "limit_px": px, "submission": "bounded_ioc_started"}
-        st.last_inventory_exit["fee_bps"] = fee_bps
-        try:
-            with self.safety.lock, (self.funds.transaction() if getattr(self, "funds", None) else nullcontext()), self.safety.bounded_exit_scope():
-                if self.safety.stopped.is_set() or st.reconcile_required:
-                    return
-                result = self._submit_order(
-                    name=st.spec.symbol, is_buy=False, sz=qty,
-                    limit_px=round_px_wire(px),
-                    order_type={"limit": {"tif": "Ioc"}}, reduce_only=False)
-        except SubmissionSkipped as exc:
-            st.last_inventory_exit["submission"] = "not_sent"
-            st.exit_ioc_blocked = safe_error(exc)
-            st.ioc_next_at = now + 5
-            return
-        except Exception as exc:
-            st.last_inventory_exit["submission"] = "unconfirmed"
-            st.last_error = safe_error(exc)
-            st.last_action = "bounded exit IOC: unconfirmed; account reconciliation required"
-            st.reconcile_required = True
-            st.ioc_next_at = now + 30
-            return
-        self.stats.orders_sent += 1
-        self.stats.forced_exits += 1
-        statuses = (result.get("response", {}).get("data", {}).get("statuses", [])
-                    if isinstance(result, dict) and result.get("status") == "ok" else [])
-        filled = any(isinstance(status, dict) and "filled" in status for status in statuses)
-        st.ioc_next_at = now + (5 if filled else 30)
-        st.last_action = f"bounded exit IOC {qty:g} @ {px:g}"
-        st.reconcile_required = True
-        try:
-            self._parse_order_response(
-                st, [{"coin": st.spec.symbol, "is_buy": False, "sz": qty, "limit_px": px}],
-                result)
-        except Exception as exc:
-            st.last_error = safe_error(exc)
-            st.last_action = "bounded exit IOC sent; awaiting account reconciliation"
-
-    def _bounded_exit_fee_bps(self, st):
-        """Use actual account fees/scales, with the configured conservative floor."""
-        if not hasattr(self, "info"):  # offline injected test engines
-            return self.cfg.exit_taker_fee_bps
-        from zeus.outcome_costs import closing_rate
-        cached = getattr(self, "_taker_profile", None)
-        if not cached or time.time()-cached[0] > 60:
-            profile = self.info.post("/info", {"type": "userFees", "user": self.cfg.account_address})
-            base, discount = finite(profile["userSpotCrossRate"]), finite(profile["activeReferralDiscount"])
-            if base < 0 or not 0 <= discount <= 1:
-                raise ValueError("Invalid taker fee profile")
-            cached = self._taker_profile = (time.time(), base*(1-discount))
-        meta = self.outcome_meta
-        outcome = next(row for row in meta["outcomes"]
-                       if int(row["outcome"]) == int(st.spec.symbol[1:])//10)
-        rate = closing_rate(cached[1], meta.get("feeScale"), outcome.get("deployerFeeScale"))
-        return max(self.cfg.exit_taker_fee_bps, rate*10000)
-
-    def _track_inventory(self, st):
-        """Persist the oldest unsold inventory time, never reset by partials/requotes."""
-        metadata = getattr(getattr(self, "safety", None), "metadata", None)
-        saved = metadata.setdefault("inventory_since", {}) if isinstance(metadata, dict) else {}
-        if st.position >= 1:
-            st.inventory_since = st.inventory_since or float(saved.get(st.spec.symbol) or time.time())
-            value = st.inventory_since
-        else:
-            st.inventory_since = 0.0
-            st.inventory_exit_active = False
-            st.ioc_cancel_pending = False
-            st.exit_ioc_blocked = ""
-            value = 0.0
-        if saved.get(st.spec.symbol, 0) != value:
-            saved[st.spec.symbol] = value
-            publish = getattr(getattr(self, "safety", None), "publish", None)
-            if callable(publish):
-                publish()
 
     def _halt(self):
         self.running = False
@@ -1028,9 +782,6 @@ class HyperliquidSpreadBot:
         reader = getattr(self, "account_reader", None)
         if reader:
             reader.close()
-        transport = getattr(self, "_execution_transport", None)
-        if transport is not None:
-            transport.close(timeout=1)
         pool = getattr(self, "rest_pool", None)
         if pool:
             pool.shutdown(wait=False, cancel_futures=True)
@@ -1248,13 +999,6 @@ class HyperliquidSpreadBot:
     def start_ws(self) -> None:
         perp_dexs = [self.cfg.perp_dex] if self.cfg.perp_dex and not self.cfg.worldcup else None
         self.status = "connecting ws"
-        self.ws_started_at = time.time()
-        transport = getattr(self, "_execution_transport", None)
-        if transport is not None:
-            transport.start()
-            deadline = time.monotonic()+3
-            while not self._startup_cancelled() and time.monotonic() < deadline and not transport.wait_ready(.1):
-                pass
         self.ws_info = Info(self.cfg.base_url, skip_ws=False, perp_dexs=perp_dexs, timeout=10,
                             **getattr(self, "_sdk_metadata", {}))
         if self.cfg.worldcup and self.outcome_meta:
@@ -1270,12 +1014,7 @@ class HyperliquidSpreadBot:
 
     def restart_ws_if_needed(self) -> None:
         now = time.time()
-        manager = getattr(getattr(self, "ws_info", None), "ws_manager", None)
-        sock = getattr(getattr(manager, "ws", None), "sock", None)
-        if getattr(sock, "connected", False):
-            return  # an unchanged BBO on a quiet market is not a dead socket
-        newest = max((st.last_ws_book_ts for st in self.states.values()), default=0.0)
-        newest = newest or getattr(self, "ws_started_at", 0)
+        newest = max((st.last_book_ts for st in self.states.values()), default=0.0)
         if newest <= 0 or now - newest <= self.cfg.stale_sec * 3:
             return
         if now - self.last_ws_restart_ts < 10:
@@ -1309,7 +1048,6 @@ class HyperliquidSpreadBot:
                     if coin_matches(local_symbol, symbol):
                         if st.update_bbo(bid, ask, int(payload.get("time", 0) or 0)):
                             st.book_source = "ws"
-                            st.last_ws_book_ts = st.last_book_ts
                         break
             self.wake.set()
         except Exception:
@@ -1332,7 +1070,6 @@ class HyperliquidSpreadBot:
                         if not st.update_bbo(bid, ask, int(payload.get("time", 0) or 0)):
                             return
                         st.book_source = "l2"
-                        st.last_ws_book_ts = st.last_book_ts
                         if st.last_error.startswith("REST bbo"):
                             st.last_error = ""
                         break
@@ -1359,7 +1096,8 @@ class HyperliquidSpreadBot:
                 should_refresh = (
                     force
                     or not st.has_bbo
-                    or age >= self.cfg.stale_sec * .8
+                    or age >= stale_after
+                    or rest_age >= max(self.cfg.stale_sec, min_gap * 4)
                 )
                 if not should_refresh:
                     continue
@@ -1392,9 +1130,7 @@ class HyperliquidSpreadBot:
             for future in as_completed(futures):
                 symbol = futures[future]
                 try:
-                    book_read = future.result()
-                    bid, ask = book_read[:2]
-                    book_time = book_read[2] if len(book_read) > 2 else None
+                    bid, ask = future.result()
                 except RateLimited as exc:
                     self.rest_backoff_until = time.time() + self.cfg.rest_429_backoff_sec
                     with self.lock:
@@ -1414,20 +1150,19 @@ class HyperliquidSpreadBot:
                         continue
                     st.last_rest_book_ts = time.time()
                     if (st.book_revision != requested_versions[symbol] or st.last_book_ts > requested_at
-                            or not st.update_bbo(bid, ask, book_time)):
+                            or not st.update_bbo(bid, ask)):
                         continue  # A newer WS/L2 message won while REST was in flight.
-                    transport = getattr(self, "_execution_transport", None)
-                    st.book_source = "ws-info" if transport is not None and transport.state()["ready"] else "rest"
+                    st.book_source = "rest"
                     if st.last_error.startswith("REST bbo"):
                         st.last_error = ""
                     updated += 1
         if updated:
-            self.status = f"live books ({updated} updated)"
+            self.status = f"ws+rest live ({updated} books)"
             self.wake.set()
 
     def fetch_rest_bbo(self, symbol: str) -> Tuple[float, float]:
         try:
-            book = self._read_info(self.cfg.base_url, {"type": "l2Book", "coin": symbol}, timeout=1.5)
+            book = read_info(self.cfg.base_url, {"type": "l2Book", "coin": symbol}, timeout=1.5)
         except requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 429:
                 raise RateLimited("429 backoff") from exc
@@ -1437,19 +1172,19 @@ class HyperliquidSpreadBot:
         asks = levels[1] if len(levels) > 1 else []
         bid = safe_float(bids[0].get("px")) if bids else 0.0
         ask = safe_float(asks[0].get("px")) if asks else 0.0
-        if self.cfg.worldcup:
-            stamp = int(book.get("time", 0))
-            if stamp <= 0:
-                raise ValueError("Book response has no exchange timestamp")
-            return bid, ask, stamp
         return bid, ask
 
     def on_user_fills(self, data: Dict[str, Any]) -> None:
         try:
             payload = data.get("data", data)
             fills = payload.get("fills", []) if isinstance(payload, dict) else []
-            # Reconnect snapshots can contain fills missed during the gap.
-            # Session-start filtering and composite deduplication handle both.
+            if payload.get("isSnapshot"):
+                with self.lock:
+                    for fill in fills:
+                        tid = str(fill.get("tid", ""))
+                        if tid:
+                            self.stats.processed_fills.add(tid)
+                return
             self._record_fills(fills)
         except Exception:
             return
@@ -1544,11 +1279,10 @@ class HyperliquidSpreadBot:
                 if state is None:
                     continue
                 tid = str(fill.get("tid") or fill.get("hash") or "")
-                identity = (str(coin), int(safe_float(fill.get("time"))), tid)
-                if tid and identity in self.stats.processed_fills:
+                if tid and tid in self.stats.processed_fills:
                     continue
                 if tid:
-                    self.stats.processed_fills.add(identity)
+                    self.stats.processed_fills.add(tid)
 
                 px = safe_float(fill.get("px"))
                 sz = safe_float(fill.get("sz"))
@@ -1589,12 +1323,6 @@ class HyperliquidSpreadBot:
                 changed = True
             if changed:
                 self.account_revision = getattr(self, "account_revision", 0) + 1
-                metadata = getattr(getattr(self, "safety", None), "metadata", None)
-                if isinstance(metadata, dict):
-                    metadata["session_accounting"] = {"volume_usd": self.stats.volume_usd,
-                        "net_pnl": self.stats.net_pnl, "fees": self.stats.fees_paid,
-                        "fills": self.stats.fills, "last_fill_at": self.last_fill_at}
-                    self.safety.publish()
         if changed:
             self.wake.set()
 
@@ -1702,33 +1430,7 @@ class HyperliquidSpreadBot:
                             state.ask_order_ts = old_ts if old_oid == oid else time.time()
             self.account_synced_at = time.time()
             self.account_sync_ms = (time.perf_counter()-sync_started)*1000
-            for state in self.states.values():
-                if self.cfg.worldcup:
-                    self._track_inventory(state)
         return True
-
-    def adverse_block_reason(self, st: MarketState) -> Optional[str]:
-        """Pause new bids while the mid falls fast; never block an exit."""
-        if not self.cfg.worldcup or not self.cfg.adverse_move_guard:
-            return None
-        now = time.time()
-        if now < st.adverse_until:
-            return st.adverse_reason or "adverse move; bids paused"
-        if st.mid <= 0 or not st.mid_history:
-            return None
-        window = max(2.0, self.cfg.adverse_move_window_sec)
-        reference = max((mid for stamp, mid in st.mid_history
-                         if now - stamp <= window and mid > 0), default=0.0)
-        if reference <= 0:
-            return None
-        drop_bps = (reference - st.mid) / reference * 10_000.0
-        if drop_bps >= self.cfg.adverse_move_bps:
-            st.adverse_until = now + self.cfg.adverse_move_cooldown_sec
-            st.adverse_reason = (f"adverse move {drop_bps:.0f}bps/{window:.0f}s; "
-                                 "bids paused")
-            st.last_action = st.adverse_reason
-            return st.adverse_reason
-        return None
 
     def risk_block_reason(self, st: MarketState, closing_inventory: bool = False) -> Optional[str]:
         net_risk_pnl = self.stats.net_pnl + self.cfg.risk_pnl_carry
@@ -1745,10 +1447,6 @@ class HyperliquidSpreadBot:
             return "waiting bbo"
         if time.time() - st.last_book_ts > self.cfg.stale_sec:
             return f"stale feed {fmt_age(st.last_book_ts)}"
-        if not closing_inventory:
-            adverse = self.adverse_block_reason(st)
-            if adverse:
-                return adverse
         if self.cfg.worldcup and not closing_inventory and time.time() < st.inventory_stop_until:
             return 'Inventory stop cooldown; new bids paused'
         if (self.cfg.auto_max_spread_bps is not None and not closing_inventory
@@ -1869,14 +1567,12 @@ class HyperliquidSpreadBot:
     def bilateral_requests(self, st: MarketState) -> Dict[bool, Dict[str, Any]]:
         """One funded bid and one inventory-backed ask. Existing holds count once."""
         requests_out = {}
-        if st.ioc_cancel_pending:
-            return requests_out
         bid = self.maker_quote_px(st, True)
         ask = self.maker_quote_px(st, False)
         if not 0 < bid < ask < 1:
             return requests_out
         held_ask = st.ask_quantity if st.ask_oid else 0.0
-        draining = self.rotation_requested() or st.inventory_exit_active
+        draining = self.rotation_requested()
         # An exit sells the whole attributable inventory at the best ask.
         # Normal quoting keeps the configured order-size bound.
         available = min(math.floor(st.available_position + held_ask), math.floor(st.position))
@@ -1891,7 +1587,8 @@ class HyperliquidSpreadBot:
         if partial_ask:
             requests_out[False] = {"coin": st.spec.symbol, "is_buy": False, "sz": float(st.ask_quantity),
                 "limit_px": st.quoted_ask, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
-        elif sell_qty >= 1 and (draining or risk_exit or sell_qty*ask >= 10):
+        elif sell_qty >= 1 and (not full_size or draining or risk_exit
+                                or sell_qty*ask >= self.cfg.min_order_usd*0.9):
             # 69,46 $ d'inventaire pour un ordre de 70 $ ne doit pas attendre
             # le centime exact : les tokens sont entiers et le prix bouge.
             requests_out[False] = {"coin": st.spec.symbol, "is_buy": False, "sz": float(sell_qty),
@@ -2031,8 +1728,6 @@ class HyperliquidSpreadBot:
     def finish_rotation_if_flat(self) -> None:
         if not self.rotation_requested() or not self.running or self.safety.phase != "running":
             return
-        if any(s.position > 0 or s.bid_oid or s.ask_oid or s.reconcile_required for s in self.states.values()):
-            return  # No account polling on every 83 ms exit-loop tick.
         with self.safety.lock:
             if not self.sync_account():
                 return
@@ -2402,25 +2097,7 @@ class HyperliquidSpreadBot:
         while self.running:
             try:
                 if self.cfg.worldcup and not self.safety.stopped.is_set():
-                    # A rotation drain removed by the controller because a fill
-                    # arrived must release the exit gate, not leave it in memory.
-                    if (str(getattr(self, "exit_reason", "")).lower().startswith("low executed")
-                            and self.cfg.rotation_file
-                            and not os.path.exists(self.cfg.rotation_file)):
-                        self.exit_reason = ""
-                        self.exit_started = 0.0
-                        self.status = "rotation cancelled: inventory present"
-                        for state in self.states.values():
-                            state.exit_ioc_blocked = ""
-                            state.ioc_attempts = []
-                            state.ioc_next_at = 0.0
-                        metadata = getattr(self.safety, "metadata", None)
-                        if metadata is not None:
-                            metadata.pop("exit_requested", None)
-                            metadata.pop("stop_reason", None)
-                            self.safety.publish()
-                    unrealized = self.inventory_unrealized()
-                    session_loss = self.stats.net_pnl + self.cfg.risk_pnl_carry + (unrealized or 0) <= -abs(self.cfg.stop_loss_usd)
+                    session_loss = self.stats.net_pnl + self.cfg.risk_pnl_carry <= -abs(self.cfg.stop_loss_usd)
                     session_profit = self.cfg.take_profit_usd > 0 and self.stats.net_pnl >= self.cfg.take_profit_usd
                     if session_loss or session_profit:
                         self.request_maker_exit("Session stop loss: maker exit" if session_loss else "Session take profit: maker exit")
@@ -2445,7 +2122,6 @@ class HyperliquidSpreadBot:
                             break
                         if self.enforce_inventory_stop(st):
                             continue
-                        self.maybe_bounded_exit(st)
                         self.place_or_requote(st)
                     self.finish_rotation_if_flat()
                 if live is not None:
@@ -2542,7 +2218,6 @@ class HyperliquidSpreadBot:
                        "book_source": st.book_source} for st in self.states.values()]
             active_state = next(iter(self.states.values()), None)
             execution_state, blocked_reason = self.execution_status(active_state)
-            unrealized = self.inventory_unrealized()
 
             return {
                 "status": self.status,
@@ -2563,7 +2238,6 @@ class HyperliquidSpreadBot:
                     "entry_basis_source": st.entry_basis_source,
                     "entry_basis_known": st.position < 1 or st.avg_entry_px > 0,
                     "cooldown_remaining_sec": max(0, st.inventory_stop_until-now),
-                    "exit_ioc_blocked": st.exit_ioc_blocked,
                     "last_forced_exit": dict(st.last_inventory_exit) or None,
                 } for st in self.states.values()] if self.cfg.worldcup else [],
                 "gross_closed_pnl": stats.gross_closed_pnl,
@@ -2583,26 +2257,12 @@ class HyperliquidSpreadBot:
                 "mid_price": avg_mid,
                 "spread_bps": avg_spread,
                 "position_usd": total_position_usd,
-                "unrealized_pnl": unrealized,
-                "marked_net_pnl": stats.net_pnl+unrealized if unrealized is not None else None,
-                "execution_transport": "websocket" if getattr(self, "_execution_transport", None) else "http",
-                "volume_usd_per_hour": stats.volume_per_min*60,
                 "active_markets": len(mid_prices),
             }
         finally:
             self.lock.release()
 
     # ------------------------------------------------------------- dashboard
-    def inventory_unrealized(self):
-        total = 0.0
-        for state in self.states.values():
-            if state.position <= 0:
-                continue
-            if state.avg_entry_px <= 0 or not state.has_bbo or time.time()-state.last_book_ts > self.cfg.stale_sec:
-                return None
-            total += state.position*(state.bid-state.avg_entry_px)
-        return total
-
     def execution_status(self, st):
         if st is None:
             return "Starting", ""
@@ -2612,9 +2272,6 @@ class HyperliquidSpreadBot:
             waited = time.time() - started if started else 0.0
             if waited > self.cfg.inventory_drain_timeout_sec:
                 reason += " (sortie en attente %.0f s, aucune contrepartie)" % waited
-            blocked = getattr(st, "exit_ioc_blocked", "")
-            if blocked:
-                reason += " · " + blocked
             return "Draining inventory", reason
         if st.inventory_stop_until > time.time():
             return "Inventory stop", st.last_action
@@ -2876,24 +2533,24 @@ _local = threading.local()
 
 
 def read_info(base_url, payload, *, timeout=10):
-    return request_info(base_url, payload, timeout=timeout, critical=True)
+    if not hasattr(_local, 'session'):
+        _local.session = requests.Session()
+    response = _local.session.post(base_url+'/info', json=payload, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
 
 
 class OutcomeAccountReads:
-    def __init__(self, base_url, account, *, read=read_info, parallel=True):
+    def __init__(self, base_url, account, *, read=read_info):
         self.base_url, self.account, self.read = base_url, account, read
         self.lock = threading.Lock()
         self.closed = False
-        self.parallel = parallel
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='outcome-account')
 
     def snapshot(self):
         with self.lock:
             if self.closed:
                 raise RuntimeError('Outcome account reader closed')
-            if not self.parallel:
-                return tuple(self.read(self.base_url, {'type': kind, 'user': self.account})
-                             for kind in ('spotClearinghouseState', 'openOrders'))
             futures = [self.pool.submit(self.read, self.base_url, {'type': kind, 'user': self.account})
                        for kind in ('spotClearinghouseState', 'openOrders')]
             # Drain both bounded reads even if one fails: no old request may

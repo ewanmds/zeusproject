@@ -472,13 +472,12 @@
                 item.dataset.market = candidate.market;
                 item.innerHTML = "<strong></strong><small></small><span></span>";
             }
-            const queue = Number.isFinite(candidate.queue_proxy_sec) ? `${Math.round(candidate.queue_proxy_sec)}s` : "—";
             const values = [candidate.name, candidate.market,
-                `${formatUSD(candidate.volume_usd_1m)}/min · queue ${queue} · ${(Number(candidate.spread_bps) || 0).toFixed(2)} bps`];
+                `${formatUSD(candidate.volume_usd_1m)}/min · queue ${Math.round(Number(candidate.queue_proxy_sec) || 0)}s · ${(Number(candidate.spread_bps) || 0).toFixed(2)} bps`];
             Array.from(item.children).forEach((child, i) => {
                 if (child.textContent !== values[i]) child.textContent = values[i];
             });
-            item.title = `${candidate.events_5m} trade events · estimated queue ${queue}`;
+            item.title = `${candidate.events_5m} trade events · estimated queue ${Math.round(candidate.queue_proxy_sec)}s`;
             if (list.children[index] !== item) list.insertBefore(item, list.children[index] || null);
         }
         for (const [market, item] of existing) if (!keep.has(market)) item.remove();

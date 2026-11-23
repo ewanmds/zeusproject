@@ -88,18 +88,6 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/v2/sessions/x/stop', json={}).status_code, 401)
         self.assertEqual(self.client.get('/api/outcomes/status').status_code, 404)
 
-    def test_busy_read_budget_returns_retryable_response_without_launch(self):
-        from zeus.network import HyperliquidError
-        self.login(self.client, self.a)
-        error = HyperliquidError('Compteur de requêtes occupé. Réessayez dans un instant.',
-            kind='exchange_unavailable', operation='rest_read_budget', status=503, retry_after=.5)
-        with patch.object(self.app.state.accounts, 'balances', side_effect=error):
-            response = self.client.post('/api/v2/sessions/preview', json={
-                'strategy': 'outcome', 'order_usd': 70, 'position_cap': 120})
-        self.assertEqual(response.status_code, 503, response.text)
-        self.assertEqual(response.headers['retry-after'], '1')
-        self.assertNotIn('database is locked', response.text)
-
     def test_login_signed_message_cookie_and_logout(self):
         me, _ = self.login(self.client, self.a)
         self.assertEqual(me['wallet'], self.a.address.lower())
@@ -182,16 +170,6 @@ class WorkspaceTests(unittest.TestCase):
                 frame=ws.receive_json();self.assertEqual(frame['owner'],self.a.address.lower())
                 self.assertEqual(frame['sessions'][0]['id'],own['sessions'][0]['id'])
         finally: other.close()
-
-    def test_ws_ticket_authenticates_a_cross_host_socket(self):
-        self.login(self.client, self.a)
-        ticket = self.client.get('/api/v2/ws-ticket').json()
-        self.assertIn('ticket=', ticket['url'])
-        with self.client.websocket_connect(
-                'ws://127.0.0.1:8081/api/v2/ws?ticket=' + ticket['ticket'],
-                headers={'Origin': self.origin}) as ws:
-            frame = ws.receive_json()
-            self.assertEqual(frame['owner'], self.a.address.lower())
 
     def test_idempotent_launch_and_changed_payload_conflict(self):
         self.login(self.client,self.a);self.authorize(self.client,self.a)

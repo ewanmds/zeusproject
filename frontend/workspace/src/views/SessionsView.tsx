@@ -63,25 +63,27 @@ export function SessionsView({
           Arrêter
         </button>
       ) : !s.cleanup_confirmed ? (
-        <button
-          className="button secondary small"
-          disabled={!!checking}
-          aria-busy={checking === s.id || undefined}
-          onClick={async () => {
-            setChecking(s.id);
-            setError(null);
-            try {
-              await api("/reconcile", {});
-              w.refresh();
-            } catch (e: any) {
-              setError({ id: s.id, message: e.message });
-            } finally {
-              setChecking(null);
-            }
-          }}
-        >
-          {checking === s.id ? "Vérification…" : "Vérifier l’arrêt"}
-        </button>
+        <div className="row-actions">
+          <button
+            className="button secondary small"
+            disabled={!!checking}
+            aria-busy={checking === s.id || undefined}
+            onClick={async () => {
+              setChecking(s.id);
+              setError(null);
+              try {
+                await api("/reconcile", {});
+                w.refresh();
+              } catch (e: any) {
+                setError({ id: s.id, message: e.message });
+              } finally {
+                setChecking(null);
+              }
+            }}
+          >
+            {checking === s.id ? "Vérification…" : "Vérifier l’arrêt"}
+          </button>
+        </div>
       ) : null}
     </div>
   );
@@ -199,11 +201,7 @@ export function SessionsView({
                     { id: "actions", label: "Actions", render: actions },
                   ]}
                 />
-                {error && (
-                  <InlineAlert onClose={() => setError(null)}>
-                    {error.message}
-                  </InlineAlert>
-                )}
+                {error && <InlineAlert>{error.message}</InlineAlert>}
               </div>
             ) : (
               <div className="session-list">
@@ -280,9 +278,6 @@ export function SessionsView({
                           >
                             {usd(s.net_pnl)}
                           </strong>
-                          {s.position_usd != null && s.position_usd > 0 && (
-                            <small>PnL latent : {usd(s.unrealized_pnl)}</small>
-                          )}
                         </div>
                         <div>
                           <span>Durée</span>
@@ -317,9 +312,7 @@ export function SessionsView({
                         </p>
                       )}
                       {error?.id === s.id && (
-                        <InlineAlert onClose={() => setError(null)}>
-                          {error.message}
-                        </InlineAlert>
+                        <InlineAlert>{error.message}</InlineAlert>
                       )}
                     </article>
                   );

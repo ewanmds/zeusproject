@@ -14,18 +14,13 @@ export function DataTable<T>({
   columns,
   caption,
   rowKey,
-  defaultSort,
 }: {
   rows: readonly T[];
   columns: Column<T>[];
   caption: string;
   rowKey: (row: T) => string;
-  defaultSort?: { id: string; direction: "asc" | "desc" };
 }) {
-  const [sort, setSort] = useState({
-    id: defaultSort?.id ?? "",
-    direction: defaultSort?.direction === "desc" ? -1 : 1,
-  });
+  const [sort, setSort] = useState({ id: "", direction: 1 });
   const sorted = useMemo(() => {
     const column = columns.find((item) => item.id === sort.id);
     if (!column?.sort) return rows;

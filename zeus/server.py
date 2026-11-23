@@ -126,19 +126,8 @@ class WorldcupStartRequest(BaseModel):
     target_volume_usd: Optional[float] = Field(default=None, ge=10, allow_inf_nan=False)
     session_volume_carry: float = Field(default=0, ge=0, allow_inf_nan=False)
     session_stop_loss_usd: float = Field(default=50, gt=0, allow_inf_nan=False)
-    # Exit policy: maker-only by default; new volume sessions opt into a
-    # bounded IOC fallback after the maker timeout.
-    exit_policy: Literal["maker_only", "maker_then_ioc"] = "maker_only"
-    maker_exit_timeout_sec: float = Field(default=90, ge=1, le=3600, allow_inf_nan=False)
-    exit_slippage_bps: float = Field(default=20, ge=0, le=200, allow_inf_nan=False)
-    exit_taker_fee_bps: float = Field(default=10, ge=0, le=200, allow_inf_nan=False)
-    exit_max_spread_bps: float = Field(default=80, ge=0, le=1000, allow_inf_nan=False)
-    adverse_move_guard: bool = True
-    adverse_move_bps: float = Field(default=40, ge=5, le=2000, allow_inf_nan=False)
-    adverse_move_window_sec: float = Field(default=10, ge=2, le=120, allow_inf_nan=False)
-    adverse_move_cooldown_sec: float = Field(default=8, ge=0, le=300, allow_inf_nan=False)
     # Inventory guards: cut a losing position, or a drain that cannot go flat.
-    inventory_stop_bps: float = Field(default=100, ge=50, le=500, allow_inf_nan=False)
+    inventory_stop_bps: float = Field(default=200, ge=50, le=500, allow_inf_nan=False)
     inventory_drain_timeout_sec: float = Field(default=90, ge=15, le=600, allow_inf_nan=False)
     selection_mode: Literal["manual", "auto"] = "manual"
     auto_max_spread_bps: float = Field(default=10, gt=0, le=100, allow_inf_nan=False)
@@ -167,7 +156,6 @@ class WorldcupStartRequest(BaseModel):
 
 class OutcomeStopRequest(BaseModel):
     session_id: Optional[str] = Field(default=None, min_length=1)
-    mode: Literal["graceful", "cancel_only"] = "graceful"
 
 
 # ---------------------------------------------------------------------------
@@ -373,8 +361,6 @@ class BotManager:
         seen = set()
         corrupt = {}
         for path in self.state_dir.glob("*.json"):
-            if path.name == "api-budget.json":
-                continue  # legacy shared API accounting, not a session journal
             seen.add(path)
             try:
                 record = self._read_journal(path)
@@ -417,7 +403,7 @@ class BotManager:
         return result
 
     def _verify_session_flat(self, record):
-        from zeus.network import AccountInfoReads
+        from hyperliquid.info import Info
         from zeus.safety import confirmed_client_order
         kind = record["account_kind"]
         account = self.account_context.account if self.account_context else os.getenv("WALLET_ADDRESS_OUTCOME" if kind == "outcome" else "WALLET_ADDRESS", "").strip()
@@ -425,7 +411,7 @@ class BotManager:
             raise RuntimeError("Account unavailable for stop verification")
         if record.get("account") and record["account"].lower() != account.lower():
             raise RuntimeError("Session account changed; manual verification required")
-        info = AccountInfoReads("https://api.hyperliquid.xyz", timeout=5)
+        info = Info("https://api.hyperliquid.xyz", skip_ws=True, timeout=5)
         symbols = record["symbols"]
         # The account snapshot is the authority on residual risk. It must be
         # read before the client ids: an order that never reached the exchange
@@ -847,8 +833,8 @@ class BotManager:
     def start_worldcup(self, config: WorldcupStartRequest):
         return self.outcome.start(config)
 
-    def stop_worldcup(self, session_id=None, mode="graceful"):
-        return self.outcome.stop(session_id, mode=mode)
+    def stop_worldcup(self, session_id=None):
+        return self.outcome.stop(session_id)
 
     def resume_worldcup_exit(self, session_id):
         return self.outcome.resume_exit(session_id)
@@ -893,7 +879,6 @@ async def _warm_public_catalogs():
 @asynccontextmanager
 async def _server_lifespan(_app):
     global public_catalogs
-    manager.outcome.start_recovery()
     if public_catalogs.closed:
         public_catalogs = PublicCatalogService()
     warm = asyncio.create_task(_warm_public_catalogs())
@@ -906,7 +891,7 @@ async def _server_lifespan(_app):
         for task in (publisher, recovery, warm):
             task.cancel()
         await asyncio.gather(publisher, recovery, warm, return_exceptions=True)
-        manager.outcome.close()
+        manager.outcome.rotation.close()
         from zeus.outcome_flow import scanner
         await asyncio.to_thread(scanner.close)
         await public_catalogs.close()
@@ -1234,45 +1219,18 @@ async def start_outcome(req: WorldcupStartRequest, _: None = Depends(_require_ap
 async def stop_outcome(req: Optional[OutcomeStopRequest] = None, _: None = Depends(_require_api_token)):
     try:
         session_id = req.session_id if req else None
-        mode = req.mode if req else "graceful"
-        requested_ids = await asyncio.to_thread(manager.stop_worldcup, session_id, mode)
-        requested_ids = list(dict.fromkeys(requested_ids or ([session_id] if session_id else [])))
+        stopped_ids = await asyncio.to_thread(manager.stop_worldcup, session_id)
         state = await asyncio.to_thread(dashboard.read, "outcome", fresh=True)
-        bots = state.get("bots", [])
-        display = state.get("display_bots", [])
-        rows = bots + [r for r in display if r.get("session_id") not in
-                       {b.get("session_id") for b in bots}]
-
-        def independently_confirmed(rid):
-            matches = [b for b in rows
-                       if b.get("session_id") == rid
-                       or b.get("auto_group_id") == rid
-                       or (b.get("config") or {}).get("auto_group_id") == rid]
-            if matches:
-                return all(not b.get("running") and b.get("cleanup_confirmed") is True
-                           for b in matches)
-            # Confirmed archived legs drop out of the live projection; verify
-            # them from the durable journals instead of assuming success.
-            try:
-                records = [r for _, r in manager.outcome.records()
-                           if r.get("session_id") == rid
-                           or (r.get("config") or {}).get("auto_group_id") == rid]
-            except Exception:
-                return False
-            return bool(records) and all(r.get("cleanup_confirmed") is True
-                                         for r in records)
-
-        stopped_ids = [rid for rid in requested_ids if independently_confirmed(rid)]
-        pending_ids = [rid for rid in requested_ids if rid not in stopped_ids]
-        # A maker exit may still be waiting for a counterparty. Report the
-        # request as pending and only list ids whose cleanup is independently
-        # confirmed in the same response.
-        return {"status": "pending" if pending_ids else "ok",
-                "message": ("Maker exit in progress" if pending_ids
-                            else "Outcome stop verified"),
-                "requested_session_ids": requested_ids,
-                "stopped_session_ids": stopped_ids,
-                "state": state}
+        targets = [b for b in state.get("bots", [])
+                   if session_id is None or b["session_id"] in (stopped_ids or [session_id])]
+        confirmed = bool(targets) and all(
+            not b["running"] and b["cleanup_confirmed"] is True for b in targets)
+        # A normal passive exit can still be waiting for a counterparty. That
+        # is a recorded stop request, not an error.
+        return {"status": "ok" if confirmed else "draining",
+                "message": "Outcome stop verified" if confirmed else "Maker exit in progress",
+                "state": state,
+                "stopped_session_ids": stopped_ids or [b["session_id"] for b in targets]}
     except Exception as e:
         return JSONResponse(
             status_code=400,
