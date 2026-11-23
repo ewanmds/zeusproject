@@ -44,9 +44,37 @@ export function SessionsView({
     setChecking(null);
   }, [owner]);
   const compact = preference.owner === owner && preference.compact;
-  // Completed sessions keep their final numbers even if the live stream lags;
-  // only a running session can be genuinely "delayed".
-  const liveStale = stale && (metrics?.active ?? 0) > 0;
+  // Aggregate known values even while one session is still starting. A single
+  // incomplete row must not blank the whole account summary.
+  const activeRows =
+    w.snapshot?.sessions.filter((s) => s.running || !s.cleanup_confirmed) ||
+    [];
+  const known = (field: "volume_usd" | "net_pnl" | "fees" | "fills") => {
+    const values = activeRows
+      .map((s) => s[field])
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    return values.length ? values.reduce((a, b) => a + b, 0) : null;
+  };
+  const volume =
+    typeof metrics?.volume_usd === "number" &&
+    Number.isFinite(metrics.volume_usd)
+      ? metrics.volume_usd
+      : known("volume_usd");
+  const net =
+    typeof metrics?.net_pnl === "number" && Number.isFinite(metrics.net_pnl)
+      ? metrics.net_pnl
+      : known("net_pnl");
+  const fills =
+    typeof metrics?.fills === "number" && Number.isFinite(metrics.fills)
+      ? metrics.fills
+      : known("fills");
+  const cost =
+    typeof metrics?.cost_per_1m === "number" &&
+    Number.isFinite(metrics.cost_per_1m)
+      ? metrics.cost_per_1m
+      : volume && net != null
+        ? (-net * 1e6) / volume
+        : null;
   const toggleCompact = (value: boolean) => {
     setPreference({ owner, compact: value });
     if (owner)
@@ -118,23 +146,30 @@ export function SessionsView({
               items={[
                 {
                   label: "Volume exécuté",
-                  value: liveStale ? "—" : usd(metrics?.volume_usd),
+                  value: usd(volume),
                   icon: "chart",
+                  help: (
+                    <RichPopover label="Volume exécuté">
+                      Somme des sessions actives dont les données sont
+                      disponibles. Une session encore en démarrage est exclue
+                      du total au lieu de le masquer.
+                    </RichPopover>
+                  ),
                 },
                 {
                   label: "PnL réalisé net",
-                  value: liveStale ? "—" : usd(metrics?.net_pnl),
+                  value: usd(net),
                   icon: "target",
-                  negative: !liveStale && (metrics?.net_pnl ?? 0) < 0,
+                  negative: (net ?? 0) < 0,
                 },
                 {
                   label: "Fills",
-                  value: liveStale ? "—" : (metrics?.fills ?? "—"),
+                  value: fills ?? "—",
                   icon: "auto",
                 },
                 {
                   label: "Coût / 1M",
-                  value: liveStale ? "—" : usd(metrics?.cost_per_1m),
+                  value: usd(cost),
                   icon: "info",
                   help: (
                     <RichPopover label="Coût par million">
