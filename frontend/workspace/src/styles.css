@@ -1616,6 +1616,65 @@ tbody tr:last-child td {
   font-size: 12px;
   color: var(--subtle);
 }
+.quote-box > .quote-entry {
+  display: grid;
+  gap: 8px;
+}
+.quote-box .quote-top {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 15px;
+  min-width: 0;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+}
+.quote-box .quote-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--subtle);
+  font-size: 10px;
+}
+.quote-box .quote-meta span {
+  color: var(--muted);
+}
+.quote-box .book-depth {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.quote-box .depth-side {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.quote-box .depth-side .depth-title {
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+}
+.quote-box .depth-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--green);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+}
+.quote-box .depth-side:not(.asks) .depth-row span {
+  color: var(--green);
+}
+.quote-box .depth-side.asks .depth-row span {
+  color: var(--purple);
+}
+.quote-box .depth-age {
+  grid-column: 1 / -1;
+  color: var(--subtle);
+  font-size: 9px;
+}
 .session-id {
   font-family: "JetBrains Mono", monospace;
   font-size: 9px;

@@ -176,6 +176,21 @@ class OutcomeQuoteTests(unittest.TestCase):
         self.assertEqual(plan[False]['limit_px'], .31)
         self.assertEqual(plan[False]['order_type']['limit']['tif'], 'Alo')
 
+    def test_l2_book_exposes_bounded_depth_for_the_dashboard(self):
+        bot = make_bot()
+        st = MarketState(MarketSpec('#101', 0, balance_coin='+101'))
+        bot.states = {'#101': st}
+        stamp = int(time.time()*1000)
+        bot.on_l2_book({'data': {'coin': '#101', 'time': stamp, 'levels': [
+            [{'px': '.50', 'sz': '40'}, {'px': '.49', 'sz': '30'}],
+            [{'px': '.51', 'sz': '35'}, {'px': '.52', 'sz': '25'}],
+        ]}})
+        self.assertEqual(st.book_bids[0], (.50, 40))
+        self.assertEqual(st.book_asks[0], (.51, 35))
+        self.assertEqual(len(st.book_bids), 2)
+        self.assertEqual(st.book_source, 'l2')
+        self.assertGreater(st.book_depth_ts, 0)
+
 
 class SupervisorEntryTests(unittest.TestCase):
     def supervisor(self):

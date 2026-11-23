@@ -343,9 +343,14 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         await ws.accept()
         try:
             while await asyncio.to_thread(store.identity, token):
-                try: await ws.send_json(await asyncio.to_thread(runtimes.snapshot, who['wallet']))
-                except (OSError, ValueError): await ws.send_json({'type': 'delayed'})
-                await asyncio.sleep(1)
+                try:
+                    await ws.send_json(await asyncio.to_thread(runtimes.snapshot, who['wallet']))
+                except Exception:
+                    # Keep the socket alive for a transient read failure. The
+                    # browser keeps the last real snapshot and flags it delayed.
+                    try: await ws.send_json({'type': 'delayed'})
+                    except Exception: break
+                await asyncio.sleep(.5)
             await ws.close(code=1008)
         except (WebSocketDisconnect, RuntimeError): pass
 

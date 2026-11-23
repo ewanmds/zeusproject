@@ -321,6 +321,9 @@ class MarketState:
     last_order_ts: float = 0.0
     last_rest_book_ts: float = 0.0
     book_source: str = "-"
+    book_bids: List[Tuple[float, float]] = field(default_factory=list)
+    book_asks: List[Tuple[float, float]] = field(default_factory=list)
+    book_depth_ts: float = 0.0
     pending_until: float = 0.0
     pending_side: str = ""
     reconcile_required: bool = False
@@ -1164,12 +1167,25 @@ class HyperliquidSpreadBot:
             ask = safe_float(levels[1][0].get("px"))
             if bid <= 0 or ask <= 0:
                 return
+            stamp_ms = int(payload.get("time", 0) or 0)
+
+            def parse(rows):
+                out = []
+                for row in rows[:6]:
+                    px, sz = safe_float(row.get("px")), safe_float(row.get("sz"))
+                    if px > 0 and sz > 0:
+                        out.append((px, sz))
+                return out
+
             with self.lock:
                 for local_symbol, st in self.states.items():
                     if coin_matches(local_symbol, symbol):
-                        if not st.update_bbo(bid, ask, int(payload.get("time", 0) or 0)):
+                        if not st.update_bbo(bid, ask, stamp_ms):
                             return
                         st.book_source = "l2"
+                        st.book_bids = parse(levels[0])
+                        st.book_asks = parse(levels[1])
+                        st.book_depth_ts = stamp_ms/1000.0 if stamp_ms else time.time()
                         if st.last_error.startswith("REST bbo"):
                             st.last_error = ""
                         break
@@ -1862,11 +1878,15 @@ class HyperliquidSpreadBot:
                         req = self.bilateral_requests(st).get(buy)
                         if req is None or buy and self.rotation_requested():
                             return
-                        result = self._submit_order(name=req["coin"], is_buy=buy, sz=req["sz"],
-                            limit_px=req["limit_px"], order_type=req["order_type"], reduce_only=False)
-                        self.stats.orders_sent += 1
+                        # Reserve this side before releasing the state lock.
                         st.pending_until = time.time()+.35
                         st.pending_side = side
+                    # Signing and transport must not block L2 callbacks or the
+                    # dashboard snapshot. safety.lock still serializes submits.
+                    result = self._submit_order(name=req["coin"], is_buy=buy, sz=req["sz"],
+                        limit_px=req["limit_px"], order_type=req["order_type"], reduce_only=False)
+                    with self.lock:
+                        self.stats.orders_sent += 1
                         self._parse_order_response(st, [req], result)
                 return
             except Exception as exc:
@@ -2089,19 +2109,21 @@ class HyperliquidSpreadBot:
                 with self.lock:
                     if st.reconcile_required or not self.running or self.safety.stopped.is_set():
                         return
-                    res = self._submit_order(
-                        name=req["coin"],
-                        is_buy=bool(req["is_buy"]),
-                        sz=float(req["sz"]),
-                        limit_px=float(req["limit_px"]),
-                        order_type=req["order_type"],
-                        reduce_only=False,
-                    )
-            self.stats.orders_sent += 1
-            st.last_order_ts = now
-            st.pending_side = f"{'BUY' if req['is_buy'] else 'SELL'} {side_label}"
-            st.pending_until = now + 0.35
-            self._parse_order_response(st, [req], res)
+                    st.pending_side = f"{'BUY' if req['is_buy'] else 'SELL'} {side_label}"
+                    st.pending_until = now + 0.35
+                # Keep the state lock free during signing/transport.
+                res = self._submit_order(
+                    name=req["coin"],
+                    is_buy=bool(req["is_buy"]),
+                    sz=float(req["sz"]),
+                    limit_px=float(req["limit_px"]),
+                    order_type=req["order_type"],
+                    reduce_only=False,
+                )
+                with self.lock:
+                    self.stats.orders_sent += 1
+                    st.last_order_ts = now
+                    self._parse_order_response(st, [req], res)
         except Exception as exc:
             st.last_error = str(exc)[:160]
             st.last_action = "order error"
@@ -2376,6 +2398,11 @@ class HyperliquidSpreadBot:
                        "ask_age_sec": max(0, now-st.ask_order_ts) if st.ask_oid else None,
                        "book_age_ms": max(0, now-st.last_book_ts)*1000 if st.last_book_ts else None,
                        "book_source": st.book_source,
+                       "book_depth": ({
+                           "bids": [{"px": px, "sz": sz} for px, sz in st.book_bids],
+                           "asks": [{"px": px, "sz": sz} for px, sz in st.book_asks],
+                           "age_ms": max(0, now-st.book_depth_ts)*1000 if st.book_depth_ts else None,
+                       } if st.book_bids or st.book_asks else None),
                        "last_cancel": dict(st.last_cancel) or None} for st in self.states.values()]
             active_state = next(iter(self.states.values()), None)
             execution_state, blocked_reason = self.execution_status(active_state)

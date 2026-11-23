@@ -3,6 +3,20 @@ import type { Session } from "../../types";
 import { DetailTabs } from "../DetailTabs";
 import { SessionProgress } from "../SessionProgress";
 import { InlineAlert } from "../feedback";
+const feedLabel = (source?: string) =>
+  source === "l2"
+    ? "L2 WS"
+    : source === "ws"
+      ? "BBO WS"
+      : source === "rest"
+        ? "REST"
+        : "—";
+const ageLabel = (ms?: number | null) =>
+  ms == null || !Number.isFinite(ms)
+    ? "—"
+    : ms < 1000
+      ? Math.round(ms) + " ms"
+      : (ms / 1000).toFixed(1) + " s";
 export function SessionDetails({ session }: { session: Session }) {
   const s = session;
   const values = (items: [string, string | number][]) => (
@@ -33,23 +47,58 @@ export function SessionDetails({ session }: { session: Session }) {
                 <div className="quote-box">
                   {s.quotes?.length ? (
                     s.quotes.map((q: any, index: number) => (
-                      <div key={index}>
-                        <span>
-                          BID{" "}
-                          <b>
-                            {q.bid_size > 0
-                              ? q.bid_size + " × " + q.bid_price
-                              : "—"}
-                          </b>
-                        </span>
-                        <span>
-                          ASK{" "}
-                          <b>
-                            {q.ask_size > 0
-                              ? q.ask_size + " × " + q.ask_price
-                              : "—"}
-                          </b>
-                        </span>
+                      <div key={index} className="quote-entry">
+                        <div className="quote-top">
+                          <span>
+                            BID{" "}
+                            <b>
+                              {q.bid_size > 0
+                                ? q.bid_size + " × " + q.bid_price
+                                : "—"}
+                            </b>
+                          </span>
+                          <span>
+                            ASK{" "}
+                            <b>
+                              {q.ask_size > 0
+                                ? q.ask_size + " × " + q.ask_price
+                                : "—"}
+                            </b>
+                          </span>
+                        </div>
+                        <div className="quote-meta">
+                          <span>Carnet {feedLabel(q.book_source)}</span>
+                          <span>{ageLabel(q.book_age_ms)}</span>
+                        </div>
+                        {!!(q.book_depth?.bids?.length || q.book_depth?.asks?.length) && (
+                          <div className="book-depth">
+                            <div className="depth-side">
+                              <span className="depth-title">Bids</span>
+                              {(q.book_depth.bids || [])
+                                .slice(0, 5)
+                                .map((level: any, i: number) => (
+                                  <div className="depth-row" key={"bid-" + i}>
+                                    <span>{level.sz}</span>
+                                    <span>{level.px}</span>
+                                  </div>
+                                ))}
+                            </div>
+                            <div className="depth-side asks">
+                              <span className="depth-title">Asks</span>
+                              {(q.book_depth.asks || [])
+                                .slice(0, 5)
+                                .map((level: any, i: number) => (
+                                  <div className="depth-row" key={"ask-" + i}>
+                                    <span>{level.sz}</span>
+                                    <span>{level.px}</span>
+                                  </div>
+                                ))}
+                            </div>
+                            <span className="depth-age">
+                              L2 · {ageLabel(q.book_depth.age_ms)}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     ))
                   ) : (

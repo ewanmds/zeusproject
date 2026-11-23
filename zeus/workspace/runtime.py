@@ -79,7 +79,7 @@ class Runtimes:
         # hold the lock used by this tenant's dashboard or live stream.
         with read_lock:
             cached = self.cache.get(owner)
-            if cached and time.monotonic()-cached[0] < .5: return cached[1]
+            if cached and time.monotonic()-cached[0] < .25: return cached[1]
             manager = self.manager(owner)
             outcome = manager.get_worldcup_stats()
             active = outcome.get('display_bots', [])

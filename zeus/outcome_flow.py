@@ -223,7 +223,9 @@ class OutcomeFlowScanner:
                                 watched = {coin: at for coin, at in self.book_watch.items()
                                            if time.time()-at < 15 and int(coin[1:])//10 in self.rows}
                                 self.book_watch = watched
-                                wanted_books = set(sorted(watched, key=watched.get, reverse=True)[:24])
+                                # 450 outcomes * two trade subscriptions + 48
+                                # L2 books stays below Hyperliquid's 1000-sub limit.
+                                wanted_books = set(sorted(watched, key=watched.get, reverse=True)[:48])
                             for method, coins in (('unsubscribe', sent_books-wanted_books),
                                                   ('subscribe', wanted_books-sent_books)):
                                 for coin in sorted(coins):
@@ -412,7 +414,7 @@ class OutcomeFlowScanner:
             observed.append(item)
         observed.sort(key=lambda row: (-row['volume_usd_1m'], row['market']))
         with self.lock:
-            for row in observed[:12]:
+            for row in observed[:24]:
                 self.book_watch[row['market']] = now
         return dict(observed_markets=observed, observed_at=now, observation_connected=connected)
 
@@ -482,6 +484,11 @@ class OutcomeFlowScanner:
         shortlist.sort(key=lambda r: (-r["volume_usd_1m"], -r["score"], r["market"]))
         # Dollar/minute first; retain freshness, spread, depth and two-way guards.
         targets = shortlist[:24]
+        # Mark the exact shortlist for the shared L2 subscription so the next
+        # scan reads the websocket cache instead of 24 serialized REST books.
+        with self.lock:
+            for item in targets:
+                self.book_watch[item["market"]] = now
         pool = self._book_executor()
         if pool is None:
             status["connected"] = False
