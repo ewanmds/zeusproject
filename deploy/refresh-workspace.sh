@@ -25,9 +25,15 @@ idle() { .venv-workspace/bin/python deploy/check_workspace_idle.py --workspace "
 idle
 mkdir -p "$ROOT/.zeus-state"
 MAINTENANCE="$ROOT/.zeus-state/maintenance"
-(set -o noclobber; printf '%s\n' "Workspace update $$" > "$MAINTENANCE") || {
+command -v flock >/dev/null || { echo 'flock is required for the deployment lock.' >&2; exit 1; }
+if ! .venv-workspace/bin/python -c 'from zeus.maintenance import maintenance_active; raise SystemExit(int(maintenance_active()))'; then
+  echo 'An updater is still running. Wait for it to finish.' >&2; exit 1
+fi
+exec 9>>"$ROOT/.zeus-state/maintenance.lock"
+flock -n 9 || {
   echo 'Another maintenance operation is recorded.' >&2; exit 1;
 }
+printf '%s\n' "Workspace update $$" > "$MAINTENANCE"
 trap 'rm -f -- "$MAINTENANCE"' EXIT
 STAMP=$(date -u +%Y%m%d-%H%M%S)
 BACKUP="$ROOT/output/workspace-refresh-$STAMP"
@@ -49,7 +55,7 @@ tar -czf "$BACKUP/trading-state.tar.gz" --exclude='*/network/*' -C "$ROOT" .zeus
 .venv-workspace/bin/python -m pip install -r requirements.txt
 npm ci --prefix frontend/workspace --no-audit --no-fund
 npm run build --prefix frontend/workspace
-.venv-workspace/bin/python -m unittest discover -s tests -p 'test_*.py'
+ZEUS_MAINTENANCE_ROOT="$BACKUP/test-maintenance" .venv-workspace/bin/python -m unittest discover -s tests -p 'test_*.py'
 npm test --prefix frontend/workspace
 idle
 sudo -n systemctl restart zeus-workspace

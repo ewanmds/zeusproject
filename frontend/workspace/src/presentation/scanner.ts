@@ -2,6 +2,7 @@ export interface ScannerSnapshot {
   ready?: boolean;
   connected?: boolean;
   warming_up?: boolean;
+  flow_policy?: string;
   catalog_stale?: boolean;
   observed_sec?: number;
   markets_observed?: number;
@@ -203,7 +204,7 @@ export function describeScannerDiagnostic(
     parts.push(
       `${marketCount(funds)} écarté${funds > 1 ? "s" : ""} : fonds ou approbation insuffisants.`,
     );
-  if (flow !== undefined && !explained("flux", "flow"))
+  if (scanner.flow_policy !== "informational" && flow !== undefined && !explained("flux", "flow"))
     parts.push(
       `${marketCount(flow)} écarté${flow > 1 ? "s" : ""} : flux insuffisant.`,
     );
@@ -215,8 +216,8 @@ export function describeScannerDiagnostic(
     if (scanner.connected === false) parts.push("Scanner non connecté au flux public.");
     else if (
       scanner.warming_up ||
-      (observed !== undefined && observed < 60) ||
-      (observedMarkets !== undefined &&
+      (scanner.flow_policy !== "informational" && observed !== undefined && observed < 60) ||
+      (scanner.flow_policy !== "informational" && observedMarkets !== undefined &&
         totalMarkets !== undefined &&
         observedMarkets < totalMarkets)
     ) {

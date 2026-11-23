@@ -183,7 +183,8 @@ class OutcomeSupervisor:
                         "Outcome auto-recovery %s failed (%s): %s", sid, failures, detail)
 
     def start(self, request, *, rotation_group=None, seed=None):
-        if (PROJECT_ROOT/'.zeus-state'/'maintenance').exists() and not getattr(request, 'resume_exit', False):
+        from zeus.maintenance import maintenance_active
+        if maintenance_active() and not getattr(request, 'resume_exit', False):
             raise ValueError('Mise à jour du workspace en cours ; nouvelles entrées suspendues')
         self.rotation.assert_admission(rotation_group)
         from zeus import outcomes
@@ -205,7 +206,7 @@ class OutcomeSupervisor:
                               and self.rotation.candidate_allowed(rotation_group, r["market"])), None)
             if not snapshot["ready"]:
                 raise ValueError(snapshot.get('reason') or snapshot.get('error')
-                                 or "No eligible recent two-way flow within the spread and depth limits. Wait for observation.")
+                                 or "No fresh market book within the spread and depth limits.")
             if selection is None:
                 raise ValueError("Tous les marchés éligibles sont déjà occupés par une session")
             selected = selection["market"]

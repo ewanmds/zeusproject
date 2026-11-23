@@ -182,8 +182,8 @@ class Runtimes:
         return result
 
     def launch(self, owner, payload):
-        from zeus import PROJECT_ROOT
-        if (PROJECT_ROOT/'.zeus-state'/'maintenance').exists():
+        from zeus.maintenance import maintenance_active
+        if maintenance_active():
             raise ValueError('Mise à jour du workspace en cours ; lancement temporairement suspendu')
         from zeus.server import WorldcupStartRequest, GridStartRequest, manager as legacy
         with self.tenant_lock(owner):

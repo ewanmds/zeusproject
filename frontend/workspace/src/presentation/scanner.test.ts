@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { describeScannerDiagnostic, sanitizeDiagnostic } from "./scanner";
 
 describe("scanner diagnostics", () => {
+  it("does not present missing flow or observation time as an admission filter", () => {
+    const message = describeScannerDiagnostic({
+      flow_policy: "informational", connected: true, warming_up: false,
+      observed_sec: 2, markets_observed: 0, markets_total: 11,
+      rejections: { flow: 11, depth: 1 },
+    });
+    expect(message).toContain("profondeur");
+    expect(message).not.toContain("flux insuffisant");
+    expect(message).not.toContain("Observation du flux");
+  });
+
   it("stays silent as soon as eligible candidates arrive", () => {
     expect(
       describeScannerDiagnostic({

@@ -3,6 +3,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+from zeus.maintenance import maintenance_active
+from zeus.process_control import ProcessLock
 
 spec = importlib.util.spec_from_file_location('check_workspace_idle', Path(__file__).resolve().parents[1]/'deploy/check_workspace_idle.py')
 module = importlib.util.module_from_spec(spec)
@@ -10,6 +13,24 @@ spec.loader.exec_module(module)
 
 
 class RefreshWorkspaceTests(unittest.TestCase):
+    def test_stale_marker_does_not_block_but_a_live_os_lock_does(self):
+        with tempfile.TemporaryDirectory() as folder, patch('zeus.maintenance._legacy_update_running', return_value=False):
+            root = Path(folder)
+            (root/'maintenance').write_text('Workspace update 12345\n')
+            self.assertFalse(maintenance_active(root))
+            with ProcessLock(root/'maintenance.lock', timeout=0):
+                self.assertTrue(maintenance_active(root))
+            self.assertFalse(maintenance_active(root))
+
+    def test_legacy_live_updater_is_preserved_without_trusting_other_processes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root/'maintenance').write_text('Workspace update 12345\n')
+            with patch('zeus.maintenance._legacy_update_running', return_value=True):
+                self.assertTrue(maintenance_active(root))
+            (root/'maintenance').write_text('broken marker')
+            self.assertFalse(maintenance_active(root))
+
     def test_cancel_only_and_corrupt_journals_block_deployment(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

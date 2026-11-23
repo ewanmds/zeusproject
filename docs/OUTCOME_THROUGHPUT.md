@@ -36,6 +36,24 @@ The newer approved maker-then-bounded-IOC policy is retained for new sessions.
 
 ## WebSocket first
 
+### Follow-up: launch admission and interrupted updates
+
+- Recent flow is now **informational only**: no minimum trade count, two-way
+  activity, cadence, 20-second last-trade threshold or 60-second observation
+  period blocks a market. A connected scanner with a fresh catalog can admit
+  valid fresh books immediately. Spread, depth, schedule and inventory/funds
+  controls still apply.
+- No observed trades means zero observed volume and an unknown queue estimate,
+  represented as JSON null. It never becomes fictitious flow or Infinity.
+- Valid candidates are kept stable while spare bounded book slots explore the
+  rest of the catalog, including markets without recent trades.
+- Maintenance now uses a live OS lock. An abandoned `maintenance` marker no
+  longer disables launch indefinitely; a running update still blocks entries.
+  The updater releases its lock even after abrupt process termination. Legacy
+  markers are honored only while their exact updater process remains alive.
+- Deployment unit tests use an isolated maintenance root, so the real deployment
+  guard cannot reject their simulated launches.
+
 - The existing signed WebSocket transport now also supports documented read-only
   info RPC envelopes. SDK signatures and nonce/account locks are preserved.
 - Outcome orders/cancels and live account verification use the warm WebSocket

@@ -567,19 +567,20 @@ class ScannerDiagnosticsTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertGreater(result["rejections"]["stale"], 0)
 
-    def test_warmup_and_flow_are_distinct_rejection_categories(self):
+    def test_flow_observation_and_missing_trades_do_not_block_fresh_books(self):
         scan, book, _ = self.scanner(age=5)
         result = self.run_scan(scan, book)
-        self.assertFalse(result["ready"])
-        self.assertEqual(result["rejections"]["warmup"], 1)
-        self.assertTrue(result["warming_up"])
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["rejections"]["warmup"], 0)
+        self.assertFalse(result["warming_up"])
 
         scan, book, _ = self.scanner(history=False)
         result = self.run_scan(scan, book)
-        self.assertFalse(result["ready"])
+        self.assertTrue(result["ready"])
         self.assertFalse(result["ready"] and result.get("catalog_stale"))
         self.assertIn("rejections", result)
-        self.assertTrue(result["reason"])
+        self.assertEqual(result["reason"], "")
+        self.assertIsNone(result["candidates"][0]["queue_proxy_sec"])
 
 
 class LegacyStopRouteTests(unittest.TestCase):

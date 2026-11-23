@@ -310,7 +310,7 @@ class OutcomeRotation:
                     current_cycle = float((group.get("current_selection") or {}).get(
                         "queue_proxy_sec") or 0)
                     next_cycle = float(top.get("queue_proxy_sec") or 0)
-                    if current_cycle > 0 and next_cycle > current_cycle * 0.75:
+                    if current_cycle > 0 and (next_cycle <= 0 or next_cycle > current_cycle * 0.75):
                         group["reason"] = "Rotation: le prochain marché n'est pas 25% plus rapide"
                         continue
                     info = self.owner.procs.get(current_id)
