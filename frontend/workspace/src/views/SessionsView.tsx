@@ -44,6 +44,9 @@ export function SessionsView({
     setChecking(null);
   }, [owner]);
   const compact = preference.owner === owner && preference.compact;
+  // Completed sessions keep their final numbers even if the live stream lags;
+  // only a running session can be genuinely "delayed".
+  const liveStale = stale && (metrics?.active ?? 0) > 0;
   const toggleCompact = (value: boolean) => {
     setPreference({ owner, compact: value });
     if (owner)
@@ -115,23 +118,23 @@ export function SessionsView({
               items={[
                 {
                   label: "Volume exécuté",
-                  value: stale ? "—" : usd(metrics?.volume_usd),
+                  value: liveStale ? "—" : usd(metrics?.volume_usd),
                   icon: "chart",
                 },
                 {
                   label: "PnL réalisé net",
-                  value: stale ? "—" : usd(metrics?.net_pnl),
+                  value: liveStale ? "—" : usd(metrics?.net_pnl),
                   icon: "target",
-                  negative: !stale && (metrics?.net_pnl ?? 0) < 0,
+                  negative: !liveStale && (metrics?.net_pnl ?? 0) < 0,
                 },
                 {
                   label: "Fills",
-                  value: stale ? "—" : (metrics?.fills ?? "—"),
+                  value: liveStale ? "—" : (metrics?.fills ?? "—"),
                   icon: "auto",
                 },
                 {
                   label: "Coût / 1M",
-                  value: stale ? "—" : usd(metrics?.cost_per_1m),
+                  value: liveStale ? "—" : usd(metrics?.cost_per_1m),
                   icon: "info",
                   help: (
                     <RichPopover label="Coût par million">
@@ -296,7 +299,7 @@ export function SessionsView({
                       </div>
                       <SessionProgress
                         session={s}
-                        stale={stale}
+                        stale={stale && s.running}
                         extraSeconds={Math.max(0, now - w.received) / 1000}
                       />
                       <div className="session-footer">

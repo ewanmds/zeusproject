@@ -58,9 +58,9 @@ async (page) => {
   await page.getByText('Offline cancellation failure', {exact:true}).waitFor();
   await card('timeout').getByRole('button', {name:'Arrêter', exact:true}).click();
   await page.waitForFunction(() => document.querySelectorAll('.session-card').length === 1);
-  await page.clock.fastForward(31000);
+  await page.clock.fastForward(46000);
   await card('timeout').waitFor();
-  await page.getByText(/Arrêt non confirmé après 30 s/).waitFor();
+  await page.getByText(/Arrêt non confirmé après 45 s/).waitFor();
   if (rows[2].cleanup_confirmed) throw Error('Unconfirmed stop was marked closed');
   await page.setViewportSize({width:390,height:900});
   if (!await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)) throw Error('Mobile overflow');

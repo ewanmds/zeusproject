@@ -16,13 +16,23 @@ export function sessionStatus(
   > & { exit_requested?: boolean; stop_reason?: string },
   workspaceStale: boolean,
 ): { tone: StatusTone; label: string } {
+  const phaseLabel =
+    phaseText[session.phase] || session.phase || "État à vérifier";
+  // A terminal session keeps its terminal label even when the live stream is
+  // briefly delayed; only a running quote can be "Données retardées".
+  if (!session.running) {
+    if (!session.cleanup_confirmed)
+      return { tone: "degraded", label: "Arrêt non confirmé" };
+    if (["error", "failed"].includes(session.phase))
+      return {
+        tone: "offline",
+        label: session.phase === "error" ? "Erreur" : phaseLabel,
+      };
+    return { tone: "neutral", label: "Arrêt confirmé" };
+  }
   // Only a real publication gap is "delayed"; accounting still settling is not.
   if (workspaceStale || session.stale)
     return { tone: "degraded", label: "Données retardées" };
-  const phaseLabel =
-    phaseText[session.phase] || session.phase || "État à vérifier";
-  if (!session.running && !session.cleanup_confirmed)
-    return { tone: "degraded", label: "Arrêt non confirmé" };
   if (["error", "failed"].includes(session.phase))
     return {
       tone: "offline",

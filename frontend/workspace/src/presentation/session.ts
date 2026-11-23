@@ -1,4 +1,14 @@
 import type { Session } from "../types";
+
+/** A stopped session belongs to history, never to the active tab. */
+export function sessionVisible(
+  session: Pick<Session, "running">,
+  filter: string,
+) {
+  if (filter === "all") return true;
+  return filter === "active" ? session.running : !session.running;
+}
+
 export function sessionProgress(session: Session, extraSeconds = 0) {
   const duration =
     session.config.session_duration_sec ?? session.config.duration_sec;

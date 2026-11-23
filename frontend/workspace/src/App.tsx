@@ -9,6 +9,7 @@ import { Icon, Modal, Pending } from "./ui";
 import { FeedbackButton } from "./components/FeedbackButton";
 import type { Draft, View, Session, Agent, Operation, Snapshot } from "./types";
 import { resolveStopSnapshot } from "./presentation/stop";
+import { sessionVisible } from "./presentation/session";
 import { NavDock } from "./components/layout";
 import { Kbd } from "./components/fields";
 import { useMobile } from "./components/Dialog";
@@ -338,6 +339,9 @@ export default function App() {
         { mode: "cancel_and_market" },
       );
       if (currentOwner.current !== owner) return;
+      // Use the command's fresh snapshot immediately; the live stream may lag
+      // behind the stop and otherwise re-show an already closed session.
+      w.applySnapshot(snapshot);
       const resolution = resolveStopSnapshot(snapshot, session.id);
       // A 200 only records the request; never claim a verified stop until the
       // returned snapshot proves it.
@@ -359,12 +363,12 @@ export default function App() {
     let changed = false;
     for (const [id, started] of Object.entries(pendingStops)) {
       const resolution = resolveStopSnapshot(w.snapshot, id);
-      if (resolution.confirmed || now-started >= 30000) {
+      if (resolution.confirmed || now-started >= 45000) {
         delete next[id];
         stopRequests.current.delete(id);
         changed = true;
         if (!resolution.confirmed) {
-          setNotice("Arrêt non confirmé après 30 s : la session reste visible pour vérifier les ordres et l’inventaire.");
+          setNotice("Arrêt non confirmé après 45 s : la session apparaît dans Terminées pour vérification.");
         }
       }
     }
@@ -378,11 +382,7 @@ export default function App() {
   const ready =
     (w.balance?.agent?.status ?? w.identity?.agent?.status) === "ready";
   const filtered = sessions.filter(
-    (s) =>
-      !pendingStops[s.id] && (filter === "all" ||
-      (filter === "active"
-        ? s.running || !s.cleanup_confirmed
-        : !s.running && s.cleanup_confirmed)),
+    (s) => !pendingStops[s.id] && sessionVisible(s, filter),
   );
   const history = sessions.filter(
     (s) => s.started >= now / 1000 - period * 86400,

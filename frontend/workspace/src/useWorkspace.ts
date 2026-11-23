@@ -27,7 +27,8 @@ export function useWorkspace() {
   const [wallets, setWallets] = useState<Wallet[]>([]);
   const provider = useRef<Provider | null>(null),
     epoch = useRef(0),
-    refreshRef = useRef<() => void>(() => {});
+    refreshRef = useRef<() => void>(() => {}),
+    acceptRef = useRef<(value: Snapshot) => void>(() => {});
   const clear = useCallback(() => {
     epoch.current++;
     invalidateIdentity();
@@ -143,6 +144,7 @@ export function useWorkspace() {
         setError("");
       }
     };
+    acceptRef.current = accept;
     const poll = async () => {
       try {
         accept(await api<Snapshot>("/workspace"));
@@ -212,6 +214,7 @@ export function useWorkspace() {
       socket?.close();
       document.removeEventListener("visibilitychange", visible);
       refreshRef.current = () => {};
+      acceptRef.current = () => {};
     };
   }, [identity?.wallet, clear]);
   const logout = async () => {
@@ -239,5 +242,6 @@ export function useWorkspace() {
     loadIdentity,
     cancelConnection: clear,
     refresh: () => refreshRef.current(),
+    applySnapshot: (value: Snapshot) => acceptRef.current(value),
   };
 }

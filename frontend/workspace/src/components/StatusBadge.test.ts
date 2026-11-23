@@ -46,6 +46,26 @@ describe("session status evidence", () => {
       sessionStatus({ ...active, running: false, phase: "stopped" }, false),
     ).toEqual({ tone: "degraded", label: "Arrêt non confirmé" });
   });
+  it("keeps a terminal state while the live stream is delayed", () => {
+    expect(
+      sessionStatus(
+        { ...active, running: false, phase: "stopped" },
+        true,
+      ),
+    ).toEqual({ tone: "degraded", label: "Arrêt non confirmé" });
+    expect(
+      sessionStatus(
+        {
+          ...active,
+          running: false,
+          cleanup_confirmed: true,
+          phase: "stopped",
+          state: "Bid working",
+        },
+        true,
+      ),
+    ).toEqual({ tone: "neutral", label: "Arrêt confirmé" });
+  });
   it("treats a verified stop as neutral, not an error", () => {
     expect(
       sessionStatus(

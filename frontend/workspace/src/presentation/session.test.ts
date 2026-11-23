@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "../types";
-import { aggregate, sessionProgress } from "./session";
+import { aggregate, sessionProgress, sessionVisible } from "./session";
 const session = {
   running: true,
   stale: false,
@@ -13,6 +13,13 @@ const session = {
   config: {},
 } as Session;
 describe("real session projections", () => {
+  it("never shows a stopped session in the active tab", () => {
+    expect(sessionVisible({ ...session, running: true }, "active")).toBe(true);
+    expect(sessionVisible({ ...session, running: false }, "active")).toBe(false);
+    expect(sessionVisible({ ...session, running: false }, "closed")).toBe(true);
+    expect(sessionVisible({ ...session, running: true }, "closed")).toBe(false);
+    expect(sessionVisible({ ...session, running: false }, "all")).toBe(true);
+  });
   it("does not invent a target for a manual session", () =>
     expect(sessionProgress(session)).toBeNull());
   it("uses the launched duration projection before a draft alias", () => {
