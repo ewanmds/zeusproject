@@ -1,6 +1,5 @@
 """One supervised Outcome market per OS process. Importing never starts a bot."""
 import argparse
-import math
 import os
 from pathlib import Path
 import threading
@@ -26,14 +25,6 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
     exec_mode = str(public.get("exec_mode") or "maker").strip().lower()
     if exec_mode != "maker":
         raise ValueError("Outcome sessions are post-only maker only")
-    selection = public.get("auto_selection") or {}
-
-    def selection_float(key):
-        try:
-            value = float(selection.get(key))
-        except (TypeError, ValueError):
-            return None
-        return value if math.isfinite(value) else None
     return BotConfig(
         base_url="https://api.hyperliquid.xyz", perp_dex="xyz", live=True,
         symbols=[market], keywords=[], max_symbols=1,
@@ -49,9 +40,6 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         exec_mode="maker", maker_offset_pct=0,
         maker_spread_pct=public.get("maker_spread_pct", 0.005), safety_file=str(safety_file),
         auto_max_spread_bps=public.get("auto_max_spread_bps", 10) if public.get("selection_mode") == "auto" else None,
-        auto_net_edge_bps=selection_float('net_touch_edge_bps'),
-        auto_maker_close_fee_bps=selection_float('maker_close_fee_bps'),
-        min_entry_edge_bps=0.0,
         two_sided=public.get("two_sided", False),
         full_size_quotes=public.get("full_size_quotes", public.get("selection_mode") == "auto"),
         session_expires_at=public.get('session_expires_at'), target_volume_usd=public.get('target_volume_usd'),
