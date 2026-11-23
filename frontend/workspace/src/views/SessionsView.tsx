@@ -63,27 +63,25 @@ export function SessionsView({
           Arrêter
         </button>
       ) : !s.cleanup_confirmed ? (
-        <div className="row-actions">
-          <button
-            className="button secondary small"
-            disabled={!!checking}
-            aria-busy={checking === s.id || undefined}
-            onClick={async () => {
-              setChecking(s.id);
-              setError(null);
-              try {
-                await api("/reconcile", {});
-                w.refresh();
-              } catch (e: any) {
-                setError({ id: s.id, message: e.message });
-              } finally {
-                setChecking(null);
-              }
-            }}
-          >
-            {checking === s.id ? "Vérification…" : "Vérifier l’arrêt"}
-          </button>
-        </div>
+        <button
+          className="button secondary small"
+          disabled={!!checking}
+          aria-busy={checking === s.id || undefined}
+          onClick={async () => {
+            setChecking(s.id);
+            setError(null);
+            try {
+              await api("/reconcile", {});
+              w.refresh();
+            } catch (e: any) {
+              setError({ id: s.id, message: e.message });
+            } finally {
+              setChecking(null);
+            }
+          }}
+        >
+          {checking === s.id ? "Vérification…" : "Vérifier l’arrêt"}
+        </button>
       ) : null}
     </div>
   );
@@ -201,7 +199,11 @@ export function SessionsView({
                     { id: "actions", label: "Actions", render: actions },
                   ]}
                 />
-                {error && <InlineAlert>{error.message}</InlineAlert>}
+                {error && (
+                  <InlineAlert onClose={() => setError(null)}>
+                    {error.message}
+                  </InlineAlert>
+                )}
               </div>
             ) : (
               <div className="session-list">
@@ -312,7 +314,9 @@ export function SessionsView({
                         </p>
                       )}
                       {error?.id === s.id && (
-                        <InlineAlert>{error.message}</InlineAlert>
+                        <InlineAlert onClose={() => setError(null)}>
+                          {error.message}
+                        </InlineAlert>
                       )}
                     </article>
                   );

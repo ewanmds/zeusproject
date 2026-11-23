@@ -321,7 +321,16 @@ class OutcomeFlowScanner:
                       "catalog_stale": now-self.catalog_at >= 120,
                       "observed_sec": max(0, now-self.connected_at) if self.connected else 0,
                       "markets_observed": len(self.subscribed)//2, "markets_total": len(self.rows), "updated_at": now,
-                      "error": self.error, "candidates": [], "side": side}
+                      "error": self.error, "candidates": [], "side": side,
+                      # Cost never gates volume mode; it is reported only.
+                      "cost_policy": "informational",
+                      # Counts are diagnostic only; limits below are unchanged.
+                      "rejections": {"spread": 0, "depth": 0, "stale": 0, "book": 0,
+                                     "flow": 0, "events": 0,
+                                     "warmup": int(bool(self.connected and (
+                                         now-self.connected_at < 60
+                                         or len(self.subscribed) != 2*len(self.rows)))),
+                                     "catalog": int(now-self.catalog_at >= 120)}}
             suffix = "0" if side == "yes" else "1"
             history = {}
             for coin, trades in self.history.items():
@@ -353,6 +362,11 @@ class OutcomeFlowScanner:
             status["order_usd"] = order_usd
             status["max_spread_bps"] = max_spread_bps
             status["min_depth_usd"] = order_usd
+            status["thresholds"] = {"order_usd": order_usd,
+                                    "min_depth_usd": order_usd,
+                                    "max_spread_bps": max_spread_bps}
+            status["rejections"] = dict(status.get("rejections") or {})
+            status["rejection_counts"] = dict(status["rejections"])
             return status
 
         if not ready:
@@ -381,7 +395,7 @@ class OutcomeFlowScanner:
         candidates = []
         fees_not_covered = 0
         cost_unavailable = 0
-        rejected_book = rejected_depth = rejected_spread = 0
+        rejected_book = rejected_stale = rejected_depth = rejected_spread = 0
         widest_spread = 0.0
         deepest_book = 0.0
         for item, book in zip(targets, books):
@@ -393,8 +407,11 @@ class OutcomeFlowScanner:
                 spread = 10000*(ask-bid)/((bid+ask)/2)
                 depth = min(bq*bid, aq*ask)
                 if (not all(map(math.isfinite, (bid, ask, bq, aq, age, spread)))
-                        or not 0 < bid < ask < 1 or not -1 <= age <= 5):
+                        or not 0 < bid < ask < 1):
                     rejected_book += 1
+                    continue
+                if not -1 <= age <= 5:
+                    rejected_stale += 1
                     continue
                 widest_spread = max(widest_spread, spread)
                 deepest_book = max(deepest_book, depth)
@@ -438,25 +455,38 @@ class OutcomeFlowScanner:
         completed = time.time()
         for row in candidates:
             row['last_trade_age_sec'] += completed-now
+        rejected_flow = max(0, len(history)-len(shortlist))
+        rejections = {**status.get("rejections", {}),
+                      "spread": rejected_spread, "depth": rejected_depth,
+                      "stale": rejected_stale, "book": rejected_book,
+                      "flow": rejected_flow, "events": skipped_events,
+                      "warmup": 0, "catalog": 0}
         reason = ""
         if not candidates:
             parts = []
             if len(shortlist):
                 parts.append("%d marché(s) avec flux" % len(shortlist))
             if rejected_book:
-                parts.append("%d carnet(s) absent(s) ou périmé(s)" % rejected_book)
+                parts.append("%d carnet(s) absent(s) ou invalide(s)" % rejected_book)
+            if rejected_stale:
+                parts.append("%d carnet(s) périmé(s)" % rejected_stale)
             if rejected_depth:
                 parts.append("%d profondeur(s) < %g $ (max %g $)"
                              % (rejected_depth, order_usd, round(deepest_book, 2)))
             if rejected_spread:
                 parts.append("%d spread(s) > %g bps (min observé %g bps)"
                              % (rejected_spread, max_spread_bps, round(widest_spread, 2)))
-            if not parts and skipped_events:
-                parts.append("%d marché(s) sans flux récent" % skipped_events)
+            if not parts and rejected_flow:
+                parts.append("%d marché(s) sans flux éligible" % rejected_flow)
             reason = ("Aucun candidat: " + "; ".join(parts)) if parts else \
                      "Aucun flux deux sens dans les 5 dernières minutes"
         return {**status, "ready": bool(candidates), "warming_up": False, "candidates": candidates,
                 "reason": reason,
+                "rejections": rejections, "rejection_counts": dict(rejections),
+                "thresholds": {"order_usd": order_usd, "min_depth_usd": order_usd,
+                               "max_spread_bps": max_spread_bps,
+                               "widest_spread_bps": round(widest_spread, 2),
+                               "deepest_book_usd": round(deepest_book, 2)},
                 "fees_not_covered": fees_not_covered, "cost_unavailable": cost_unavailable,
                 "cost_policy": "informational",
                 "order_usd": order_usd, "max_spread_bps": max_spread_bps,
@@ -517,7 +547,7 @@ def no_fill_grace(config, selection):
     queue = float((selection or {}).get('queue_proxy_sec') or 0)
     # Give a newly joined queue a reasonable chance; never extend the user's
     # configured observation window. This remains an estimate, not a promise.
-    return min(window, max(60, queue*1.25))
+    return min(window, max(180, queue*1.25))
 
 
 def candidate_rank(candidate, results, now):

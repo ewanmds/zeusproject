@@ -37,8 +37,10 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         account_address=os.getenv("WALLET_ADDRESS_OUTCOME", "").strip(),
         private_key=os.getenv("PRIVATE_KEY_OUTCOME", "").strip(),
         scan_only=False, worldcup=True, countries=[], outcome_side=side,
-        exec_mode="maker", maker_offset_pct=0,
-        maker_spread_pct=public.get("maker_spread_pct", 0.005), safety_file=str(safety_file),
+        # Outcome always quotes both sides at the touch. A draft's spread/offset
+        # can never turn the post-only maker into a taker or a worse quote.
+        exec_mode="maker", maker_offset_pct=0, maker_spread_pct=None,
+        safety_file=str(safety_file),
         auto_max_spread_bps=public.get("auto_max_spread_bps", 10) if public.get("selection_mode") == "auto" else None,
         two_sided=public.get("two_sided", False),
         full_size_quotes=public.get("full_size_quotes", public.get("selection_mode") == "auto"),
@@ -51,6 +53,13 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         inventory_stop_bps=min(500.0, max(50.0, float(public.get("inventory_stop_bps") or 200))),
         inventory_drain_timeout_sec=min(600.0, max(15.0, float(public.get("inventory_drain_timeout_sec") or 90))),
         inventory_exit_slippage_bps=min(200.0, max(20.0, float(public.get("inventory_exit_slippage_bps") or 50))),
+        exit_policy=("maker_then_ioc" if str(public.get("exit_policy") or "maker_only").lower()
+                     == "maker_then_ioc" else "maker_only"),
+        maker_exit_timeout_sec=min(3600.0, max(1.0, float(
+            public.get("maker_exit_timeout_sec")
+            or public.get("inventory_drain_timeout_sec") or 90))),
+        exit_slippage_bps=min(200.0, max(0.0, float(public.get("exit_slippage_bps") or 20))),
+        exit_taker_fee_bps=min(200.0, max(0.0, float(public.get("exit_taker_fee_bps") or 10))),
         resume_exit=bool(public.get("resume_exit")),
         resume_trading=bool(public.get("resume_trading")),
         stop_file=str(stop_file) if stop_file else None,
@@ -74,6 +83,29 @@ def run_worker(config_path, bot_factory=None):
     metadata = read_json(journal)
     telemetry = OutcomeTelemetry(stats_file)
 
+    def drain_request():
+        """Return the persisted maker-exit reason, without starting any I/O."""
+        drain = runtime / "drain.json"
+        if not drain.exists():
+            return None
+        try:
+            request = read_json(drain)
+        except (OSError, ValueError):
+            request = {}
+        reason = request.get("reason") if isinstance(request, dict) else None
+        return str(reason or "Maker exit requested")
+
+    def observe_lifecycle():
+        """Hard stop wins; otherwise a drain.json requests an exit-only mode."""
+        if stop_file.exists() or not supervisor_alive():
+            bot.request_stop()
+            return "stop"
+        reason = drain_request()
+        if reason is not None:
+            bot.request_maker_exit(reason)
+            return "drain"
+        return ""
+
     def publish(final=False):
         snap = bot.export_dashboard_stats() if bot is not None else {}
         if snap is None:
@@ -89,20 +121,25 @@ def run_worker(config_path, bot_factory=None):
             if reason and not drain.exists():
                 atomic_json(drain, {'requested_at': time.time(), 'reason': reason, 'session_finished': True})
                 bot.wake.set()
-        return telemetry.final(payload) if final else telemetry.write(payload)
+        try:
+            return telemetry.final(payload) if final else telemetry.write(payload)
+        except (PermissionError, OSError):
+            # The stats snapshot is advisory UI telemetry, never the durable
+            # risk journal. Keep the previous timestamp and retry on a later
+            # tick; a sustained lock only makes the row stale, not fatal.
+            return False
 
     def monitor():
         while not finished.wait(0.25):
             if bot is not None:
-                if stop_file.exists() or not supervisor_alive():
-                    bot.request_stop()
                 try:
+                    observe_lifecycle()
                     publish()
-                except Exception:
-                    # UI telemetry only. A transient Windows write failure must
-                    # not stop trading or fabricate a fresh timestamp; the
-                    # supervisor reports the old sample as delayed instead.
-                    pass
+                except Exception as exc:
+                    # A durable journal failure already closes the gate inside
+                    # the engine. Anything else here is an unexpected runtime
+                    # fault and must follow the existing fatal-stop path.
+                    bot.safety.fail("Snapshot publication failed: " + safe_error(exc))
 
     watcher = None
     instance_lock = ProcessLock(lock_path, timeout=0)
@@ -120,8 +157,10 @@ def run_worker(config_path, bot_factory=None):
         bot = bot_factory(cfg)
         watcher = threading.Thread(target=monitor, daemon=True)
         watcher.start()
-        if stop_file.exists() or not supervisor_alive():
-            bot.request_stop()
+        # Observe a Stop/exit request that arrived while the constructor was
+        # still reading public metadata. This closes Stop-during-startup.
+        if observe_lifecycle() == "stop":
+            pass
         else:
             bot.run()
     except BaseException as exc:

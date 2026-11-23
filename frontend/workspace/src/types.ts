@@ -68,6 +68,8 @@ export interface Session {
   net_pnl: number | null;
   fees: number | null;
   fills: number | null;
+  orders_sent?: number | null;
+  cancels_sent?: number | null;
   cost_per_1m: number | null;
   position_usd: number | null;
   stale: boolean;

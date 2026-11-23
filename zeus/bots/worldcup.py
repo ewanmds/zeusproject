@@ -259,7 +259,12 @@ class BotConfig:
     market_label: str = ""
     rotation_file: Optional[str] = None
     risk_pnl_carry: float = 0.0
-    # Outcome risk guards stop purchases and drain inventory with ALO only.
+    # Outcome risk guards stop purchases and drain inventory with ALO first.
+    # `maker_then_ioc` permits one bounded IOC fallback after the timeout.
+    exit_policy: str = "maker_only"
+    maker_exit_timeout_sec: float = 90.0
+    exit_slippage_bps: float = 20.0
+    exit_taker_fee_bps: float = 10.0
     resume_exit: bool = False
     resume_trading: bool = False
     inventory_stop_bps: float = 200.0
@@ -325,6 +330,9 @@ class MarketState:
     reconcile_required: bool = False
     cancel_retry_until: float = 0.0
     opening_rearm_until: float = 0.0
+    ioc_attempts: list = field(default_factory=list)
+    ioc_next_at: float = 0.0
+    exit_ioc_blocked: str = ""
 
     @property
     def has_bbo(self) -> bool:
@@ -634,6 +642,92 @@ class HyperliquidSpreadBot:
             st.last_action = reason + ": maker exit"
             self.request_maker_exit(reason)
         return False
+
+    def maybe_bounded_exit(self, st: MarketState) -> None:
+        """Maker-first exit, then one bounded sell-only IOC after the timeout."""
+        if (not self.cfg.worldcup or self.cfg.exit_policy != "maker_then_ioc"
+                or not self.running or self.safety.stopped.is_set()):
+            return
+        if not self.rotation_requested():
+            st.exit_ioc_blocked = ""
+            return
+        started = getattr(self, "exit_started", 0.0)
+        now = time.time()
+        if not started or now - started < self.cfg.maker_exit_timeout_sec:
+            return
+        if now < st.ioc_next_at or st.reconcile_required or now < st.pending_until:
+            return
+        st.ioc_attempts = [stamp for stamp in st.ioc_attempts if now - stamp < 60]
+        if len(st.ioc_attempts) >= 3:
+            st.ioc_next_at = now + 5
+            st.exit_ioc_blocked = "secours IOC limité à 3 tentatives par minute"
+            return
+        if st.bid_oid or st.ask_oid:
+            self.cancel_all("bounded exit", [st.spec.symbol])
+            st.ioc_next_at = now + 1
+            return
+        if not self.sync_account():
+            return
+        qty = float(math.floor(max(0.0, st.available_position)))
+        if qty < 1:
+            st.exit_ioc_blocked = ""
+            return
+        if not math.isfinite(st.avg_entry_px) or st.avg_entry_px <= 0:
+            st.exit_ioc_blocked = "coût d’entrée inconnu: secours IOC bloqué"
+            st.ioc_next_at = now + 30
+            return
+        if st.bid <= 0 or now - st.last_book_ts > self.cfg.stale_sec:
+            st.exit_ioc_blocked = "carnet absent ou périmé: secours IOC reporté"
+            st.ioc_next_at = now + 5
+            return
+        px = round_outcome_sell_px(st.bid * (1 - self.cfg.exit_slippage_bps / 10_000))
+        notional = qty * px
+        fee = notional * self.cfg.exit_taker_fee_bps / 10_000
+        proceeds = notional - fee
+        cost = qty * st.avg_entry_px
+        estimated_loss = max(0.0, cost - proceeds)
+        remaining = self.cfg.stop_loss_usd + (self.stats.net_pnl + self.cfg.risk_pnl_carry)
+        if estimated_loss > max(0.0, remaining):
+            st.exit_ioc_blocked = (
+                f"budget de perte insuffisant: perte {estimated_loss:.2f} > reste {max(0.0, remaining):.2f}")
+            st.ioc_next_at = now + 30
+            return
+        st.exit_ioc_blocked = ""
+        st.ioc_attempts.append(now)
+        st.ioc_next_at = now + 5
+        st.last_inventory_exit = {
+            "requested_at": now, "reason": getattr(self, "exit_reason", "") or "bounded exit",
+            "entry_px": st.avg_entry_px, "entry_basis_source": st.entry_basis_source,
+            "bid": st.bid, "ask": st.ask, "quantity": qty,
+            "limit_px": px, "submission": "bounded_ioc_started"}
+        try:
+            with self.safety.bounded_exit_scope():
+                result = self._submit_order(
+                    name=st.spec.symbol, is_buy=False, sz=qty,
+                    limit_px=round_px_wire(px),
+                    order_type={"limit": {"tif": "Ioc"}}, reduce_only=False)
+        except Exception as exc:
+            st.last_inventory_exit["submission"] = "unconfirmed"
+            st.last_error = safe_error(exc)
+            st.last_action = "bounded exit IOC: unconfirmed; account reconciliation required"
+            st.reconcile_required = True
+            st.ioc_next_at = now + 30
+            return
+        self.stats.orders_sent += 1
+        self.stats.forced_exits += 1
+        statuses = (result.get("response", {}).get("data", {}).get("statuses", [])
+                    if isinstance(result, dict) and result.get("status") == "ok" else [])
+        filled = any(isinstance(status, dict) and "filled" in status for status in statuses)
+        st.ioc_next_at = now + (5 if filled else 30)
+        st.last_action = f"bounded exit IOC {qty:g} @ {px:g}"
+        st.reconcile_required = True
+        try:
+            self._parse_order_response(
+                st, [{"coin": st.spec.symbol, "is_buy": False, "sz": qty, "limit_px": px}],
+                result)
+        except Exception as exc:
+            st.last_error = safe_error(exc)
+            st.last_action = "bounded exit IOC sent; awaiting account reconciliation"
 
     def _halt(self):
         self.running = False
@@ -2097,6 +2191,23 @@ class HyperliquidSpreadBot:
         while self.running:
             try:
                 if self.cfg.worldcup and not self.safety.stopped.is_set():
+                    # A rotation drain removed by the controller because a fill
+                    # arrived must release the exit gate, not leave it in memory.
+                    if (str(getattr(self, "exit_reason", "")).lower().startswith("low executed")
+                            and self.cfg.rotation_file
+                            and not os.path.exists(self.cfg.rotation_file)):
+                        self.exit_reason = ""
+                        self.exit_started = 0.0
+                        self.status = "rotation cancelled: inventory present"
+                        for state in self.states.values():
+                            state.exit_ioc_blocked = ""
+                            state.ioc_attempts = []
+                            state.ioc_next_at = 0.0
+                        metadata = getattr(self.safety, "metadata", None)
+                        if metadata is not None:
+                            metadata.pop("exit_requested", None)
+                            metadata.pop("stop_reason", None)
+                            self.safety.publish()
                     session_loss = self.stats.net_pnl + self.cfg.risk_pnl_carry <= -abs(self.cfg.stop_loss_usd)
                     session_profit = self.cfg.take_profit_usd > 0 and self.stats.net_pnl >= self.cfg.take_profit_usd
                     if session_loss or session_profit:
@@ -2123,6 +2234,7 @@ class HyperliquidSpreadBot:
                         if self.enforce_inventory_stop(st):
                             continue
                         self.place_or_requote(st)
+                        self.maybe_bounded_exit(st)
                     self.finish_rotation_if_flat()
                 if live is not None:
                     live.update(self.render())
@@ -2238,6 +2350,7 @@ class HyperliquidSpreadBot:
                     "entry_basis_source": st.entry_basis_source,
                     "entry_basis_known": st.position < 1 or st.avg_entry_px > 0,
                     "cooldown_remaining_sec": max(0, st.inventory_stop_until-now),
+                    "exit_ioc_blocked": st.exit_ioc_blocked,
                     "last_forced_exit": dict(st.last_inventory_exit) or None,
                 } for st in self.states.values()] if self.cfg.worldcup else [],
                 "gross_closed_pnl": stats.gross_closed_pnl,
@@ -2272,6 +2385,9 @@ class HyperliquidSpreadBot:
             waited = time.time() - started if started else 0.0
             if waited > self.cfg.inventory_drain_timeout_sec:
                 reason += " (sortie en attente %.0f s, aucune contrepartie)" % waited
+            blocked = getattr(st, "exit_ioc_blocked", "")
+            if blocked:
+                reason += " · " + blocked
             return "Draining inventory", reason
         if st.inventory_stop_until > time.time():
             return "Inventory stop", st.last_action

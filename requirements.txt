@@ -1,8 +1,9 @@
 fastapi
 uvicorn[standard]
 pydantic
-eth-account
-hyperliquid-python-sdk
+# Validated execution stack; keep the SDK and signing library pinned.
+eth-account==0.13.7
+hyperliquid-python-sdk==0.24.0
 python-dotenv
 requests
 rich

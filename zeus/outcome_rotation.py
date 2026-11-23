@@ -9,7 +9,7 @@ from pathlib import Path
 import threading
 import time
 
-from zeus.safety import atomic_json, safe_error
+from zeus.safety import atomic_json, read_json, safe_error
 from zeus.outcome_flow import no_fill_grace, candidate_rank
 
 
@@ -51,17 +51,16 @@ class OutcomeRotation:
         """Returns current children for an old card's Stop, under the same lock
         used to admit replacements. A launch cannot slip behind manual Stop.
         """
-        # Close admission immediately, even if a replacement is resolving its
-        # catalog under the controller lock. The supervisor checks again at spawn.
-        for group in self.groups.copy().values():
-            if session_id is None or session_id in group["members"] or session_id == group["id"]:
-                group["cancelled"] = True
+        # Mark cancellation under the same lock used by every replacement
+        # admission check. tick() rechecks this under the lock immediately
+        # before start(), and start() checks again under the admission lock.
         with self.lock:
             current = set()
             for group in self.groups.values():
                 if session_id is None or session_id in group["members"] or session_id == group["id"]:
                     group["cancelled"] = True
-                    current.add(group["current"])
+                    if group.get("current"):
+                        current.add(group["current"])
             return current
 
     def assert_admission(self, group_id):
@@ -77,6 +76,17 @@ class OutcomeRotation:
             return True
         group = self.groups[group_id]
         return group.get("cooldown", {}).get(market, 0) <= (time.time() if now is None else now)
+
+    @staticmethod
+    def _inventory_present(current):
+        """Unknown inventory is not flat. Never rotate while exposure exists."""
+        position = current.get("position_usd")
+        if position is None:
+            return True
+        try:
+            return float(position) > 1e-9
+        except (TypeError, ValueError):
+            return True
 
     def describe(self, session_id):
         with self.lock:
@@ -176,6 +186,32 @@ class OutcomeRotation:
                                 atomic_json(path, {'requested_at': now, 'reason': group['reason'], 'session_finished': True})
                     continue
                 if group["state"] == "draining":
+                    if current["running"] and self._inventory_present(current):
+                        # A fill arrived during the cancellation window. Abandon
+                        # the market change and manage this inventory normally.
+                        info = self.owner.procs.get(current_id)
+                        path = (Path(info["stop_file"]).with_name("drain.json")
+                                if info and info.get("stop_file") else None)
+                        rotation_drain = False
+                        if path and path.exists():
+                            try:
+                                request = read_json(path)
+                            except (OSError, ValueError):
+                                request = {}
+                            rotation_drain = str((request or {}).get("reason", "")).lower().startswith(
+                                "low executed")
+                        if rotation_drain:
+                            try:
+                                path.unlink()
+                            except OSError:
+                                pass
+                            group.update(
+                                state="observing", started=now,
+                                samples=deque([(now, float(current.get("volume_usd") or 0))],
+                                              maxlen=2000),
+                                candidate_market=None, candidate_since=0,
+                                reason="Rotation annulée: inventaire présent")
+                            continue
                     if current["running"]:
                         group["reason"] = "Rotation: cancelling bids / selling remaining inventory"
                         continue
@@ -225,7 +261,21 @@ class OutcomeRotation:
             snapshot = scanner.snapshot(config["outcome_side"], config["order_size_usd"],
                                         config.get("auto_max_spread_bps", 10),
                                         account=account)
-            if not snapshot.get("ready") or now-float(snapshot.get("updated_at", now)) > 20:
+            if not snapshot.get("ready"):
+                with self.lock:
+                    group = self.groups.get(group_id)
+                    if group and not group["cancelled"] and group["state"] == "observing":
+                        group["reason"] = "Rotation: waiting for eligible flow"
+                        group["candidate_since"] = 0
+                        group["candidate_market"] = None
+                continue
+            if now-float(snapshot.get("updated_at", now)) > 20:
+                with self.lock:
+                    group = self.groups.get(group_id)
+                    if group and not group["cancelled"] and group["state"] == "observing":
+                        group["reason"] = "Rotation: market data delayed"
+                        group["candidate_since"] = 0
+                        group["candidate_market"] = None
                 continue
             busy = {b["market"] for b in status["bots"] if b["running"] or not b.get("cleanup_confirmed")}
             ranked = sorted(snapshot["candidates"], key=lambda r: candidate_rank(r, group.get('market_results', {}), now))
@@ -238,7 +288,29 @@ class OutcomeRotation:
                     continue
                 if group["state"] == "observing":
                     if top is None:
-                        group["reason"] = "Low fills: waiting for another eligible $/min market"
+                        group.update(candidate_market=None, candidate_since=0,
+                                     reason="Low fills: waiting for another eligible $/min market")
+                        continue
+                    if self._inventory_present(current):
+                        # Low volume is a re-evaluation signal, never permission
+                        # to liquidate inventory. Stay and manage the sale.
+                        group.update(candidate_market=None, candidate_since=0,
+                                     reason="Low fills: inventaire présent, vente gérée")
+                        continue
+                    # A better market must stay eligible for 30 s and offer a
+                    # cycle at least 25% shorter; otherwise wait.
+                    if group.get("candidate_market") != top["market"]:
+                        group.update(candidate_market=top["market"], candidate_since=now,
+                                     reason="Rotation: candidat en observation")
+                        continue
+                    if now - float(group.get("candidate_since") or now) < 30:
+                        group["reason"] = "Rotation: candidat en observation"
+                        continue
+                    current_cycle = float((group.get("current_selection") or {}).get(
+                        "queue_proxy_sec") or 0)
+                    next_cycle = float(top.get("queue_proxy_sec") or 0)
+                    if current_cycle > 0 and next_cycle > current_cycle * 0.75:
+                        group["reason"] = "Rotation: le prochain marché n'est pas 25% plus rapide"
                         continue
                     info = self.owner.procs.get(current_id)
                     if info is None:
@@ -262,6 +334,8 @@ class OutcomeRotation:
                     continue
                 group["wait_since"] = 0.0
                 group["launch_failures"] = 0
+                group["candidate_market"] = None
+                group["candidate_since"] = 0
                 from zeus.server import WorldcupStartRequest
                 values = {k: v for k, v in config.items() if k in WorldcupStartRequest.model_fields}
                 if values.get("maker_spread_pct") is None:

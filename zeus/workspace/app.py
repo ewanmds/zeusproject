@@ -303,8 +303,9 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         return {'command': key, 'phase': row['phase'], 'result': row['result']}
 
     @app.post('/api/v2/sessions/{sid}/stop')
-    def stop(sid: str, who=Depends(mutation)):
-        try: return runtimes.stop(who['wallet'], sid)
+    def stop(sid: str, mode: Literal['graceful', 'cancel_only'] = 'graceful',
+             who=Depends(mutation)):
+        try: return runtimes.stop(who['wallet'], sid, mode)
         except KeyError: raise HTTPException(404, 'Session not found')
 
     @app.post('/api/v2/sessions/{sid}/resume-exit')

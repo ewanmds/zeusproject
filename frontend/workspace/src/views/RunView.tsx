@@ -9,6 +9,7 @@ import { SegmentedControl } from "../components/SegmentedControl";
 import { FeedbackButton } from "../components/FeedbackButton";
 import { usd, short } from "../data";
 import { strategies } from "../config";
+import { describeScannerDiagnostic } from "../presentation/scanner";
 import type { RunProps } from "../viewTypes";
 const MarketSelect = lazy(() =>
   import("../components/MarketSelect").then((m) => ({
@@ -330,8 +331,16 @@ export function RunView({
                       : "En attente de flux"}
                 </span>
               </div>
-              {!scanner?.ready && scanner?.reason && (
-                <InlineAlert tone="warning">{scanner.reason}</InlineAlert>
+              {!scanner?.ready && (
+                (() => {
+                  const diagnostic = describeScannerDiagnostic(
+                    scanner,
+                    draft.spread_bps,
+                  );
+                  return diagnostic ? (
+                    <InlineAlert tone="warning">{diagnostic}</InlineAlert>
+                  ) : null;
+                })()
               )}
               {!!scanner?.candidates?.length && (
                 <DataTable<any>
