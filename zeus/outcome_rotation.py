@@ -299,7 +299,7 @@ class OutcomeRotation:
                                      reason="Low fills: inventaire présent, vente gérée")
                         continue
                     # A better market must stay eligible for 30 s and offer a
-                    # cycle at least 25% shorter; otherwise wait.
+                    # public USD/min at least 25% higher; otherwise wait.
                     if group.get("candidate_market") != top["market"]:
                         group.update(candidate_market=top["market"], candidate_since=now,
                                      reason="Rotation: candidat en observation")
@@ -307,11 +307,12 @@ class OutcomeRotation:
                     if now - float(group.get("candidate_since") or now) < 30:
                         group["reason"] = "Rotation: candidat en observation"
                         continue
-                    current_cycle = float((group.get("current_selection") or {}).get(
-                        "queue_proxy_sec") or 0)
-                    next_cycle = float(top.get("queue_proxy_sec") or 0)
-                    if current_cycle > 0 and (next_cycle <= 0 or next_cycle > current_cycle * 0.75):
-                        group["reason"] = "Rotation: le prochain marché n'est pas 25% plus rapide"
+                    current_selection = next((r for r in snapshot['candidates']
+                        if r['market'] == current['market']), group.get('current_selection') or {})
+                    current_volume = float(current_selection.get('volume_usd_1m') or 0)
+                    next_volume = float(top.get('volume_usd_1m') or 0)
+                    if next_volume <= 0 or next_volume < current_volume * 1.25:
+                        group["reason"] = "Rotation: le prochain marché n'offre pas 25% de $/min en plus"
                         continue
                     info = self.owner.procs.get(current_id)
                     if info is None:

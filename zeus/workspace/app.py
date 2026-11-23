@@ -22,6 +22,7 @@ from typing import Literal
 
 from zeus import PROJECT_ROOT
 from zeus.safety import safe_error
+from zeus.network import HyperliquidError
 from .storage import Store
 from .accounts import HyperliquidAccounts
 from .runtime import Runtimes
@@ -151,6 +152,14 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
     @app.exception_handler(ValueError)
     async def invalid(request, exc):
         return JSONResponse({'detail': safe_error(exc)}, status_code=400)
+
+    @app.exception_handler(HyperliquidError)
+    async def read_unavailable(request, exc):
+        status = 429 if exc.status == 429 else 503
+        headers = ({'Retry-After': str(max(1, int(exc.retry_after + .999)))}
+                   if exc.retry_after is not None else {})
+        return JSONResponse({'detail': safe_error(exc), 'kind': exc.kind},
+                            status_code=status, headers=headers)
 
     async def exchange_unavailable(request, exc):
         return JSONResponse({'detail': 'Hyperliquid temporarily unavailable. Verify the last operation before retrying.'}, status_code=503)

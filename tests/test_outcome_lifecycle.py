@@ -159,7 +159,7 @@ class RotationStopTests(unittest.TestCase):
 
 
 class FlatOnlyRotationTests(unittest.TestCase):
-    def rotation(self, folder, *, position, candidates, current_queue=200.0):
+    def rotation(self, folder, *, position, candidates, current_queue=200.0, current_volume=100):
         stop_file = Path(folder) / "stop"
         row = {"session_id": "one", "running": True, "cleanup_confirmed": False,
                "phase": "running", "market": "#101", "volume_usd": 0, "fills": 0,
@@ -174,7 +174,8 @@ class FlatOnlyRotationTests(unittest.TestCase):
                               {"selection_mode": "auto", "auto_rotate": True,
                                "order_size_usd": 15, "auto_rotation_after_sec": 180,
                                "auto_max_spread_bps": 10, "outcome_side": "no",
-                               "auto_selection": {"queue_proxy_sec": current_queue}},
+                               "auto_selection": {"queue_proxy_sec": current_queue,
+                                                  "volume_usd_1m": current_volume}},
                               group_id="group")
         group = rotation.groups["group"]
         group["started"] = time.time() - 240
@@ -199,15 +200,15 @@ class FlatOnlyRotationTests(unittest.TestCase):
             self.assertIn("inventaire", rotation.groups["group"]["reason"])
             rotation.close()
 
-    def test_flat_candidate_must_settle_30s_and_be_25_percent_faster(self):
+    def test_flat_candidate_must_settle_30s_and_offer_more_volume_even_with_slower_queue(self):
         with tempfile.TemporaryDirectory() as folder:
             rotation, stop_file = self.rotation(
                 folder, position=0,
-                candidates=[{"market": "#102", "queue_proxy_sec": 100}])
+                candidates=[{"market": "#102", "queue_proxy_sec": 1000, "volume_usd_1m": 150}])
             now = time.time()
             with patch("zeus.outcome_flow.scanner.snapshot",
                        side_effect=lambda *a, **k: self.snapshot(
-                           [{"market": "#102", "queue_proxy_sec": 100}], at=now + 31)):
+                           [{"market": "#102", "queue_proxy_sec": 1000, "volume_usd_1m": 150}], at=now + 31)):
                 rotation.tick(now=now)
                 self.assertFalse((stop_file.parent / "drain.json").exists())
                 self.assertEqual(rotation.groups["group"]["reason"],
@@ -221,15 +222,30 @@ class FlatOnlyRotationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             rotation, stop_file = self.rotation(
                 folder, position=0,
-                candidates=[{"market": "#102", "queue_proxy_sec": 190}])
+                candidates=[{"market": "#102", "queue_proxy_sec": 10, "volume_usd_1m": 110}])
             now = time.time()
             with patch("zeus.outcome_flow.scanner.snapshot",
                        side_effect=lambda *a, **k: self.snapshot(
-                           [{"market": "#102", "queue_proxy_sec": 190}], at=now + 31)):
+                           [{"market": "#102", "queue_proxy_sec": 10, "volume_usd_1m": 110}], at=now + 31)):
                 rotation.tick(now=now)
                 rotation.tick(now=now + 31)
             self.assertFalse((stop_file.parent / "drain.json").exists())
             self.assertIn("25%", rotation.groups["group"]["reason"])
+            rotation.close()
+
+    def test_rotation_compares_current_live_volume_instead_of_old_entry_volume(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, stop_file = self.rotation(folder, position=0, candidates=[])
+            now = time.time()
+            candidates = [
+                {'market': '#101', 'volume_usd_1m': 1000},
+                {'market': '#102', 'volume_usd_1m': 150, 'queue_proxy_sec': 1},
+            ]
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=self.snapshot(candidates, at=now+31)):
+                rotation.tick(now=now)
+                rotation.tick(now=now+31)
+            self.assertFalse((stop_file.parent / 'drain.json').exists())
+            self.assertIn('25%', rotation.groups['group']['reason'])
             rotation.close()
 
     def test_no_candidate_keeps_the_session_active_waiting(self):

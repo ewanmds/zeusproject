@@ -14,25 +14,43 @@ import time
 
 from zeus import PROJECT_ROOT
 from zeus.network import HyperliquidError, StartupReadCancelled
+from zeus.process_control import ProcessLock
 
 
 class ReadBudget:
     def __init__(self, root, *, limit=960, ordinary=720, clock=time.time):
         self.path = Path(root) / "read-budget.sqlite3"
         self.limit, self.ordinary, self.clock = limit, ordinary, clock
+        self._cooldown_until = 0.0
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
+            db.execute("PRAGMA journal_mode=WAL")
             db.executescript("CREATE TABLE IF NOT EXISTS reads (at REAL, weight INTEGER);"
                              "CREATE TABLE IF NOT EXISTS cooldown (id INTEGER PRIMARY KEY, until REAL);")
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=.25)
+        # Serialize schema changes and reservations across workers, including
+        # connection close/checkpoint. Never include HTTP or a retry sleep here.
         try:
-            with db:
-                yield db
-        finally:
-            db.close()
+            with ProcessLock(self.path.with_suffix('.lock'), timeout=.25):
+                db = sqlite3.connect(self.path, timeout=.25)
+                try:
+                    with db:
+                        yield db
+                finally:
+                    db.close()
+        except (sqlite3.OperationalError, TimeoutError) as exc:
+            code = getattr(exc, 'sqlite_errorcode', 0) & 0xff
+            busy = isinstance(exc, TimeoutError) or code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+            if not busy:
+                raise
+            # No reservation means no HTTP. Only idempotent read callers may
+            # retry this typed failure; signed submissions are never replayed.
+            raise HyperliquidError(
+                "Compteur de requêtes occupé. Réessayez dans un instant.",
+                kind='exchange_unavailable', operation='rest_read_budget',
+                status=503, retry_after=.5) from exc
 
     def acquire(self, operation, *, critical=False, cancelled=None):
         if cancelled and cancelled():
@@ -42,6 +60,10 @@ class ReadBudget:
         now = self.clock()
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if cancelled and cancelled():
+                raise StartupReadCancelled("Read cancelled while waiting for budget")
+            if self._cooldown_until > now:
+                self._persist_cooldown(db, self._cooldown_until)
             db.execute("DELETE FROM reads WHERE at <= ?", (now-60,))
             blocked = db.execute("SELECT until FROM cooldown WHERE id=1").fetchone()
             used = db.execute("SELECT COALESCE(SUM(weight),0), MIN(at) FROM reads").fetchone()
@@ -56,9 +78,19 @@ class ReadBudget:
                                operation=operation, status=429, retry_after=max(.1, wait))
 
     def cooldown(self, seconds):
-        with self.connect() as db:
-            db.execute("INSERT INTO cooldown VALUES (1,?) ON CONFLICT(id) DO UPDATE SET until=MAX(until,excluded.until)",
-                       (self.clock()+seconds,))
+        self._cooldown_until = max(self._cooldown_until, self.clock()+seconds)
+        try:
+            with self.connect() as db:
+                self._persist_cooldown(db, self._cooldown_until)
+        except HyperliquidError:
+            # Preserve the exchange's original 429 and its Retry-After. The
+            # local deadline is republished before this worker can read again.
+            pass
+
+    @staticmethod
+    def _persist_cooldown(db, until):
+        db.execute("INSERT INTO cooldown VALUES (1,?) ON CONFLICT(id) DO UPDATE SET until=MAX(until,excluded.until)",
+                   (until,))
 
 
 _budgets = {}

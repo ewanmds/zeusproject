@@ -345,7 +345,10 @@ export function RunView({
               {!!scanner?.candidates?.length && (
                 <DataTable<any>
                   caption="Candidats observés · marché actif dans Sessions"
-                  rows={scanner.candidates.slice(0, 8)}
+                  rows={[...scanner.candidates]
+                    .sort((a, b) => b.volume_usd_1m - a.volume_usd_1m)
+                    .slice(0, 8)}
+                  defaultSort={{ id: "volume", direction: "desc" }}
                   rowKey={(m) => m.market}
                   columns={[
                     {

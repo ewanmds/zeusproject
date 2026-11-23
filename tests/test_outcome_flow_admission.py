@@ -58,6 +58,37 @@ class FlowAdmissionTests(unittest.TestCase):
         self.assertEqual(result['rejections']['stale'], 1)
         self.assertNotIn('flux', result['reason'])
 
+    def test_public_dollars_per_minute_outranks_shorter_queue(self):
+        scan = self.scanner(2)
+        for coin, size in (('#101', 1000), ('#111', 100)):
+            for tid, side in enumerate(('B', 'A')):
+                scan.history[coin].append({'time': (time.time()-1)*1000,
+                    'px': '.5', 'sz': str(size), 'side': side, 'tid': tid+1})
+        def book(coin):
+            row = self.book(coin)
+            if coin == '#101':
+                for level in row['levels']:
+                    level[0]['sz'] = '100000'
+            return row
+        result = self.run_scan(scan, book)
+        high, low = result['candidates']
+        self.assertEqual(result['ranking'], 'volume_usd_1m')
+        self.assertGreater(high['volume_usd_1m'], low['volume_usd_1m'])
+        self.assertGreater(high['queue_proxy_sec'], low['queue_proxy_sec'])
+        penalized = {high['market']: {'zero_fill_attempts': 3, 'updated_at': time.time()}}
+        self.assertLess(candidate_rank(high, penalized, time.time()),
+                        candidate_rank(low, penalized, time.time()))
+
+    def test_new_top_volume_displaces_pinned_books_without_waiting_five_seconds(self):
+        scan = self.scanner(50)
+        self.run_scan(scan)
+        self.assertNotIn('#591', scan.book_targets)
+        scan.history['#591'].append({'time': time.time()*1000, 'px': '.5',
+                                    'sz': '2000', 'side': 'B', 'tid': 1})
+        result = self.run_scan(scan)
+        self.assertEqual(result['candidates'][0]['market'], '#591')
+        self.assertLessEqual(len(scan.book_targets), 24)
+
     def test_discovery_explores_more_than_the_first_twenty_four_without_flow(self):
         scan = self.scanner(50)
         seen = set()

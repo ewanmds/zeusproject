@@ -414,15 +414,17 @@ class OutcomeFlowScanner:
         with self.lock:
             # Keep valid candidates stable for launch/rotation; use remaining
             # slots to explore the catalog even when no trades were observed.
-            pinned = [r for r in shortlist if r["market"] in self.preferred_books][:12]
-            selected = {r["market"] for r in pinned}
-            head = pinned + [r for r in shortlist if r["market"] not in selected
-                             and r["trades_5m"] > 0][:16-len(pinned)]
+            head = [r for r in shortlist if r["volume_usd_1m"] > 0][:16]
+            selected = {r["market"] for r in head}
+            head += [r for r in shortlist if r["market"] not in selected
+                     and r["market"] in self.preferred_books][:max(0, 16-len(head))]
             selected = {r["market"] for r in head}
             rest = [r for r in shortlist if r["market"] not in selected]
             retained = [r for r in shortlist if r["market"] in self.book_targets]
             if now-self.book_selection_at < 5 and retained:
-                targets = retained
+                # A newly active high-volume market must not wait behind the
+                # previous exploration batch or a previously pinned candidate.
+                targets = head + [r for r in retained if r["market"] not in selected][:24-len(head)]
             else:
                 cursor = self.book_cursor % max(1, len(rest))
                 tail = (rest[cursor:]+rest[:cursor])[:24-len(head)]
@@ -492,9 +494,9 @@ class OutcomeFlowScanner:
                 candidates.append(item)
             except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
                 continue
-        # Fills first: the shortest estimated touch queue wins. The balanced-flow
-        # score breaks ties so a dead or one-way book never leads on a stale quote.
-        candidates.sort(key=lambda r: (r["queue_proxy_sec"] if r["queue_proxy_sec"] is not None else math.inf,
+        # Public USD/min is the primary Auto ranking; queue is a tie breaker.
+        candidates.sort(key=lambda r: (-r["volume_usd_1m"],
+                                       r["queue_proxy_sec"] if r["queue_proxy_sec"] is not None else math.inf,
                                        -r["score"], r["spread_bps"],
                                        -min(r["depth_bid_usd"], r["depth_ask_usd"]), r["market"]))
         with self.lock:
@@ -541,7 +543,7 @@ class OutcomeFlowScanner:
                 "cost_policy": "informational",
                 "order_usd": order_usd, "max_spread_bps": max_spread_bps,
                 "min_depth_usd": order_usd,
-                "updated_at": completed, "ranking": "queue_proxy_sec",
+                "updated_at": completed, "ranking": "volume_usd_1m",
                 "flow_candidates": sum(r["trades_5m"] > 0 for r in shortlist),
                 "markets_checked": len(shortlist), "books_checked": len(books)}
 
@@ -607,5 +609,6 @@ def candidate_rank(candidate, results, now):
     age = max(0, now-previous.get('updated_at', now))
     penalty = 1+failures*math.exp(-age/1800)
     queue = candidate.get('queue_proxy_sec')
-    return ((float(queue) if queue is not None else math.inf)*penalty,
-            -float(candidate.get('score', 0)), -float(candidate.get('volume_usd_1m', 0)), candidate['market'])
+    return (-float(candidate.get('volume_usd_1m', 0)),
+            (float(queue) if queue is not None else math.inf)*penalty,
+            -float(candidate.get('score', 0)), candidate['market'])

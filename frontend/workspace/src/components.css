@@ -526,15 +526,26 @@
   min-width: 140px;
 }
 .scanner .zeus-data-table table {
-  min-width: 490px;
+  min-width: 740px;
+  table-layout: fixed;
 }
 .scanner .zeus-data-table th,
 .scanner .zeus-data-table td {
   font-size: 12px;
   padding: 9px 8px;
 }
+.scanner .zeus-data-table th:first-child,
 .scanner .zeus-data-table td:first-child {
-  max-width: 240px;
+  width: 42%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.scanner .zeus-data-table th > button {
+  max-width: 100%;
+  white-space: normal;
+}
+.scanner .zeus-data-table th > button svg {
+  flex-shrink: 0;
 }
 .scanner .zeus-data-table td:not(:first-child) {
   white-space: nowrap;
