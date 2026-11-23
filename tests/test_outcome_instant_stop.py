@@ -232,6 +232,25 @@ class StopSupervisorTests(unittest.TestCase):
             sup.rotation.cancel.assert_called_once_with('s1')
             sup._resume.assert_not_called()
 
+    def test_manual_stop_terminates_a_worker_that_ignores_the_marker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.setup_supervisor(folder)
+            sup._closed.set()  # skip the grace wait; exercise the escalation
+            journal = Path(folder)/'journal.json'
+            stop = Path(folder)/'stop'
+            atomic_json(journal, dict(session_id='s1', symbols=['#101'], account='wallet',
+                                      cleanup_confirmed=False, stop_file=str(stop),
+                                      exposure_started=True, started=10))
+            proc = Mock()
+            proc.poll.return_value = None
+            proc.terminate.side_effect = lambda: proc.poll.configure_mock(return_value=1)
+            info = dict(session_id='s1', symbols=['#101'], account='wallet',
+                        stop_file=str(stop), safety_file=str(journal), proc=proc)
+            sup.records = lambda: [(journal, read_json(journal))]
+            sup._finish_manual_stop('s1', info)
+            proc.terminate.assert_called_once()
+            sup._resume.assert_called_once_with('s1', exit_only=True, manual_taker=True)
+
     def test_orphan_recovers_only_exit_with_published_attribution(self):
         with tempfile.TemporaryDirectory() as folder:
             sup = self.setup_supervisor(folder)

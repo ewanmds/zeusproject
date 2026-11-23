@@ -631,6 +631,32 @@ class OutcomeSupervisor:
                 if latest.get('cleanup_confirmed'):
                     return
                 successor = latest.get('resumed_session_id')
+                if not successor and proc is not None and proc.poll() is None:
+                    # Give a healthy worker time to observe the durable marker
+                    # and finish its own cleanup. A worker that ignores the
+                    # explicit manual Stop is a phantom: terminate it, then let
+                    # the exit-only path reconcile the account independently.
+                    deadline = time.monotonic()+15
+                    while time.monotonic() < deadline and not self._closed.wait(.2):
+                        if proc.poll() is not None:
+                            break
+                    if proc.poll() is None:
+                        try:
+                            proc.terminate()
+                            wait = getattr(proc, 'wait', None)
+                            if callable(wait):
+                                wait(timeout=5)
+                        except Exception:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                        match = next(((path, row) for path, row in self.records()
+                                      if row['session_id'] == sid), None)
+                        latest = read_json(match[0]) if match else latest
+                        if latest.get('cleanup_confirmed'):
+                            return
+                        successor = latest.get('resumed_session_id')
                 if not successor:
                     if (proc is not None and proc.poll() is None) or self._orphan_alive(info):
                         return  # its monitor observes the durable request
