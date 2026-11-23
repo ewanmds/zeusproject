@@ -84,9 +84,23 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text); self.assertEqual(r.json()['status'], 'ready')
 
     def test_no_identity_cannot_read_or_control_any_tenant(self):
+        self.assertEqual(self.client.get('/api/v2/scanner/observed').status_code, 401)
         self.assertEqual(self.client.get('/api/v2/workspace').status_code, 401)
         self.assertEqual(self.client.post('/api/v2/sessions/x/stop', json={}).status_code, 401)
         self.assertEqual(self.client.get('/api/outcomes/status').status_code, 404)
+
+    def test_observed_list_marks_occupied_markets_without_launching(self):
+        self.login(self.client, self.a)
+        with patch('zeus.outcome_flow.scanner.observations', return_value={
+            'observed_markets': [dict(market='#101', auto_eligible=True, eligibility_reason='Admissible')]
+        }), patch.object(self.app.state.runtimes, 'snapshot', return_value={
+            'sessions': [dict(market='#101', running=True, cleanup_confirmed=False)]
+        }):
+            response = self.client.get('/api/v2/scanner/observed?side=no&order_usd=110&spread_bps=10')
+        self.assertEqual(response.status_code, 200, response.text)
+        row = response.json()['observed_markets'][0]
+        self.assertFalse(row['auto_eligible'])
+        self.assertEqual(row['eligibility_reason'], 'Déjà en session')
 
     def test_login_signed_message_cookie_and_logout(self):
         me, _ = self.login(self.client, self.a)

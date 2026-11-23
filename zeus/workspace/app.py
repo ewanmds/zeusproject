@@ -252,6 +252,20 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         result['ready'] = bool(result['candidates'])
         return result
 
+    @app.get('/api/v2/scanner/observed')
+    def scanner_observed(side: Literal['no', 'yes'] = 'no', order_usd: float = 25,
+                         spread_bps: float = 10, who=Depends(identity)):
+        if not 10.5 <= order_usd <= 1000000 or not 0 < spread_bps <= 100:
+            raise HTTPException(422)
+        from zeus.outcome_flow import scanner
+        result = scanner.observations(side, order_usd, spread_bps)
+        state = runtimes.snapshot(who['wallet'])
+        busy = {s['market'] for s in state['sessions'] if s['running'] or not s['cleanup_confirmed']}
+        for row in result['observed_markets']:
+            if row['market'] in busy:
+                row.update(auto_eligible=False, eligibility_reason='Déjà en session')
+        return result
+
     @app.post('/api/v2/sessions/preview')
     def preview(body: Launch, who=Depends(mutation)):
         if body.order_usd > body.position_cap: raise ValueError('Position cap must cover one order')

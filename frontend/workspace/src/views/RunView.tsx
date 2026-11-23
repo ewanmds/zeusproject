@@ -4,6 +4,7 @@ import { HaloInput, HaloField, RichPopover } from "../components/fields";
 import { ResponsiveOptions } from "../components/Dialog";
 import { SessionStepper } from "../components/layout";
 import { DataTable } from "../components/DataTable";
+import { LiveAmount } from "../components/LiveAmount";
 import { InlineAlert } from "../components/feedback";
 import { SegmentedControl } from "../components/SegmentedControl";
 import { FeedbackButton } from "../components/FeedbackButton";
@@ -323,8 +324,10 @@ export function RunView({
                   Scanner de marchés
                 </span>
                 <span className="mono">
-                  {scanner?.ready
-                    ? scanner.candidates.length + " éligibles"
+                  {scanner?.observed_markets?.length != null
+                    ? scanner.observed_markets.length + " observés · " + scanner.observed_markets.filter((m: any) => m.auto_eligible).length + " admissibles"
+                    : scanner?.ready
+                    ? scanner.candidates.length + " admissibles"
                     : scanner?.warming_up
                       ? "Observation…"
                       : "En attente de flux"}
@@ -333,22 +336,38 @@ export function RunView({
               {!scanner?.ready && scanner?.reason && (
                 <InlineAlert tone="warning">{scanner.reason}</InlineAlert>
               )}
-              {!!scanner?.candidates?.length && (
+              <p className="scanner-freshness" aria-live="off">
+                {scanner?.observation_error || scanner?.observation_connected === false
+                  ? "Flux retardé · dernières valeurs conservées"
+                  : scanner?.observed_at
+                    ? `Actualisé à ${new Date(scanner.observed_at * 1000).toLocaleTimeString("fr-FR")} · toutes les 2 s`
+                    : "Connexion aux observations…"}
+              </p>
+              {!!(scanner?.observed_markets ?? scanner?.candidates)?.length && (
                 <DataTable<any>
-                  caption="Candidats observés · marché actif dans Sessions"
-                  rows={scanner.candidates.slice(0, 8)}
+                  caption="Tous les marchés observés · admissibilité Auto indiquée séparément"
+                  rows={(scanner.observed_markets ?? scanner.candidates).map((m: any) => ({
+                    ...m,
+                    net_touch_edge_bps: m.auto_eligible === false ? null
+                      : scanner.candidates?.find((c: any) => c.market === m.market)?.net_touch_edge_bps
+                        ?? m.net_touch_edge_bps ?? null,
+                  }))}
+                  defaultSort={{ id: "volume", direction: "desc" }}
+                  animateChanges
                   rowKey={(m) => m.market}
                   columns={[
                     {
                       id: "name",
                       label: "Marché",
-                      render: (m) => m.name,
+                      render: (m) => <><span>{m.name}</span><small className={m.auto_eligible ? "scanner-row-status scanner-admitted" : "scanner-row-status scanner-observed"}>
+                        {m.eligibility_reason ?? "À vérifier"}
+                      </small></>,
                       sort: (m) => m.name,
                     },
                     {
                       id: "volume",
                       label: "USD/min",
-                      render: (m) => usd(m.volume_usd_1m),
+                      render: (m) => <LiveAmount value={m.volume_usd_1m} />,
                       sort: (m) => m.volume_usd_1m,
                     },
                     {

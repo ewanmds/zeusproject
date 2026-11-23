@@ -526,15 +526,25 @@
   min-width: 140px;
 }
 .scanner .zeus-data-table table {
-  min-width: 490px;
+  min-width: 760px;
+  table-layout: fixed;
 }
+.scanner .scroll-area { max-height: 480px; }
+.scanner-freshness { color: var(--muted); font-size: 11px; }
+.scanner-amount { display: inline-block; font-variant-numeric: tabular-nums; }
+.scanner-admitted { color: var(--green, #8ed8c3); }
+.scanner-observed { color: var(--muted); }
+.scanner-row-status { display: block; margin-top: 5px; font-size: 10px; line-height: 1.45; }
+.scanner .zeus-data-table th > button { white-space: normal; }
 .scanner .zeus-data-table th,
 .scanner .zeus-data-table td {
   font-size: 12px;
   padding: 9px 8px;
 }
+.scanner .zeus-data-table th:first-child,
 .scanner .zeus-data-table td:first-child {
-  max-width: 240px;
+  width: 40%;
+  white-space: normal;
 }
 .scanner .zeus-data-table td:not(:first-child) {
   white-space: nowrap;

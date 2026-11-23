@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef, useLayoutEffect } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "../icons";
 import { ScrollArea } from "./layout";
@@ -14,13 +14,36 @@ export function DataTable<T>({
   columns,
   caption,
   rowKey,
+  defaultSort,
+  animateChanges = false,
 }: {
   rows: readonly T[];
   columns: Column<T>[];
   caption: string;
   rowKey: (row: T) => string;
+  defaultSort?: { id: string; direction: "asc" | "desc" };
+  animateChanges?: boolean;
 }) {
-  const [sort, setSort] = useState({ id: "", direction: 1 });
+  const [sort, setSort] = useState({ id: defaultSort?.id ?? "", direction: defaultSort?.direction === "desc" ? -1 : 1 });
+  const body = useRef<HTMLTableSectionElement>(null);
+  const positions = useRef(new Map<string, number>());
+  useLayoutEffect(() => {
+    if (!animateChanges || !body.current) return;
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const next = new Map<string, number>();
+    for (const row of body.current.rows) {
+      const key = row.dataset.rowKey!;
+      const top = row.offsetTop;
+      const previous = positions.current.get(key);
+      if (!reduced && previous != null && previous !== top && Math.abs(previous-top) < 160) {
+        row.getAnimations().forEach((animation) => animation.cancel());
+        row.animate([{ transform: `translateY(${previous-top}px)` }, { transform: "translateY(0)" }],
+          { duration: 220, easing: "ease-out" });
+      }
+      next.set(key, top);
+    }
+    positions.current = next;
+  });
   const sorted = useMemo(() => {
     const column = columns.find((item) => item.id === sort.id);
     if (!column?.sort) return rows;
@@ -77,9 +100,9 @@ export function DataTable<T>({
               ))}
             </tr>
           </thead>
-          <tbody>
+          <tbody ref={body}>
             {sorted.map((row) => (
-              <tr key={rowKey(row)}>
+              <tr key={rowKey(row)} data-row-key={rowKey(row)}>
                 {columns.map((column) => (
                   <td key={column.id}>{column.render(row)}</td>
                 ))}

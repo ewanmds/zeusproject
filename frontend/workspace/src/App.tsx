@@ -143,20 +143,27 @@ export default function App() {
     setScanner(null);
     if (!owner || draft.strategy !== "outcome") return;
     let alive = true;
-    const scan = () =>
-      api<any>(
-        `/scanner?side=${draft.side}&order_usd=${draft.order_usd}&spread_bps=${draft.spread_bps}`,
-      )
-        .then((d) => {
-          if (alive) setScanner(d);
-        })
-        .catch(() => {});
-    const wait = setTimeout(scan, 350),
-      timer = window.setInterval(scan, 10000);
+    const timers = { full: 0, observed: 0 };
+    const query = `side=${draft.side}&order_usd=${draft.order_usd}&spread_bps=${draft.spread_bps}`;
+    const refresh = async (observed: boolean) => {
+      try {
+        if (!document.hidden) {
+          const value = await api<any>(`/scanner${observed ? "/observed" : ""}?${query}`);
+          if (alive) setScanner((old: any) => observed
+            ? { ...old, ...value, observation_error: false }
+            : { ...old, ...value });
+        }
+      } catch {
+        if (alive && observed) setScanner((old: any) => ({ ...old, observation_error: true }));
+      } finally {
+        if (alive) timers[observed ? "observed" : "full"] = window.setTimeout(() => refresh(observed), observed ? 2000 : 10000);
+      }
+    };
+    timers.full = window.setTimeout(() => refresh(false), 350);
+    timers.observed = window.setTimeout(() => refresh(true), 450);
     return () => {
       alive = false;
-      clearTimeout(wait);
-      clearInterval(timer);
+      Object.values(timers).forEach(clearTimeout);
     };
   }, [owner, draft.strategy, draft.side, draft.order_usd, draft.spread_bps]);
   useEffect(() => {

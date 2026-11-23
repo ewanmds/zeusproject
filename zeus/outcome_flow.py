@@ -119,6 +119,7 @@ class OutcomeFlowScanner:
         self.lock = threading.RLock()
         self.rows = {}
         self.history = defaultdict(lambda: deque(maxlen=2000))
+        self.book_watch = {}
         self.ws = None
         self.thread = None
         self.subscription_thread = None
@@ -186,6 +187,7 @@ class OutcomeFlowScanner:
                 def subscribe():
                     # Receive snapshots while subscribing; do not burst 400 sends.
                     sent = set()
+                    sent_books = set()
                     last_ping = time.monotonic()
                     try:
                         while not self.stop.is_set() and self.ws is ws and self.connected:
@@ -217,6 +219,19 @@ class OutcomeFlowScanner:
                             if time.monotonic()-last_ping >= 20:
                                 ws.send(json.dumps({"method": "ping"}))
                                 last_ping = time.monotonic()
+                            with self.lock:
+                                watched = {coin: at for coin, at in self.book_watch.items()
+                                           if time.time()-at < 15 and int(coin[1:])//10 in self.rows}
+                                self.book_watch = watched
+                                wanted_books = set(sorted(watched, key=watched.get, reverse=True)[:24])
+                            for method, coins in (('unsubscribe', sent_books-wanted_books),
+                                                  ('subscribe', wanted_books-sent_books)):
+                                for coin in sorted(coins):
+                                    if self.stop.is_set() or self.ws is not ws or not self.connected:
+                                        return
+                                    ws.send(json.dumps({'method': method, 'subscription': {'type': 'l2Book', 'coin': coin}}))
+                                    if method == 'subscribe': sent_books.add(coin)
+                                    else: sent_books.discard(coin)
                             self.stop.wait(1)
                     except Exception:
                         failed(ws, None)
@@ -228,6 +243,15 @@ class OutcomeFlowScanner:
             def message(ws, raw):
                 try:
                     payload = json.loads(raw)
+                    if payload.get('channel') == 'l2Book':
+                        data = payload.get('data', {})
+                        if not isinstance(data, dict):
+                            return
+                        coin = data.get('coin', '')
+                        with self.lock:
+                            if coin in self.book_watch:
+                                self.books[coin] = (time.time(), data)
+                        return
                     if payload.get("channel") == "subscriptionResponse":
                         subscription = payload.get("data", {}).get("subscription", {})
                         if subscription.get("type") == "trades":
@@ -321,10 +345,76 @@ class OutcomeFlowScanner:
             started = time.perf_counter()
             result = self._snapshot(side, order_usd, max_spread_bps, base_rate=base_rate)
             result['scan_ms'] = (time.perf_counter()-started)*1000
-            if len(self.snapshot_cache) >= 16:
-                self.snapshot_cache.clear()
-            self.snapshot_cache[key] = (time.monotonic(), result)
+            with self.lock:
+                if len(self.snapshot_cache) >= 16:
+                    self.snapshot_cache.clear()
+                self.snapshot_cache[key] = (time.monotonic(), result)
             return copy.deepcopy(result)
+
+    def observations(self, side='no', order_usd=50, max_spread_bps=10):
+        """Display every observed market; no HTTP, fees, balances or admission changes."""
+        now = time.time()
+        suffix = '0' if side == 'yes' else '1'
+        with self.lock:
+            rows = list(self.rows.values())
+            history = {coin: list(values) for coin, values in self.history.items() if coin.endswith(suffix)}
+            books = dict(self.books)
+            connected = self.connected
+            cached = [value[1] for key, value in self.snapshot_cache.items()
+                      if key[:3] == (side, order_usd, max_spread_bps)
+                      and key[4:] == (self.generation, self.catalog_revision)]
+        candidates = {c['market']: c for result in cached for c in result.get('candidates', [])
+                      if now-c.get('book_updated_at', 0) <= 5
+                      and c['last_trade_age_sec']+now-result['updated_at'] <= FLOW_LIMITS['max_trade_age_sec']}
+        observed = []
+        for row in rows:
+            if not before_event(row, now):
+                continue
+            coin = f"#{10*int(row['id'])+int(suffix)}"
+            metric = flow_metrics(history.get(coin, []), now)
+            item = dict(market=coin, name=row['name'], volume_usd_1m=0,
+                        spread_bps=None, net_touch_edge_bps=None, queue_proxy_sec=None)
+            if metric:
+                item.update(metric)
+            reason = 'Aucun trade récent'
+            if metric:
+                if not metric['buy_events_1m'] or not metric['sell_events_1m']:
+                    reason = 'Flux dans un seul sens ou absent sur 60 s'
+                elif metric['last_trade_age_sec'] > FLOW_LIMITS['max_trade_age_sec']:
+                    reason = 'Dernier trade trop ancien'
+                elif not metric['eligible']:
+                    reason = 'Cadence encore insuffisante'
+                else:
+                    reason = 'Carnet à vérifier'
+            book = books.get(coin)
+            if book:
+                try:
+                    data = book[1]
+                    bid, ask = data['levels'][0][0], data['levels'][1][0]
+                    bp, ap = float(bid['px']), float(ask['px'])
+                    if 0 < bp < ap < 1 and -1 <= now-float(data['time'])/1000 <= 5:
+                        item['spread_bps'] = 10000*(ap-bp)/((ap+bp)/2)
+                        if metric and metric['eligible']:
+                            if min(bp*float(bid['sz']), ap*float(ask['sz'])) < order_usd:
+                                reason = 'Profondeur insuffisante'
+                            elif item['spread_bps'] > max_spread_bps:
+                                reason = 'Spread trop large'
+                except (KeyError, IndexError, TypeError, ValueError, ZeroDivisionError):
+                    pass
+            approved = candidates.get(coin) if connected and metric and metric['eligible'] else None
+            if approved:
+                # Fee estimates belong to a tenant's full scan, never reuse
+                # another cached fee profile in this public observation view.
+                for key in ('spread_bps', 'queue_proxy_sec'):
+                    item[key] = approved.get(key)
+                reason = 'Admissible'
+            item.update(auto_eligible=bool(approved), eligibility_reason=reason if connected else 'Flux déconnecté')
+            observed.append(item)
+        observed.sort(key=lambda row: (-row['volume_usd_1m'], row['market']))
+        with self.lock:
+            for row in observed[:12]:
+                self.book_watch[row['market']] = now
+        return dict(observed_markets=observed, observed_at=now, observation_connected=connected)
 
     def _snapshot(self, side="no", order_usd=50, max_spread_bps=10, *, base_rate=0.0004):
         from zeus.outcome_costs import candidate_cost
