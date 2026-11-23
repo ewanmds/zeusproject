@@ -29,32 +29,6 @@ export function NavDock({ view, active }: { view: View; active: number }) {
     </nav>
   );
 }
-export function PublicNav({ view }: { view: View }) {
-  return (
-    <nav
-      className="nav layro-dock public-nav"
-      aria-label="Navigation publique"
-      data-layro="magicuidesign/dock"
-    >
-      <a
-        href="#run"
-        className={view !== "skills" ? "active" : ""}
-        aria-current={view !== "skills" ? "page" : undefined}
-      >
-        <Icon name="run" size={17} />
-        <span>Accueil</span>
-      </a>
-      <a
-        href="#skills"
-        className={view === "skills" ? "active" : ""}
-        aria-current={view === "skills" ? "page" : undefined}
-      >
-        <Icon name="spark" size={17} />
-        <span>Skills</span>
-      </a>
-    </nav>
-  );
-}
 // Layro: educlopez/animated-stepper - controlled, evidence-based completion.
 export function SessionStepper({
   connected,

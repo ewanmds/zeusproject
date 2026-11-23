@@ -1,5 +1,5 @@
 export type Strategy = "outcome" | "bbo" | "mid";
-export type View = "run" | "sessions" | "performance" | "account" | "skills";
+export type View = "run" | "sessions" | "performance" | "account";
 export interface Provider {
   request(args: { method: string; params?: unknown[] }): Promise<any>;
   on?: (name: string, cb: (data: any) => void) => void;

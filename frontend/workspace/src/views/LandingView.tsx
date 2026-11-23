@@ -58,11 +58,9 @@ const trust = [
 
 export function LandingView({
   onConnect,
-  onSkills,
   onHelp,
 }: {
   onConnect: () => void;
-  onSkills: () => void;
   onHelp: () => void;
 }) {
   return (
@@ -88,13 +86,6 @@ export function LandingView({
             >
               <Icon name="wallet" size={17} />
               Connecter mon wallet
-            </button>
-            <button
-              className="button secondary landing-button"
-              onClick={onSkills}
-            >
-              Voir les skills frontend
-              <Icon name="arrow" size={16} />
             </button>
           </div>
           <p className="landing-note">
@@ -203,32 +194,6 @@ export function LandingView({
             <h3>Lancez la session</h3>
             <p>Le scanner choisit le marché. Vous suivez le volume et le PnL en direct.</p>
           </article>
-        </div>
-      </section>
-
-      <section className="skills-teaser" aria-labelledby="skills-teaser-title">
-        <div>
-          <span className="landing-kicker">
-            <Icon name="spark" size={15} />
-            Skills frontend
-          </span>
-          <h2 id="skills-teaser-title">La même exigence dans l'interface.</h2>
-          <p>
-            Design system, responsive, accessibilité et temps réel. Les détails
-            qui rendent une interface de trading calme et lisible.
-          </p>
-          <button className="button secondary" onClick={onSkills}>
-            Explorer les skills frontend
-            <Icon name="arrow" size={16} />
-          </button>
-        </div>
-        <div className="chip-row" aria-label="Compétences frontend">
-          <span className="chip">Design system</span>
-          <span className="chip">Responsive</span>
-          <span className="chip">Accessibilité</span>
-          <span className="chip">Temps réel</span>
-          <span className="chip">Motion</span>
-          <span className="chip">Performance</span>
         </div>
       </section>
 

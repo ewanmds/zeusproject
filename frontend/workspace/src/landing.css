@@ -1,4 +1,4 @@
-/* Landing and frontend-skills pages, in the existing Zeus visual system. */
+/* Public landing in the existing Zeus visual system. */
 html,
 body {
   overflow-x: clip;
@@ -295,8 +295,7 @@ body {
   gap: 14px;
 }
 
-.feature-card,
-.skill-card {
+.feature-card {
   padding: 20px;
   border: 1px solid var(--landing-line);
   border-radius: var(--radius);
@@ -328,14 +327,12 @@ body {
   color: var(--gold);
 }
 
-.feature-card h3,
-.skill-card h3 {
+.feature-card h3 {
   margin: 16px 0 8px;
   font-size: 17px;
 }
 
-.feature-card p,
-.skill-card p {
+.feature-card p {
   margin: 0;
   color: var(--muted);
   font-size: 14px;
@@ -369,50 +366,6 @@ body {
   color: var(--muted);
   font-size: 14px;
   line-height: 1.55;
-}
-
-.skills-teaser {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
-  gap: 32px;
-  align-items: center;
-  margin-top: 78px;
-  padding: clamp(28px, 4vw, 44px);
-  border: 1px solid var(--landing-purple-line);
-  border-radius: 22px;
-  background: linear-gradient(135deg, var(--landing-purple-soft), var(--landing-gold-soft));
-  box-shadow: var(--landing-card-shadow);
-}
-
-.skills-teaser h2 {
-  margin: 12px 0 10px;
-  font-family: var(--font-body);
-  font-size: clamp(26px, 3vw, 36px);
-  line-height: 1.1;
-}
-
-.skills-teaser p {
-  max-width: 540px;
-  margin: 0 0 20px;
-  color: var(--landing-text-dim);
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-.chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-.chip {
-  padding: 8px 12px;
-  border: 1px solid var(--landing-line);
-  border-radius: 999px;
-  background: var(--landing-surface);
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .trust-band {
@@ -487,160 +440,6 @@ body {
   justify-content: center;
 }
 
-.skills-page {
-  padding-top: 24px;
-}
-
-.skills-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
-  gap: clamp(32px, 5vw, 64px);
-  align-items: center;
-  padding: 28px 0 64px;
-}
-
-.skills-hero h1 {
-  margin: 16px 0 18px;
-  font-family: var(--font-body);
-  font-size: clamp(44px, 5.4vw, 68px);
-  line-height: 1;
-  letter-spacing: -2px;
-}
-
-.system-card {
-  padding: 22px;
-  border: 1px solid var(--landing-purple-line);
-  border-radius: 20px;
-  background: linear-gradient(160deg, var(--landing-raised), var(--landing-surface));
-  box-shadow: var(--landing-shadow), var(--landing-inset);
-}
-
-.system-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.system-head code {
-  color: var(--subtle);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
-.swatches {
-  display: flex;
-  gap: 8px;
-  margin: 20px 0;
-}
-
-.swatches i {
-  width: 46px;
-  height: 46px;
-  border: 1px solid var(--landing-line);
-  border-radius: 12px;
-}
-
-.swatches .gold {
-  background: var(--gold);
-}
-
-.swatches .purple {
-  background: var(--purple);
-}
-
-.swatches .green {
-  background: var(--green);
-}
-
-.swatches .surface {
-  background: var(--raised);
-}
-
-.type-samples {
-  display: grid;
-  gap: 7px;
-  padding: 16px 0;
-  border-top: 1px solid var(--landing-line);
-  border-bottom: 1px solid var(--landing-line);
-}
-
-.type-samples strong {
-  font-family: var(--font-body);
-  font-size: 22px;
-  letter-spacing: -0.4px;
-}
-
-.type-samples span {
-  color: var(--gold);
-  font-family: var(--font-display);
-  font-size: 14px;
-}
-
-.type-samples code {
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.system-foot {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  padding-top: 14px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.skills-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.principles-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px 32px;
-}
-
-.principle {
-  padding-left: 16px;
-  border-left: 2px solid var(--gold);
-}
-
-.principle h3 {
-  margin: 0 0 6px;
-  font-size: 15px;
-}
-
-.principle p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.stack-band {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 64px;
-  padding: 14px 0;
-  border-top: 1px solid var(--landing-line);
-  border-bottom: 1px solid var(--landing-line);
-}
-
-.stack-band span {
-  padding: 6px 10px;
-  border: 1px solid var(--landing-line);
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
 .landing a:focus-visible,
 .landing button:focus-visible {
   outline: 2px solid var(--purple);
@@ -648,8 +447,7 @@ body {
 }
 
 @media (max-width: 1020px) {
-  .landing-hero,
-  .skills-hero {
+  .landing-hero {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -676,14 +474,6 @@ body {
   .trust-band > div:nth-child(n + 3) {
     border-top: 1px solid var(--landing-line);
   }
-
-  .skills-teaser {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .chip-row {
-    justify-content: flex-start;
-  }
 }
 
 @media (max-width: 720px) {
@@ -707,7 +497,6 @@ body {
   }
 
   .landing-section,
-  .skills-teaser,
   .trust-band,
   .landing-cta {
     margin-top: 52px;
@@ -724,8 +513,6 @@ body {
 
   .feature-grid,
   .landing-steps,
-  .skills-grid,
-  .principles-grid,
   .trust-band {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -742,18 +529,6 @@ body {
   .landing-cta {
     padding: 36px 18px;
     border-radius: 18px;
-  }
-
-  .skills-hero {
-    padding-top: 12px;
-  }
-
-  .skills-hero h1 {
-    font-size: clamp(40px, 12vw, 56px);
-  }
-
-  .system-card {
-    max-width: 520px;
   }
 }
 

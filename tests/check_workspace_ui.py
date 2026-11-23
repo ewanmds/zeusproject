@@ -102,12 +102,6 @@ def main():
                             if overflow['scroll']>check_width:page.screenshot(path=str(folder/f'overflow-{check_width}.png'),full_page=True)
                             assert overflow['scroll']<=check_width,overflow
                         page.set_viewport_size({'width':width,'height':1000})
-                    page.get_by_role('button',name='Voir les skills frontend').click()
-                    expect(page.get_by_role('heading',name='Skills frontend.')).to_be_visible()
-                    expect(page.get_by_text('Design system',exact=True).first).to_be_visible()
-                    capture(page, f'skills-{width}.png')
-                    page.get_by_role('button',name="Retour à l'accueil").click()
-                    expect(page.get_by_role('heading',name='Le market making, sans surveillance.')).to_be_visible()
                     page.get_by_role('button',name='Connecter',exact=True).click()
                     page.get_by_role('button',name='Test Wallet').click()
                     expect(page.get_by_role('dialog')).not_to_be_visible()

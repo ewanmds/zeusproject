@@ -1,7 +1,6 @@
 import { strategies, nav, initial } from "./config";
 import { RunView } from "./views/RunView";
 import { LandingView } from "./views/LandingView";
-import { SkillsView } from "./views/SkillsView";
 
 import { lazy, Suspense, useEffect, useState, useRef } from "react";
 import { api, usd, short, clock } from "./data";
@@ -12,7 +11,7 @@ import { FeedbackButton } from "./components/FeedbackButton";
 import type { Draft, View, Session, Agent, Operation, Snapshot } from "./types";
 import { resolveStopSnapshot } from "./presentation/stop";
 import { sessionVisible } from "./presentation/session";
-import { NavDock, PublicNav } from "./components/layout";
+import { NavDock } from "./components/layout";
 import { Kbd } from "./components/fields";
 import { useMobile } from "./components/Dialog";
 import { InlineAlert, Notification, Skeleton } from "./components/feedback";
@@ -47,7 +46,6 @@ export default function App() {
   const w = useWorkspace();
   const [view, setView] = useState<View>(() => {
     const target = location.hash.slice(1);
-    if (target === "skills") return "skills";
     return nav.some((n) => n.id === target) ? (target as View) : "run";
   });
   const [walletModal, setWalletModal] = useState(false),
@@ -91,10 +89,6 @@ export default function App() {
   useEffect(() => {
     const change = () => {
       const target = location.hash.slice(1);
-      if (target === "skills") {
-        setView("skills");
-        return;
-      }
       setView(nav.some((n) => n.id === target) ? (target as View) : "run");
     };
     window.addEventListener("hashchange", change);
@@ -456,11 +450,7 @@ export default function App() {
             Zeus<span className="brand-sub">TRADING WORKSPACE</span>
           </span>
         </a>
-        {owner ? (
-          <NavDock view={view} active={metrics?.active || 0} />
-        ) : (
-          <PublicNav view={view} />
-        )}
+        {owner && <NavDock view={view} active={metrics?.active || 0} />}
         <div className="header-actions">
           {owner ? (
             <>
@@ -519,17 +509,9 @@ export default function App() {
             {w.error}
           </InlineAlert>
         )}
-        {view === "skills" ? (
-          <SkillsView
-            connected={!!owner}
-            onConnect={() => setWalletModal(true)}
-            onHome={() => navigate("run")}
-            onHelp={() => setShowHelp(true)}
-          />
-        ) : !owner ? (
+        {!owner ? (
           <LandingView
             onConnect={() => setWalletModal(true)}
-            onSkills={() => navigate("skills")}
             onHelp={() => setShowHelp(true)}
           />
         ) : (
