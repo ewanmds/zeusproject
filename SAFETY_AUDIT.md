@@ -13,6 +13,9 @@ Implemented for Outcome and BBO/MID and their dashboard supervisor.
   sell-only IOC may run at most 20 bps below the fresh best bid, bounded by the
   remaining stop-loss and at most three attempts per minute. Historical
   sessions without an explicit policy remain `maker_only`.
+- A 40 bps / 10 s adverse move pauses new bids for 8 s; exits, rotation drains
+  and the bounded IOC are never blocked. The IOC fallback is also deferred while
+  the spread exceeds 80 bps.
 - Resume preserves stop-loss, budgets, duration/volume objectives, deadline and
   counters. Crash recovery remains backend-owned; a hard stop is never resumed.
 - Network 429/5xx errors are classified; `Retry-After`, jittered backoff and

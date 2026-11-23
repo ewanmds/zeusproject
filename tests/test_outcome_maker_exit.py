@@ -174,6 +174,30 @@ class OutcomeQuoteTests(unittest.TestCase):
         self.assertEqual(plan[False]['order_type']['limit']['tif'], 'Alo')
 
 
+class AdverseMoveGuardTests(unittest.TestCase):
+    def test_fast_drop_pauses_bids_but_never_the_exit(self):
+        bot = make_bot()
+        st = MarketState(MarketSpec('#101', 0, balance_coin='+101'),
+                         position=10, available_position=10)
+        st.update_bbo(.30, .3003)
+        now = time.time()
+        st.mid_history = [(now - 5, .34), (now, .30)]
+        st.last_book_ts = now
+        self.assertIn('adverse move', bot.risk_block_reason(st, closing_inventory=False))
+        self.assertIsNone(bot.risk_block_reason(st, closing_inventory=True))
+        # A bid can't be planned while the exit ask remains allowed.
+        plan = bot.bilateral_requests(st)
+        self.assertNotIn(True, plan)
+        self.assertIn(False, plan)
+
+    def test_ioc_fallback_waits_when_spread_is_too_wide(self):
+        bot, st = BoundedExitTests().bot()
+        st.update_bbo(.30, .303)  # ~100 bps > 80 bps exit limit
+        bot.maybe_bounded_exit(st)
+        bot._submit_order.assert_not_called()
+        self.assertIn('spread', st.exit_ioc_blocked)
+
+
 class BoundedExitTests(unittest.TestCase):
     def bot(self, *, avg_entry=.32, qty=10, bid=.30):
         bot = HyperliquidSpreadBot.__new__(HyperliquidSpreadBot)

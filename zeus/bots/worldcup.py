@@ -265,6 +265,12 @@ class BotConfig:
     maker_exit_timeout_sec: float = 90.0
     exit_slippage_bps: float = 20.0
     exit_taker_fee_bps: float = 10.0
+    # Do not buy into a fast adverse move. Exits are never blocked by this.
+    adverse_move_guard: bool = True
+    adverse_move_window_sec: float = 10.0
+    adverse_move_bps: float = 40.0
+    adverse_move_cooldown_sec: float = 8.0
+    exit_max_spread_bps: float = 80.0
     resume_exit: bool = False
     resume_trading: bool = False
     inventory_stop_bps: float = 200.0
@@ -333,6 +339,9 @@ class MarketState:
     ioc_attempts: list = field(default_factory=list)
     ioc_next_at: float = 0.0
     exit_ioc_blocked: str = ""
+    mid_history: list = field(default_factory=list)
+    adverse_until: float = 0.0
+    adverse_reason: str = ""
 
     @property
     def has_bbo(self) -> bool:
@@ -357,6 +366,12 @@ class MarketState:
         self.mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else 0.0
         self.spread_bps = ((ask - bid) / self.mid * 10_000.0) if self.mid > 0 else math.inf
         self.last_book_ts = stamp
+        # Bounded mid history for the adverse-move guard. Only the last minute
+        # matters; stale observations are discarded on read.
+        if self.mid > 0:
+            self.mid_history.append((stamp, self.mid))
+            if len(self.mid_history) > 1200:
+                del self.mid_history[:200]
         return True
 
 
@@ -678,6 +693,11 @@ class HyperliquidSpreadBot:
             return
         if st.bid <= 0 or now - st.last_book_ts > self.cfg.stale_sec:
             st.exit_ioc_blocked = "carnet absent ou périmé: secours IOC reporté"
+            st.ioc_next_at = now + 5
+            return
+        if st.spread_bps > self.cfg.exit_max_spread_bps:
+            st.exit_ioc_blocked = (f"spread {st.spread_bps:.1f}bps > "
+                                   f"{self.cfg.exit_max_spread_bps:.0f}bps: secours IOC reporté")
             st.ioc_next_at = now + 5
             return
         px = round_outcome_sell_px(st.bid * (1 - self.cfg.exit_slippage_bps / 10_000))
@@ -1526,6 +1546,29 @@ class HyperliquidSpreadBot:
             self.account_sync_ms = (time.perf_counter()-sync_started)*1000
         return True
 
+    def adverse_block_reason(self, st: MarketState) -> Optional[str]:
+        """Pause new bids while the mid falls fast; never block an exit."""
+        if not self.cfg.worldcup or not self.cfg.adverse_move_guard:
+            return None
+        now = time.time()
+        if now < st.adverse_until:
+            return st.adverse_reason or "adverse move; bids paused"
+        if st.mid <= 0 or not st.mid_history:
+            return None
+        window = max(2.0, self.cfg.adverse_move_window_sec)
+        reference = max((mid for stamp, mid in st.mid_history
+                         if now - stamp <= window and mid > 0), default=0.0)
+        if reference <= 0:
+            return None
+        drop_bps = (reference - st.mid) / reference * 10_000.0
+        if drop_bps >= self.cfg.adverse_move_bps:
+            st.adverse_until = now + self.cfg.adverse_move_cooldown_sec
+            st.adverse_reason = (f"adverse move {drop_bps:.0f}bps/{window:.0f}s; "
+                                 "bids paused")
+            st.last_action = st.adverse_reason
+            return st.adverse_reason
+        return None
+
     def risk_block_reason(self, st: MarketState, closing_inventory: bool = False) -> Optional[str]:
         net_risk_pnl = self.stats.net_pnl + self.cfg.risk_pnl_carry
         # Outcome exits are passive sells; a session stop-loss must never
@@ -1541,6 +1584,10 @@ class HyperliquidSpreadBot:
             return "waiting bbo"
         if time.time() - st.last_book_ts > self.cfg.stale_sec:
             return f"stale feed {fmt_age(st.last_book_ts)}"
+        if not closing_inventory:
+            adverse = self.adverse_block_reason(st)
+            if adverse:
+                return adverse
         if self.cfg.worldcup and not closing_inventory and time.time() < st.inventory_stop_until:
             return 'Inventory stop cooldown; new bids paused'
         if (self.cfg.auto_max_spread_bps is not None and not closing_inventory

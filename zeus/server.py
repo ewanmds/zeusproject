@@ -132,8 +132,13 @@ class WorldcupStartRequest(BaseModel):
     maker_exit_timeout_sec: float = Field(default=90, ge=1, le=3600, allow_inf_nan=False)
     exit_slippage_bps: float = Field(default=20, ge=0, le=200, allow_inf_nan=False)
     exit_taker_fee_bps: float = Field(default=10, ge=0, le=200, allow_inf_nan=False)
+    exit_max_spread_bps: float = Field(default=80, ge=0, le=1000, allow_inf_nan=False)
+    adverse_move_guard: bool = True
+    adverse_move_bps: float = Field(default=40, ge=5, le=2000, allow_inf_nan=False)
+    adverse_move_window_sec: float = Field(default=10, ge=2, le=120, allow_inf_nan=False)
+    adverse_move_cooldown_sec: float = Field(default=8, ge=0, le=300, allow_inf_nan=False)
     # Inventory guards: cut a losing position, or a drain that cannot go flat.
-    inventory_stop_bps: float = Field(default=200, ge=50, le=500, allow_inf_nan=False)
+    inventory_stop_bps: float = Field(default=100, ge=50, le=500, allow_inf_nan=False)
     inventory_drain_timeout_sec: float = Field(default=90, ge=15, le=600, allow_inf_nan=False)
     selection_mode: Literal["manual", "auto"] = "manual"
     auto_max_spread_bps: float = Field(default=10, gt=0, le=100, allow_inf_nan=False)

@@ -50,14 +50,29 @@
   worker cancels competing orders, re-reads inventory and book, and may send one
   sell-only IOC.
 - IOC limit is at most `exit_slippage_bps` (20 bps) below the fresh best bid.
-- The fallback is blocked when entry cost is unknown, the book is stale, or the
-  estimated total loss would exceed the remaining session stop-loss budget.
+- The fallback is blocked when entry cost is unknown, the book is stale, the
+  spread is wider than `exit_max_spread_bps` (80 bps), or the estimated total
+  loss would exceed the remaining session stop-loss budget.
 - At most three IOC attempts per minute, at least five seconds apart; after an
   unexecuted IOC the next attempt waits 30 s and a maker exit is maintained.
 - A timeout or uncertain submission reconciles by CLOID/account before any new
   attempt. IOC never leaves an unexecuted remainder resting.
 - The strict maker-only gate has a narrow `bounded_exit_scope()` that permits
   only sell-side IOC. Buy IOC and all other crossing orders remain forbidden.
+
+### Entry guards (spread and adverse move)
+
+- A fast adverse move pauses **new bids only**: a 40 bps drop in 10 s arms an
+  8 s cooldown. The mid reference is the highest mid in the window, so a
+  sustained lower price keeps bids paused until the peak ages out.
+- The guard never blocks an exit ask, a rotation drain or a bounded IOC. A
+  session can always reduce inventory.
+- The bounded IOC fallback is also blocked while the spread is wider than
+  80 bps; it retries after 5 s instead of crossing a dislocated book.
+- The new-session default inventory stop is 100 bps (historical sessions keep
+  their configured value).
+- Entry spread remains bounded by `auto_max_spread_bps`; a widened or stale
+  book still blocks purchases before the order is planned.
 
 ### Network, SDK and errors
 
@@ -81,12 +96,13 @@
 
 ## Validation
 
-- `python -m pytest tests -q`: **123 passed**
+- `python -m pytest tests -q`: **125 passed**
 - `npm test --prefix frontend/workspace`: **44 passed**
 - `npm run build --prefix frontend/workspace`: **pass**
 - New tests cover network 429/Retry-After/timeout/cancellation, flat-only
   rotation, candidate stability, stop modes, bounded IOC price/loss/rate,
-  resume objectives and scanner diagnostics.
+  adverse-move bid pause, wide-spread IOC deferral, resume objectives and
+  scanner diagnostics.
 
 ## Known limits / next lots
 
