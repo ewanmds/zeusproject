@@ -1809,7 +1809,9 @@
             });
             if (response.state) updateGridDashboard(response.state);
             else await loadInitialStatus({ silent: true });
-            showToast("info", token ? `Bot ${token} stopped` : "All bots stopped",
+            const draining = response.status === "draining";
+            showToast(draining ? "info" : "success",
+                token ? `Bot ${token} ${draining ? "stopping" : "stopped"}` : (draining ? "Stopping all bots" : "All bots stopped"),
                 "Manual stop: the bot cancels every open order and closes the position reduce-only before exiting.");
         } catch (error) {
             showToast("error", "Stop failed", error.message);

@@ -8,7 +8,13 @@ import { RichPopover } from "../components/fields";
 import { ViewSwitch } from "../components/ViewSwitch";
 import { DataTable } from "../components/DataTable";
 import { SessionProgress } from "../components/SessionProgress";
-import type { Session } from "../types";
+import {
+  canResumeMakerExit,
+  canResumeTrading,
+  resumeExitMessage,
+  resumeTradingMessage,
+} from "../presentation/stop";
+import type { Session, Snapshot } from "../types";
 import type { SessionsProps } from "../viewTypes";
 export function SessionsView({
   owner,
@@ -22,6 +28,7 @@ export function SessionsView({
   navigate,
   setStop,
   setSelected,
+  setNotice,
   setWalletModal,
   stopError,
 }: SessionsProps) {
@@ -33,6 +40,7 @@ export function SessionsView({
   const [error, setError] = useState<{ id: string; message: string } | null>(
     null,
   );
+  const [resuming, setResuming] = useState<string | null>(null);
   useEffect(() => {
     let compact = false;
     try {
@@ -80,6 +88,31 @@ export function SessionsView({
         localStorage.setItem("zeus-ui-compact:" + owner, String(value));
       } catch {}
   };
+  const resume = async (s: Session, mode: "exit" | "trading") => {
+    if (resuming) return;
+    const key = s.id + ":" + mode;
+    setResuming(key);
+    setError(null);
+    try {
+      const snapshot = await api<Snapshot>(
+        "/sessions/" +
+          encodeURIComponent(s.id) +
+          (mode === "exit" ? "/resume-exit" : "/resume"),
+        {},
+      );
+      w.applySnapshot(snapshot);
+      const resolution =
+        mode === "exit"
+          ? resumeExitMessage(snapshot, s.id)
+          : resumeTradingMessage(snapshot, s.id);
+      setNotice(resolution.message);
+      w.refresh();
+    } catch (e: any) {
+      setError({ id: s.id, message: e.message });
+    } finally {
+      setResuming(null);
+    }
+  };
   const actions = (s: Session) => (
     <div className="row-actions">
       <button className="button subtle" onClick={() => setSelected(s)}>
@@ -104,8 +137,24 @@ export function SessionsView({
               setChecking(s.id);
               setError(null);
               try {
-                await api("/reconcile", {});
-                w.refresh();
+                const state = await api<{
+                  unresolved?: string[];
+                  can_start?: boolean;
+                  journal_error?: string;
+                }>("/reconcile", {});
+                if (state.can_start) {
+                  w.refresh();
+                } else {
+                  // The endpoint returns the exact sessions it could not
+                  // confirm; surfacing them is the whole point of the action.
+                  const detail =
+                    (state.unresolved && state.unresolved.length
+                      ? state.unresolved.join(", ")
+                      : "") ||
+                    state.journal_error ||
+                    "vérifiez la session manuellement.";
+                  setError({ id: s.id, message: "Arrêt non confirmé : " + detail });
+                }
               } catch (e: any) {
                 setError({ id: s.id, message: e.message });
               } finally {
@@ -115,6 +164,30 @@ export function SessionsView({
           >
             {checking === s.id ? "Vérification…" : "Vérifier l’arrêt"}
           </button>
+          {canResumeMakerExit(s) && (
+            <button
+              className="button secondary small"
+              disabled={!!resuming}
+              aria-busy={resuming === s.id + ":exit" || undefined}
+              onClick={() => resume(s, "exit")}
+            >
+              {resuming === s.id + ":exit"
+                ? "Reprise…"
+                : "Relancer la clôture"}
+            </button>
+          )}
+          {canResumeTrading(s) && (
+            <button
+              className="button secondary small"
+              disabled={!!resuming}
+              aria-busy={resuming === s.id + ":trading" || undefined}
+              onClick={() => resume(s, "trading")}
+            >
+              {resuming === s.id + ":trading"
+                ? "Reprise…"
+                : "Reprendre le trading"}
+            </button>
+          )}
         </div>
       ) : null}
     </div>

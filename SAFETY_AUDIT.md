@@ -168,12 +168,12 @@ new quote rather than another modification of the dead OID. This produces a
 warning, not a failed lifecycle or red failure border. Incomplete acknowledgements,
 other rejections and unverifiable exchange state still retain the interlock.
 
-This repository has no automated test suite (removed by design; the history is
-available under the `pre-cleanup` tag). Before deploying, verify:
+Before deploying, run the offline suites and build checks:
 
-```powershell
-python -m py_compile zeus\*.py zeus\bots\*.py bot_server.py
-python -c "import zeus.server, zeus.dashboard, zeus.bots.order_book, zeus.bots.worldcup"
+```sh
+python -m pytest tests -q
+npm test --prefix frontend/workspace
+npm run build --prefix frontend/workspace
 node --check frontend/app.js
 node frontend/build.mjs
 ```

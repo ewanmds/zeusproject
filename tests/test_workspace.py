@@ -55,6 +55,10 @@ class FakeManager:
         for row in self.rows:
             if sid is None or row['session_id'] == sid: row.update(running=False, cleanup_confirmed=True, phase='stopped')
     def stop_grid(self, *args): pass
+    def start_grid(self, req):
+        key = (req.token or 'SP500').strip().upper()
+        self.obi_procs[key] = {'safety_file': str(Path(self.state_dir)/'grid.json'), 'proc': None}
+        self.grid_started = getattr(self, 'grid_started', []) + [req]
     def reconcile_sessions(self): return {'can_start': True, 'unresolved': []}
 
 
@@ -336,6 +340,53 @@ class WorkspaceTests(unittest.TestCase):
             retry=self.client.post('/api/v2/agent/approve',json={'signature':signature})
             self.assertEqual(retry.json()['status'],'approval_pending')
             self.assertEqual(len(calls),1)
+
+    def test_idle_tenant_managers_are_evicted_at_the_cap(self):
+        runtime = self.app.state.runtimes
+        runtime.max_managers = 2
+        owners = [Account.create().address.lower() for _ in range(3)]
+        for owner in owners[:2]:
+            runtime.manager(owner)
+        runtime.touched[owners[0]] = time.monotonic()-3600
+        runtime.manager(owners[2])
+        # An idle tenant is dropped instead of growing a thread/cache per
+        # self-generated wallet; active ones are never evicted.
+        self.assertNotIn(owners[0], runtime.items)
+        self.assertIn(owners[2], runtime.items)
+
+    def test_capacity_refuses_new_tenants_instead_of_growing(self):
+        from zeus.workspace.runtime import CapacityError
+        runtime = self.app.state.runtimes
+        runtime.max_managers = 2
+        owners = [Account.create().address.lower() for _ in range(3)]
+        for owner in owners[:2]:
+            runtime.manager(owner)
+        # Both managers are recent, so no eviction is safe: refuse instead of
+        # growing one thread/cache per wallet without bound.
+        with self.assertRaises(CapacityError):
+            runtime.manager(owners[2])
+
+    def test_grid_start_requires_a_market_and_spawns_nothing(self):
+        self.login(self.client, self.a)
+        self.authorize(self.client, self.a)
+        body = {'strategy': 'bbo', 'order_usd': 25, 'position_cap': 200, 'market': ''}
+        response = self.client.post('/api/v2/sessions', json=body,
+                                    headers={'Idempotency-Key': 'missing-market-command'})
+        self.assertEqual(response.status_code, 400, response.text)
+        manager = self.app.state.runtimes.manager(self.a.address.lower())
+        # The empty market used to fall back to SP500 in start_grid and spawn a
+        # real worker before the API reported a bogus unconfirmed command.
+        self.assertEqual(getattr(manager, 'grid_started', []), [])
+
+    def test_prepare_is_refused_while_a_session_is_running(self):
+        self.login(self.client, self.a)
+        self.authorize(self.client, self.a)
+        launch = self.client.post('/api/v2/sessions',
+                                  json={'strategy': 'outcome', 'order_usd': 25, 'position_cap': 200},
+                                  headers={'Idempotency-Key': 'prepare-while-running'})
+        self.assertEqual(launch.status_code, 200, launch.text)
+        # Re-preparing would rotate the signing key under the live worker.
+        self.assertEqual(self.client.post('/api/v2/agent/prepare', json={}).status_code, 409)
 
     def test_only_proven_prelaunch_rejection_can_be_dismissed(self):
         self.login(self.client,self.a)

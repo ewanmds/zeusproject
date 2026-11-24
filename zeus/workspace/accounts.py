@@ -47,7 +47,10 @@ class HyperliquidAccounts:
     def prepare(self, owner):
         old = self.store.agent(owner)
         if old and old['expires'] > time.time()+300:
-            if old['status'] not in {'ready', 'approval_pending'} and time.time()*1000-old['approval']['nonce'] > 240000:
+            # A stale approval_pending reservation (relay timeout or crash)
+            # must not brick authorization for the whole 30-day expiry. Mint a
+            # fresh nonce on an explicit Prepare; never auto-resend.
+            if old['status'] != 'ready' and time.time()*1000-old['approval']['nonce'] > 240000:
                 private = self.store.agent(owner, secret=True)
                 action = {**old['approval'], 'nonce': int(time.time()*1000)}
                 self.store.save_agent(owner, old['account'], old['address'], private['private_key'],

@@ -152,8 +152,17 @@ class DashboardBroker:
             return data, revision
 
     def read(self, kind, *, fresh=False):
-        data, _ = self._collect(kind, fresh=fresh)
-        return copy.deepcopy(data)
+        data = copy.deepcopy(self._collect(kind, fresh=fresh)[0])
+        # Internal per-session bookkeeping (wallet address, absolute paths,
+        # live CLOIDs) must never leave the server on REST either. The Web
+        # socket path already strips it through _lean(); mirror that here while
+        # keeping the legacy `bots` list itself.
+        for key in ("display_bots", "bots"):
+            rows = data.get(key)
+            if isinstance(rows, list):
+                data[key] = [{field: value for field, value in row.items()
+                              if field not in _ROW_DROP} for row in rows]
+        return data
 
     def payload(self, kind, *, fresh=False):
         """JSON text for WebSocket fan-out, encoded once per revision."""

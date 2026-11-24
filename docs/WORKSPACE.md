@@ -82,7 +82,13 @@ realized PnL guard; it is not a guarantee on unrealized inventory losses.
 Manual Pause is not exposed: the existing risk/network recovery state is not a
 substitute for a separately specified manual pause contract. Stop uses the
 existing explicit stop semantics and remains unconfirmed until cleanup passes.
-Logging out ends web access; it does not silently stop server-side sessions.
+A stopped Outcome session whose worker is gone but whose cleanup is still
+unconfirmed exposes two explicit actions in Sessions: **Relancer la clôture**
+starts the same journal as an exit-only maker worker, and **Reprendre le
+trading** restarts bid+ask only when no stop reason was recorded. The backend
+re-verifies ownership, market and inventory attribution and rejects unsafe
+resumes. Logging out ends web access; it does not silently stop server-side
+sessions.
 
 Unknown or stale accounting remains unknown. Session cards and overview use the
 same snapshot. Performance separates the period's realized session results from
@@ -105,6 +111,11 @@ that upgrades `/api/v2/ws`. Run **one workspace API process** per state director
 it supervises local OS workers. Multiple API replicas require a dedicated shared
 job supervisor rather than starting duplicate local managers. Set the listen
 host/port with `ZEUS_WORKSPACE_HOST` and `ZEUS_WORKSPACE_PORT`.
+
+One process keeps at most 64 tenant managers (each owns a recovery thread and
+caches). Long-idle tenants with no live worker and only confirmed journals are
+evicted when room is needed; otherwise a new wallet receives `503` instead of
+letting anonymous SIWE logins grow the process without bound.
 
 Back up the database, encrypted agent records, encryption key and execution
 journals together. Keep the managed key outside a database backup; losing it

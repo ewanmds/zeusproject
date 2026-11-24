@@ -61,10 +61,19 @@ def load_dotenv(path: Path) -> None:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
+        if key.startswith("export "):
+            key = key[7:].strip()
+        if not key:
+            continue
         value = value.strip()
-        # Strip surrounding quotes if present
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-            value = value[1:-1]
+        # Quoted values keep their content verbatim; an unquoted trailing
+        # comment (`TOKEN=abc  # rotate`) is not part of the value.
+        if value[:1] in ('"', "'"):
+            quote = value[0]
+            end = value.find(quote, 1)
+            value = value[1:end] if end > 0 else value[1:]
+        elif " #" in value:
+            value = value.split(" #", 1)[0].rstrip()
         os.environ.setdefault(key, value)
 
 # Load .env at import time so bot modules can see the env vars
@@ -361,6 +370,13 @@ class BotManager:
         seen = set()
         corrupt = {}
         for path in self.state_dir.glob("*.json"):
+            # Journals are named with a 32-char uuid hex. Other JSON files in
+            # the state directory (api-budget.json, operator notes, ...) are
+            # not sessions and must not be reported as corrupt journals that
+            # block every start.
+            stem = path.stem
+            if len(stem) != 32 or any(ch not in "0123456789abcdef" for ch in stem.lower()):
+                continue
             seen.add(path)
             try:
                 record = self._read_journal(path)
@@ -629,7 +645,6 @@ class BotManager:
             return
 
         failures = []
-        stop_started = time.monotonic()
         for key, info in targets:
             try:
                 # Explicit dashboard Stop authorizes the bot's reduce-only
@@ -644,14 +659,20 @@ class BotManager:
                 info["stop_unconfirmed"] = True
                 failures.append(key)
         for key, info in targets:
-            deadline = stop_started + 30
+            # Each session gets its own budget: a slow drain on the first bot
+            # must not consume the deadline of the others.
+            deadline = time.monotonic() + 30
             proc = info["proc"]
             while proc.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.1)
             lifecycle = self._session_status(info.get("safety_file"))
-            confirmed = proc.poll() is not None and lifecycle.get("cleanup_confirmed") is True
-            info["stop_unconfirmed"] = not confirmed
-            if not confirmed:
+            exited = proc.poll() is not None
+            confirmed = exited and lifecycle.get("cleanup_confirmed") is True
+            # Still running means the stop is pending, not that the flatten is
+            # unconfirmed. Marking it otherwise turned every slow passive exit
+            # into a failed lifecycle that blocked the market forever.
+            info["stop_unconfirmed"] = (not confirmed) and (exited or info.get("stop_unconfirmed", False))
+            if info["stop_unconfirmed"]:
                 failures.append(key)
             # Keep final records/statistics and the sentinel until verified.
         if failures:
@@ -681,9 +702,9 @@ class BotManager:
             now = time.time()
             with self.lock:
                 items = list(self.obi_procs.items())
-            bots = [{"token": r["symbols"][0].split(":")[-1], "symbol": r["symbols"][0],
-                     'session_id': r['session_id'], 'started': r.get('started', 0), 'config': r.get('config', {}),
-                     "strategy": r.get('config', {}).get('strategy', r.get("strategy", "bbo")), "running": pid_alive(r.get("pid")),
+            bots = [{"token": (r.get("symbols") or [""])[0].split(":")[-1], "symbol": (r.get("symbols") or [""])[0],
+                     'session_id': r['session_id'], 'started': r.get('started', 0), 'config': r.get('config') or {},
+                     "strategy": (r.get('config') or {}).get('strategy', r.get("strategy", "bbo")), "running": pid_alive(r.get("pid")),
                      "phase": "failed", "error": r.get("error") or "Interrupted session; stop not confirmed",
                      "cleanup_error": r.get("cleanup_error", ""), "cleanup_confirmed": False,
                      "can_start": False, "position_known": False, "position_usd": None,
@@ -730,6 +751,10 @@ class BotManager:
                     if not error:
                         error = f"The process exited (code {info['proc'].returncode})."
                 confirmed = lifecycle.get("cleanup_confirmed") is True and not alive
+                if confirmed and info.get("stop_unconfirmed"):
+                    # A slow passive stop that later verifies must release the
+                    # market instead of blocking every future start.
+                    info["stop_unconfirmed"] = False
                 position_known = bool(st.get("position_known")) if alive else confirmed
                 entry = {
                     'session_id': Path(info['safety_file']).stem if info.get('safety_file') else key,
@@ -801,6 +826,11 @@ class BotManager:
 
             alive_bots = [b for b in bots if b["running"]]
             single = alive_bots[0] if len(alive_bots) == 1 else None
+            # The header must summarize every live-scoped row, including dead
+            # or orphaned sessions whose position is unknown. Gating on
+            # alive_bots alone hid crashed exposure and reported 0.0 as if flat.
+            live_rows = [b for b in bots if b.get("mode", "live") == "live"]
+            position_known = all(b["position_known"] for b in live_rows)
             result = {
                 "type": "grid_stats",
                 "running": bool(alive_bots),
@@ -813,8 +843,8 @@ class BotManager:
                 "fills": tot_fills,
                 "mid_price": single["mid_price"] if single else 0.0,
                 "spread_bps": single["spread_bps"] if single else 0.0,
-                "position_known": all(b["position_known"] for b in alive_bots),
-                "position_usd": _json_float(tot_pos, 2) if all(b["position_known"] for b in alive_bots) else None,
+                "position_known": position_known,
+                "position_usd": _json_float(tot_pos, 2) if position_known else None,
                 "net_passive_capture": 0.0,
                 "net_adverse_lost": 0.0,
                 "adverse_halt": False,
@@ -873,7 +903,12 @@ async def _warm_public_catalogs():
             from zeus import outcomes
             from zeus.outcome_flow import scanner
             await asyncio.to_thread(outcomes.prime_catalog, rows)
-            await asyncio.to_thread(scanner.configure, rows)
+            try:
+                await asyncio.to_thread(scanner.configure, rows)
+            except ValueError as exc:
+                # Keep the warm-up task alive; the scanner reports its own
+                # unavailable state when the catalog exceeds its cap.
+                logger.warning("Outcome scanner warm-up skipped: %s", safe_error(exc))
 
 
 @asynccontextmanager
@@ -957,6 +992,13 @@ async def _dashboard_publisher():
                     for client, result in zip(clients, results):
                         if result is not None:
                             manager.ws_clients.discard(client)
+                            # Close the socket so the browser reconnects and
+                            # re-registers; otherwise the tab keeps a healthy
+                            # but permanently silent connection.
+                            try:
+                                await client.close(code=1013)
+                            except Exception:
+                                pass
                     clients = [client for client in clients if client in manager.ws_clients]
         except asyncio.CancelledError:
             raise
@@ -1140,6 +1182,17 @@ async def stop_grid(req: Optional[GridStopRequest] = None, _: None = Depends(_re
         await loop.run_in_executor(None, manager.stop_grid, token)
         dashboard.invalidate("grid")
         state = await asyncio.to_thread(dashboard.read, "grid", fresh=True)
+        target = (token or "").strip().upper()
+        rows = [b for b in state.get("bots", [])
+                if not target or (b.get("token") or "").upper() == target]
+        pending = [b.get("token") or "?" for b in rows
+                   if b.get("running") or b.get("cleanup_confirmed") is not True]
+        if pending:
+            # The request was accepted, but a passive flatten can still be
+            # working. Never answer "stopped" before cleanup is verified.
+            return {"status": "draining",
+                    "message": f"Stop in progress ({', '.join(sorted(set(pending)))})",
+                    "state": state}
         return {"status": "ok", "message": f"Bot stopped ({token or 'all'})", "state": state}
     except Exception as e:
         return JSONResponse(
@@ -1186,7 +1239,12 @@ async def outcome_auto(side: Literal["yes", "no"] = "no", order_usd: float = 50,
     # refresh without blocking this poll. configure() re-filters start/expiry
     # times against the current clock, so a <=60 s-old catalog stays safe.
     catalog = await public_catalogs.snapshot("hip4")
-    await asyncio.to_thread(scanner.configure, catalog["outcomes"])
+    try:
+        await asyncio.to_thread(scanner.configure, catalog["outcomes"])
+    except ValueError as exc:
+        # The subscription cap is an infrastructure limit, not a user error:
+        # degrade to an explicit unavailable state instead of a bare HTTP 500.
+        raise HTTPException(status_code=503, detail=safe_error(exc))
     result = await asyncio.to_thread(scanner.snapshot, side, order_usd, max_spread_bps,
                                      account=os.getenv('WALLET_ADDRESS_OUTCOME', '').strip())
     # Collecting session state reads every journal; use the shared cached
@@ -1225,6 +1283,12 @@ async def stop_outcome(req: Optional[OutcomeStopRequest] = None, _: None = Depen
                    if session_id is None or b["session_id"] in (stopped_ids or [session_id])]
         confirmed = bool(targets) and all(
             not b["running"] and b["cleanup_confirmed"] is True for b in targets)
+        # A verified stop drops the session from the tracked `bots` list, so an
+        # empty target set for a requested id means the supervisor already
+        # confirmed it. Without this, the success branch was unreachable.
+        if not targets and stopped_ids:
+            tracked_ids = {b["session_id"] for b in state.get("bots", [])}
+            confirmed = all(sid not in tracked_ids for sid in stopped_ids)
         # A normal passive exit can still be waiting for a counterparty. That
         # is a recorded stop request, not an error.
         return {"status": "ok" if confirmed else "draining",

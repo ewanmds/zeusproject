@@ -24,7 +24,7 @@ from zeus import PROJECT_ROOT
 from zeus.safety import safe_error
 from .storage import Store
 from .accounts import HyperliquidAccounts
-from .runtime import Runtimes
+from .runtime import CapacityError, Runtimes
 
 
 @dataclass
@@ -119,7 +119,17 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
             host = (request.headers.get('host') or '').lower()
             forwarded = (request.headers.get('x-forwarded-host') or '').lower()
             for candidate in (host, forwarded):
-                if candidate and candidate != frontend:
+                # Accept only a bare host[:port]; never reflect a scheme,
+                # credentials, path or query supplied through a header.
+                if not candidate or candidate == frontend:
+                    continue
+                if any(ch in candidate for ch in ('/', chr(92), '?', '#', '@', ' ', chr(9))):
+                    continue
+                try:
+                    parsed = urlsplit('//' + candidate)
+                except ValueError:
+                    continue
+                if parsed.netloc == candidate:
                     origin = candidate
                     break
         if not origin:
@@ -162,10 +172,15 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         response.headers['Cache-Control'] = 'no-store' if request.url.path.startswith('/api/') else 'no-cache'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'same-origin'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Content-Security-Policy'] = "frame-ancestors 'none'"
         return response
 
     def mutation(request: Request, who=Depends(identity)):
-        if not secrets.compare_digest(request.headers.get('x-zeus-csrf', ''), who['csrf']):
+        provided = request.headers.get('x-zeus-csrf', '')
+        # compare_digest rejects non-ASCII str inputs with TypeError; compare
+        # bytes so a malformed header is a clean 403.
+        if not secrets.compare_digest(provided.encode('utf-8', 'surrogatepass'), who['csrf'].encode('utf-8')):
             raise HTTPException(403, 'Session verification required')
         return who
 
@@ -175,6 +190,10 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
 
     async def exchange_unavailable(request, exc):
         return JSONResponse({'detail': 'Hyperliquid temporarily unavailable. Verify the last operation before retrying.'}, status_code=503)
+
+    @app.exception_handler(CapacityError)
+    async def at_capacity(request, exc):
+        return JSONResponse({'detail': 'Workspace is at capacity. Try again later.'}, status_code=503)
     for error_type in requests_error_types():
         app.add_exception_handler(error_type, exchange_unavailable)
 
@@ -209,8 +228,12 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
             now = time.time()
             expired = [k for k, v in attempts.items() if now-v[0] > 60]
             for k in expired: attempts.pop(k, None)
+            if len(attempts) > 10000:
+                # Evict the oldest windows instead of rejecting every new IP.
+                for stale, _ in sorted(attempts.items(), key=lambda item: item[1][0])[:len(attempts)-9000]:
+                    attempts.pop(stale, None)
             first, count = attempts.get(ip, (now, 0))
-            if count >= 15 or len(attempts) > 10000: raise HTTPException(429, 'Try again in a minute')
+            if count >= 15: raise HTTPException(429, 'Try again in a minute')
             attempts[ip] = (first, count+1)
         address = body.address.lower()
         issued = datetime.now(timezone.utc)
@@ -263,9 +286,10 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
 
     @app.post('/api/v2/agent/prepare')
     def prepare(who=Depends(mutation)):
+        # Re-preparing rotates the agent key (or its nonce) under any live or
+        # unresolved worker. Stop and verify those sessions first.
         if any(r['running'] or not r['cleanup_confirmed'] for r in runtimes.snapshot(who['wallet'])['sessions']):
-            old = store.agent(who['wallet'])
-            if not old: raise HTTPException(409, 'Verify the running sessions first')
+            raise HTTPException(409, 'Stop and verify the running sessions before re-authorizing the agent')
         return accounts.prepare(who['wallet'])
 
     @app.post('/api/v2/agent/approve')
@@ -291,7 +315,10 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         from zeus.server import public_catalogs
         from zeus.outcome_flow import scanner
         catalog = await public_catalogs.snapshot('hip4')
-        await asyncio.to_thread(scanner.configure, catalog['outcomes'])
+        try:
+            await asyncio.to_thread(scanner.configure, catalog['outcomes'])
+        except ValueError as exc:
+            raise HTTPException(503, safe_error(exc))
         result = await asyncio.to_thread(scanner.snapshot, side, order_usd, spread_bps, account=who['wallet'])
         state = await asyncio.to_thread(runtimes.snapshot, who['wallet'])
         busy = {s['market'] for s in state['sessions'] if s['running'] or not s['cleanup_confirmed']}
@@ -332,6 +359,8 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         key = request.headers.get('idempotency-key', '')
         if not 16 <= len(key) <= 128: raise HTTPException(422, 'An idempotency key is required')
         if body.order_usd > body.position_cap: raise ValueError('Position cap must cover one order')
+        if body.strategy != 'outcome' and not body.market:
+            raise ValueError('Choose a market')
         if body.strategy != 'outcome' and (body.duration_sec or body.target_volume_usd):
             raise ValueError('Duration and volume targets are currently available for Auto Outcome')
         command, created = store.reserve_command(who['wallet'], key, body.model_dump())
@@ -361,6 +390,7 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
                 return runtimes.stop(who['wallet'], sid, immediate=True)
             return runtimes.stop(who['wallet'], sid)
         except KeyError: raise HTTPException(404, 'Session not found')
+        except (ValueError, RuntimeError) as exc: raise HTTPException(409, safe_error(exc))
 
     @app.post('/api/v2/sessions/{sid}/resume-exit')
     def resume_exit(sid: str, who=Depends(mutation)):
@@ -388,7 +418,8 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
             now = time.time()
             with ws_tickets_lock:
                 entry = ws_tickets.pop(ticket, None)
-            token = entry[0] if entry and entry[1] >= now else None
+            if entry and entry[1] >= now:
+                token = entry[0]
         who = await asyncio.to_thread(store.identity, token)
         if not who: await ws.close(code=1008); return
         await ws.accept()

@@ -1520,10 +1520,20 @@ class OrderBookBot:
                 current(self._on_candle))
 
     def restart_ws(self):
+        old = getattr(self, "ws_info", None)
         try:
-            self.ws_info.disconnect_websocket()
+            if old is not None:
+                old.disconnect_websocket()
         except Exception:
             pass
+        # The SDK's Info client owns a requests.Session that disconnect_websocket
+        # never closes; without this, every feed recovery leaks a socket pool.
+        try:
+            if old is not None and getattr(old, "session", None) is not None:
+                old.session.close()
+        except Exception:
+            pass
+        self.ws_info = None
         self.ws_ready = False
         try:
             self.start_ws()
@@ -1777,6 +1787,9 @@ class OrderBookBot:
             with self.lock:
                 if generation is not None and generation != getattr(self, "_feed_generation", 0):
                     return
+                # A desync anywhere in this batch must survive later fills that
+                # happen to carry a valid startPosition.
+                desync_seen = False
                 for f in fills:
                     # A6: try/except PAR fill — un fill corrompu ne fait plus
                     # sauter le BATCH (sinon perte silencieuse d'un fill →
@@ -1891,6 +1904,7 @@ class OrderBookBot:
                             starts_new = transition.starts_new_position or was_below_min
                             self._reset_position_tracking_locked(flat=flat, starts_new=starts_new and not flat)
                         else:
+                            desync_seen = True
                             self.position_dirty = True
                             self.safety.account_known = False
                             self._inventory_mark_known = False
@@ -1903,9 +1917,9 @@ class OrderBookBot:
                         self._bump_execution_locked()
                         # A startPosition-validated fill is authoritative for
                         # the local basis; openings may resume immediately.
-                        # An unvalidated fill keeps dirty until the REST read.
-                        self.position_dirty = not (transition is not None
-                                                   and f.get("startPosition") is not None)
+                        # An earlier desync in this same batch keeps it dirty.
+                        self.position_dirty = desync_seen or not (
+                            transition is not None and f.get("startPosition") is not None)
                         if MID_REENTRY_RECHECK:
                             self._position_recheck_due = True
                         self.total_volume += px * sz
@@ -2877,33 +2891,36 @@ class OrderBookBot:
 
         Automatic risk/feed/session paths never call this. The passive-only
         execution gate rejects the close unless a manual-close scope is active.
+        The scope is acquired before any cancel so a missing manual stop cannot
+        leave the book cancelled but the position naked.
         """
-        self.cancel_all()
-        self.sync_position()
-        with self.lock:
-            pos = self.position
-            bb, ba = self.best_bid, self.best_ask
-        if abs(pos) < MIN_SIZE / 2:
-            return
-        if not self.live:
-            self.last_action = f"[dry] flatten {reason}"
-            return
-        tick = dyn_tick(self.mid)
-        is_buy = pos < 0
-        sz = round_sz(abs(pos))
-        px = (ba + 20 * tick) if is_buy else (bb - 20 * tick)
-        px = px_up(max(px, tick), tick) if is_buy else px_down(max(px, tick), tick)
         try:
-            with self.api_lock, self.safety.manual_close_scope():
-                checked, revision = self._position_checked_requests([{"coin": SYMBOL, "is_buy": is_buy,
-                    "sz": sz, "limit_px": px, "order_type": {"limit": {"tif": "Ioc"}}, "reduce_only": True}])
+            with self.safety.manual_close_scope():
+                self.cancel_all()
+                self.sync_position()
                 with self.lock:
-                    if not checked or revision != self.position_revision or self.position_dirty:
-                        return
-                request = checked[0]
-                self.exchange.order(name=SYMBOL, is_buy=request["is_buy"], sz=request["sz"], limit_px=request["limit_px"],
-                                    order_type=request["order_type"], reduce_only=True)
-            self.last_action = f"flatten ({reason})"
+                    pos = self.position
+                    bb, ba = self.best_bid, self.best_ask
+                if abs(pos) < MIN_SIZE / 2:
+                    return
+                if not self.live:
+                    self.last_action = f"[dry] flatten {reason}"
+                    return
+                tick = dyn_tick(self.mid)
+                is_buy = pos < 0
+                sz = round_sz(abs(pos))
+                px = (ba + 20 * tick) if is_buy else (bb - 20 * tick)
+                px = px_up(max(px, tick), tick) if is_buy else px_down(max(px, tick), tick)
+                with self.api_lock:
+                    checked, revision = self._position_checked_requests([{"coin": SYMBOL, "is_buy": is_buy,
+                        "sz": sz, "limit_px": px, "order_type": {"limit": {"tif": "Ioc"}}, "reduce_only": True}])
+                    with self.lock:
+                        if not checked or revision != self.position_revision or self.position_dirty:
+                            return
+                    request = checked[0]
+                    self.exchange.order(name=SYMBOL, is_buy=request["is_buy"], sz=request["sz"], limit_px=request["limit_px"],
+                                        order_type=request["order_type"], reduce_only=True)
+                self.last_action = f"flatten ({reason})"
         except Exception as exc:
             with self.lock:
                 self.last_error = f"flatten: {str(exc)[:100]}"
@@ -2924,7 +2941,10 @@ class OrderBookBot:
             with self.lock:
                 if oid not in self.queue_ahead:
                     continue
-                ahead = min(self.queue_ahead[oid], max(0.0, displayed - order["sz"]))
+                # level_size() already excludes this session's own resting
+                # size (the signal book is built by _levels_without_own), so
+                # subtracting order["sz"] here would remove our size twice.
+                ahead = min(self.queue_ahead[oid], max(0.0, displayed))
                 self.queue_ahead[oid] = ahead
                 fractions.append(ahead / max(self.queue_init.get(oid, 1e-9), 1e-9))
         return min(fractions) if fractions else None
@@ -3903,7 +3923,10 @@ class OrderBookBot:
         # --- C. uPnL peak + take-profit actif — 100% MAKER: le bank ouvre une
         # fenêtre de sortie ALO en tête de queue (bank-alo dans compute_intent)
         # au lieu de payer le taker.
-        if notional <= 0:
+        # Flat is a position fact. A non-flat position with no usable book
+        # (notional 0) must keep its TP anchor / bank window, not silently
+        # wipe them as if the session were flat.
+        if abs(pos) < MIN_SIZE / 2:
             self.upnl_peak_bps = 0.0
             self.bank_until = 0.0   # plat: fenêtre bank soldée
         elif mark_value_known:

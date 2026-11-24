@@ -77,11 +77,10 @@ export default function App() {
   currentOwner.current = owner;
   const sessions = w.snapshot?.sessions || [];
   const metrics = w.snapshot?.metrics;
-  const stale =
-    !!owner &&
-    (!w.received ||
-      now - w.received > 6000 ||
-      now - (w.snapshot?.published_at || 0) * 1000 > 6000);
+  // Compare only client-side clocks: published_at comes from the server, and
+  // any client/server skew would otherwise mark a healthy stream as delayed
+  // forever. A stalled stream already stops refreshing `received`.
+  const stale = !!owner && (!w.received || now - w.received > 6000);
   useEffect(() => {
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(tick);
@@ -147,8 +146,19 @@ export default function App() {
     };
   }, [owner, draft.strategy]);
   useEffect(() => {
-    setScanner(null);
-    if (!owner || draft.strategy !== "outcome") return;
+    if (!owner || draft.strategy !== "outcome") {
+      setScanner(null);
+      return;
+    }
+    // Never poll limits the server will reject: a half-typed amount/spread
+    // used to raise 422 and paint a false "Flux retardé" connection warning.
+    const valid =
+      Number.isFinite(draft.order_usd) &&
+      draft.order_usd >= 10.5 &&
+      Number.isFinite(draft.spread_bps) &&
+      draft.spread_bps > 0 &&
+      draft.spread_bps <= 100;
+    if (!valid) return;
     let alive = true;
     const timers = { full: 0, observed: 0 };
     const query = `side=${draft.side}&order_usd=${draft.order_usd}&spread_bps=${draft.spread_bps}`;
@@ -160,8 +170,16 @@ export default function App() {
             ? { ...old, ...value, observation_error: false }
             : { ...old, ...value });
         }
-      } catch {
-        if (alive && observed) setScanner((old: any) => ({ ...old, observation_error: true }));
+      } catch (e: any) {
+        // Only a transport/server failure is a feed-health signal. A 4xx is a
+        // draft problem, and an aborted request belongs to an identity change.
+        if (
+          alive &&
+          observed &&
+          e?.name !== "AbortError" &&
+          (typeof e?.status !== "number" || e.status >= 500)
+        )
+          setScanner((old: any) => ({ ...old, observation_error: true }));
       } finally {
         if (alive) timers[observed ? "observed" : "full"] = window.setTimeout(() => refresh(observed), observed ? 2000 : 10000);
       }
@@ -321,9 +339,20 @@ export default function App() {
           result.result.message ||
             "Lancement non confirmé. Vérifiez la session avant de réessayer.",
         );
-    } catch {
+    } catch (e: any) {
       setReview(null);
-      setNotice("Résultat en attente. Vérifiez la session avant de réessayer.");
+      // A definitive 4xx rejection (validation, CSRF, conflict) means nothing
+      // was launched: show the reason instead of an ambiguous "pending" notice.
+      if (
+        typeof e?.status === "number" &&
+        e.status >= 400 &&
+        e.status < 500 &&
+        e.status !== 408
+      ) {
+        setActionErrors((old) => ({ ...old, run: e.message }));
+      } else {
+        setNotice("Résultat en attente. Vérifiez la session avant de réessayer.");
+      }
     } finally {
       setBusy("");
     }
@@ -370,7 +399,7 @@ export default function App() {
         stopRequests.current.delete(id);
         changed = true;
         if (!resolution.confirmed) {
-          setNotice("Arrêt non confirmé après 45 s : la session apparaît dans Terminées pour vérification.");
+          setNotice("Arrêt non confirmé après 45 s : la session reste listée tant que la clôture n’est pas vérifiée.");
         }
       }
     }

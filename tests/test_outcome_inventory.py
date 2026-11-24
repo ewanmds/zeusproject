@@ -120,6 +120,10 @@ class OutcomeInventoryTests(unittest.TestCase):
         # The risk guard must keep the session alive for a passive exit and
         # must never submit an IOC/market sell.
         self.assertFalse(bot.enforce_inventory_stop(st))
+        # The maker exit must arm the documented anti-reentry pause, otherwise
+        # the next bid can re-enter immediately after a risk stop.
+        self.assertGreater(st.inventory_stop_until, time.time())
+        self.assertIsNone(bot.inventory_risk_reason(st))
         self.assertIn('inventory stop', st.last_inventory_exit['reason'])
         self.assertAlmostEqual(st.last_inventory_exit['entry_px'], .64364)
         self.assertEqual(st.last_inventory_exit['quantity'], 35)

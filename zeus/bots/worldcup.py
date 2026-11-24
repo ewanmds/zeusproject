@@ -688,6 +688,9 @@ class HyperliquidSpreadBot:
                 "bid": st.bid, "ask": st.ask, "quantity": math.floor(max(0, st.position)),
                 "limit_px": st.ask, "submission": "maker_exit_requested"}
             st.last_action = reason + ": maker exit"
+            # Keep the documented anti-reentry pause: new bids stay blocked
+            # while the passive exit works, sells remain allowed.
+            st.inventory_stop_until = time.time() + 5.0
             self.request_maker_exit(reason)
         return False
 
@@ -1696,11 +1699,13 @@ class HyperliquidSpreadBot:
             px = self.maker_quote_px(st, is_buy=True)
         else:
             px = round_outcome_buy_px(st.ask * (1.0 + slip))
-        buy_size = float(math.ceil(self.cfg.min_order_usd / max(px, 1e-9)))
-        target_size = float(math.floor(max_buy_usd / max(px, 1e-9)))
-        buy_size = max(buy_size, target_size)
+        buy_size = float(math.floor(max_buy_usd / max(px, 1e-9)))
         if buy_size * px < self.cfg.min_order_usd:
             buy_size = float(math.ceil(self.cfg.min_order_usd / max(px, 1e-9)))
+            if buy_size * px > max_buy_usd + 1e-9:
+                # The residual cap cannot fit one valid minimum order; a
+                # larger order would breach the user's position cap.
+                return None, f"cap leaves {max_buy_usd:.2f}<${self.cfg.min_order_usd:.2f} at one share"
         if buy_size <= 0:
             return None, "buy size=0"
         return (

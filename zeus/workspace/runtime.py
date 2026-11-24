@@ -10,6 +10,18 @@ from .accounts import AccountContext
 from zeus.safety import safe_error
 
 
+class CapacityError(RuntimeError):
+    """The workspace cannot open another tenant manager right now."""
+
+
+def number(value):
+    """Best-effort float for archived statistics; unknown/invalid reads as 0."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def visible_session(row, kind):
     cfg = row.get('config', {})
     phase = row.get('phase', 'connecting')
@@ -31,7 +43,7 @@ def visible_session(row, kind):
         'name': row.get('market_name') or row.get('symbol') or row.get('market') or row.get('token', 'Session'),
         'market': row.get('market') or row.get('symbol'), 'phase': phase,
         'running': bool(row.get('running')), 'cleanup_confirmed': row.get('cleanup_confirmed') is True,
-        'started': row.get('started', 0), 'duration_sec': row.get('duration_sec', 0),
+        'started': row.get('started') or 0, 'duration_sec': row.get('duration_sec') or 0,
         'volume_usd': row.get('volume_usd') if complete else None,
         'net_pnl': row.get('net_pnl') if complete else None, 'fees': row.get('fees') if complete else None,
         'fills': row.get('fills') if complete else None, 'cost_per_1m': row.get('cost_per_1m') if complete else None,
@@ -52,11 +64,67 @@ class Runtimes:
         self.guard = threading.RLock()
         self.source = uuid.uuid4().hex
         self.revisions = {}
+        # Each tenant manager owns a recovery thread and caches. SIWE is free,
+        # so an unbounded map lets any new wallet exhaust the process.
+        self.max_managers = 64
+        self.touched = {}
 
     def tenant_lock(self, owner):
         with self.guard: return self.locks.setdefault(owner, threading.RLock())
 
+    @staticmethod
+    def _idle(manager):
+        """Safe to drop: no live worker and no unresolved journal."""
+        if manager.obi_procs or manager.outcome.procs:
+            return False
+        return all(record.get('cleanup_confirmed') for _, record in manager._session_files())
+
+    def _evict_idle(self):
+        with self.guard:
+            items = list(self.items.items())
+        if len(items) < self.max_managers:
+            return True
+        now = time.monotonic()
+        for owner, manager in items:
+            # Only a long-idle tenant is a candidate: a launch that just
+            # fetched this manager must never see it closed underneath.
+            if now - self.touched.get(owner, 0) < 600:
+                continue
+            try:
+                if not self._idle(manager):
+                    continue
+            except Exception:
+                continue
+            with self.guard:
+                if self.items.get(owner) is not manager:
+                    continue
+                self.items.pop(owner, None)
+                self.cache.pop(owner, None)
+                self.revisions.pop(owner, None)
+                self.touched.pop(owner, None)
+                # Keep the (tiny) per-owner locks: a thread may already be
+                # waiting on one, and replacing it would break serialization.
+            try:
+                close = getattr(manager.outcome, "close", None)
+                if close is not None:
+                    close()
+                else:
+                    manager.outcome.rotation.close()
+                manager.stop_grid(None, False)
+            except Exception as exc:
+                import logging
+                from zeus.safety import safe_error
+                logging.getLogger(__name__).error('Workspace tenant eviction cleanup failed: %s', safe_error(exc))
+            return True
+        return False
+
     def manager(self, owner):
+        with self.guard:
+            if owner in self.items:
+                self.touched[owner] = time.monotonic()
+                return self.items[owner]
+        if not self._evict_idle():
+            raise CapacityError('Workspace is at capacity; try again later')
         with self.guard:
             if owner not in self.items:
                 factory = self.factory
@@ -67,6 +135,7 @@ class Runtimes:
                 context = AccountContext(owner, owner, agent['address'] if agent else '',
                                          agent['private_key'] if agent else '')
                 self.items[owner] = factory(state_dir=self.root/'tenants'/owner[2:], account_context=context)
+            self.touched[owner] = time.monotonic()
             return self.items[owner]
 
     def invalidate(self, owner):
@@ -131,25 +200,31 @@ class Runtimes:
                 sessions.append(visible_session(row, 'grid'))
             known = {s['id'] for s in sessions}
             for _, record in manager._session_files():
-                if record.get('account_kind') != 'perp' or record['session_id'] in known:
+                session_id = record.get('session_id')
+                symbols = record.get('symbols') or []
+                if record.get('account_kind') != 'perp' or not session_id or session_id in known or not symbols:
                     continue
                 snap = {}
                 try:
                     from zeus.safety import read_json
                     candidate = read_json(record['stats_file'])
-                    if candidate.get('symbol') == record['symbols'][0] and candidate.get('start_time', 0) >= record.get('started', 0)-5:
+                    if candidate.get('symbol') == symbols[0] and candidate.get('start_time', 0) >= record.get('started', 0)-5:
+                        for field in ('volume', 'rpnl', 'fees', 'fills'):
+                            if candidate.get(field) is not None:
+                                float(candidate[field])
                         snap = candidate
-                except (OSError, KeyError, ValueError): pass
+                except (OSError, KeyError, ValueError, TypeError):
+                    snap = {}
                 complete = bool(snap) and snap.get('accounting_complete') is not False
-                row = {**record, 'running': False, 'symbol': record['symbols'][0],
+                row = {**record, 'running': False, 'symbol': symbols[0],
                        'accounting_complete': complete, 'volume_usd': snap.get('volume'),
-                       'net_pnl': float(snap.get('rpnl', 0))-float(snap.get('fees', 0)) if complete else None,
+                       'net_pnl': number(snap.get('rpnl', 0))-number(snap.get('fees', 0)) if complete else None,
                        'fees': snap.get('fees'), 'fills': snap.get('fills'),
                        'position_usd': 0 if record.get('cleanup_confirmed') else None,
-                       'duration_sec': max(0, float(snap.get('end_time') or snap.get('ts') or 0)-float(snap.get('start_time') or 0))}
+                       'duration_sec': max(0, number(snap.get('end_time') or snap.get('ts') or 0)-number(snap.get('start_time') or 0))}
                 row['cost_per_1m'] = -row['net_pnl']*1e6/row['volume_usd'] if complete and row['volume_usd'] else None
                 sessions.append(visible_session(row, 'grid'))
-            sessions.sort(key=lambda b: b['started'], reverse=True)
+            sessions.sort(key=lambda b: b.get('started') or 0, reverse=True)
             # The account summary and the "En cours" count describe live
             # execution only. Unconfirmed stopped rows stay available in
             # "Terminées", but they are not current activity.
@@ -197,7 +272,10 @@ class Runtimes:
                 req = GridStartRequest(token=payload['market'], strategy=payload['strategy'], mode='live',
                       order_size_usd=payload['order_usd'], offset_bps=payload['offset_bps'])
                 manager.start_grid(req)
-                info = manager.obi_procs[req.token.strip().upper()]
+                token_key = (req.token or 'SP500').strip().upper()
+                info = manager.obi_procs.get(token_key)
+                if info is None:
+                    raise RuntimeError('Session started but its worker was not registered; verify before retrying')
                 result = {'session_id': Path(info['safety_file']).stem, 'phase': 'connecting'}
             self.invalidate(owner)
             return result
@@ -251,11 +329,14 @@ class Runtimes:
         import logging
         from zeus.safety import safe_error
         for manager in list(self.items.values()):
-            close = getattr(manager.outcome, "close", None)
-            if close is not None:
-                close()
-            else:
-                manager.outcome.rotation.close()
+            try:
+                close = getattr(manager.outcome, "close", None)
+                if close is not None:
+                    close()
+                else:
+                    manager.outcome.rotation.close()
+            except Exception as exc:
+                logging.getLogger(__name__).error('Workspace outcome close failed: %s', safe_error(exc))
             # Run every tenant's existing cleanup even if one cannot confirm.
             for stop in (lambda: manager.stop_grid(None, False), manager.stop_worldcup):
                 try: stop()
