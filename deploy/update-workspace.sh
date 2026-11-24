@@ -56,7 +56,9 @@ fi
 [[ -x .venv-workspace/bin/python ]] || "$WORKSPACE_PYTHON" -m venv .venv-workspace
 .venv-workspace/bin/python -m pip install -r requirements.txt
 npm ci --prefix frontend/workspace --no-audit --no-fund
-npm run build --prefix frontend/workspace
+# Bundle only: the full `npm run build` type-check can exhaust a small
+# EC2 heap. `npm run build` (tsc + vite) remains the local/CI check.
+npm run build:deploy --prefix frontend/workspace
 
 LOCAL_DB=$(.venv-workspace/bin/python -c 'from pathlib import Path; from dotenv import dotenv_values; p=Path(".env.workspace"); print("yes" if not p.exists() or dotenv_values(p).get("ZEUS_WORKSPACE_LOCAL_DATABASE")=="1" else "no")')
 if [[ "$LOCAL_DB" == yes ]]; then

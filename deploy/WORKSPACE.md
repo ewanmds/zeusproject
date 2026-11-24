@@ -20,8 +20,9 @@ git pull --ff-only origin main
 bash deploy/update-workspace.sh https://3-113-242-142.sslip.io
 ```
 
-The script builds the frontend, installs Python dependencies in an independent
-`.venv-workspace` (preserving the old service's `.venv`), checks Caddy,
+The script bundles the frontend with `npm run build:deploy` (Vite only) and
+installs Python dependencies in an independent `.venv-workspace` (preserving the
+old service's `.venv`), checks Caddy,
 prepares production configuration, starts `zeus-workspace` on loopback 8081,
 then changes only the target site's simple `reverse_proxy` from 8080 to 8081.
 Other Caddy site blocks remain unchanged; unsupported layouts stop before the
@@ -30,6 +31,10 @@ HTTPS readiness must pass before the old service is disabled.
 
 On Amazon Linux 2023 it can install Node.js 22 and PostgreSQL 15 when missing.
 Other distributions need these prerequisites installed by their operator.
+`npm run build` (which runs `tsc --noEmit` before Vite) remains the local/CI
+type check; it can exhaust the Node heap on a small EC2 instance, so deployment
+uses the lighter `build:deploy` bundle step.
+
 A running Caddy service is required. Python 3.9 in the old `.venv` is accepted:
 the script selects a newer interpreter, or installs `python3.11` and
 `python3.11-pip` on Amazon Linux 2023. It creates `.venv-workspace` from that
