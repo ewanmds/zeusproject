@@ -55,7 +55,13 @@ if [[ -e .venv-workspace ]] && ! workspace_python_supported .venv-workspace/bin/
 fi
 [[ -x .venv-workspace/bin/python ]] || "$WORKSPACE_PYTHON" -m venv .venv-workspace
 .venv-workspace/bin/python -m pip install -r requirements.txt
-npm ci --prefix frontend/workspace --no-audit --no-fund
+# npm ci is reproducible, but optional native packages can differ between
+# npm versions. Fall back to a no-lock install so a deployment is never blocked
+# by a client-side lockfile mismatch.
+if ! npm ci --prefix frontend/workspace --no-audit --no-fund; then
+  echo 'npm ci mismatch: falling back to npm install (lockfile left untouched).'
+  npm install --prefix frontend/workspace --no-audit --no-fund --no-package-lock
+fi
 # Bundle only: the full `npm run build` type-check can exhaust a small
 # EC2 heap. `npm run build` (tsc + vite) remains the local/CI check.
 npm run build:deploy --prefix frontend/workspace
