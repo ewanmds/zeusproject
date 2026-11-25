@@ -1,4 +1,5 @@
 """Tenant-owned managers and public read projections. No global env mutation."""
+from contextlib import nullcontext
 import math
 import os
 from pathlib import Path
@@ -8,6 +9,12 @@ import uuid
 
 from .accounts import AccountContext
 from zeus.safety import safe_error
+
+
+def manager_guard(manager):
+    """Serialize process-registry snapshots without requiring a fake lock."""
+    lock = getattr(manager, 'lock', None)
+    return lock if lock is not None else nullcontext()
 
 
 class CapacityError(RuntimeError):
@@ -144,8 +151,9 @@ class Runtimes:
     def execution_revision(self, owner):
         manager = self.manager(owner)
         journals = {str(path) for path, _ in manager._session_files(fresh=True)}
-        processes = {(key, info['proc'].pid) for key, info in manager.obi_procs.items()}
-        processes.update((key, info['proc'].pid) for key, info in manager.outcome.procs.items())
+        with manager_guard(manager):
+            processes = {(key, info['proc'].pid) for key, info in manager.obi_procs.items()}
+            processes.update((key, info['proc'].pid) for key, info in manager.outcome.procs.items())
         return frozenset(journals), frozenset(processes)
 
     def snapshot(self, owner):
@@ -157,6 +165,9 @@ class Runtimes:
             cached = self.cache.get(owner)
             if cached and time.monotonic()-cached[0] < .25: return cached[1]
             manager = self.manager(owner)
+            with manager_guard(manager):
+                outcome_procs = dict(manager.outcome.procs)
+                grid_procs = dict(manager.obi_procs)
             outcome = manager.get_worldcup_stats()
             active = outcome.get('display_bots', [])
             active_groups = {r['session_id'] for r in active}
@@ -164,7 +175,7 @@ class Runtimes:
             # once by logical session, preserving each leg's final accounting.
             groups = {}
             for path, record in manager.outcome.records():
-                row = manager.outcome._entry(path, record, manager.outcome.procs.get(record['session_id']))
+                row = manager.outcome._entry(path, record, outcome_procs.get(record['session_id']))
                 group = row.get('config', {}).get('auto_group_id') or row['session_id']
                 groups.setdefault(group, []).append(row)
             archived = []
@@ -189,7 +200,7 @@ class Runtimes:
                 archived.append(row)
             sessions = [visible_session(b, 'outcome') for b in active+archived]
             grid = manager.get_grid_stats()
-            attached_grid = {Path(i['safety_file']).stem for i in manager.obi_procs.values() if i.get('safety_file')}
+            attached_grid = {Path(i['safety_file']).stem for i in grid_procs.values() if i.get('safety_file')}
             for b in grid.get('bots', []):
                 row = dict(b)
                 row.setdefault('session_id', b.get('token') or b.get('key') or b.get('symbol'))
@@ -273,7 +284,8 @@ class Runtimes:
                       order_size_usd=payload['order_usd'], offset_bps=payload['offset_bps'])
                 manager.start_grid(req)
                 token_key = (req.token or 'SP500').strip().upper()
-                info = manager.obi_procs.get(token_key)
+                with manager_guard(manager):
+                    info = manager.obi_procs.get(token_key)
                 if info is None:
                     raise RuntimeError('Session started but its worker was not registered; verify before retrying')
                 result = {'session_id': Path(info['safety_file']).stem, 'phase': 'connecting'}
@@ -294,7 +306,9 @@ class Runtimes:
                     manager.stop_worldcup(session_id)
             else:
                 # Resolve only this tenant's known Grid identity to its actual token.
-                token = next((key for key, info in manager.obi_procs.items()
+                with manager_guard(manager):
+                    grid_items = list(manager.obi_procs.items())
+                token = next((key for key, info in grid_items
                               if key == session_id or info.get('safety_file') and Path(info['safety_file']).stem == session_id), None)
                 if token is None: raise ValueError('Interrupted session: verify its stop first')
                 manager.stop_grid(token)

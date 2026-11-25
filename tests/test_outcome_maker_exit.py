@@ -226,6 +226,45 @@ class SupervisorEntryTests(unittest.TestCase):
         self.assertTrue(entry['stale'])
         self.assertFalse(entry['quoting_enabled'])
 
+    def test_cache_prune_and_parallel_entry_are_thread_safe(self):
+        sup = self.supervisor()
+        sup.manager = SimpleNamespace(lock=threading.RLock())
+        sup.procs = {}
+        sup._stats_lock = threading.Lock()
+        sup._stats_cache = {}
+        sup._read_stats = lambda path: {
+            'session_id': Path(path).stem, 'market': '#101',
+            'ts': time.time(), 'position_usd': 0}
+        for index in range(3000):
+            sup.cache['old-%d' % index] = {'ts': time.time(), 'position_usd': 0}
+        errors = []
+        barrier = threading.Barrier(2)
+
+        def prune():
+            barrier.wait()
+            try:
+                sup._prune({})
+            except Exception as exc:  # pragma: no cover - regression signal
+                errors.append(exc)
+
+        def entries():
+            barrier.wait()
+            for index in range(600):
+                try:
+                    record = self.record(session_id='new-%d' % index,
+                                         stats_file='new-%d.json' % index)
+                    sup._entry('journal', record, None)
+                except Exception as exc:  # pragma: no cover - regression signal
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=prune), threading.Thread(target=entries)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(errors, [])
+        self.assertLessEqual(len(sup.cache), 600)
+
 
 class SupervisorStopTests(unittest.TestCase):
     def test_stop_records_maker_exit_and_never_touches_stop_file(self):

@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import json
 import unittest
 from unittest.mock import patch
 
@@ -60,3 +61,71 @@ class ObservationsTests(unittest.TestCase):
             result = scan.observations('no', 110, 10)
             self.assertFalse(result['observation_connected'])
             self.assertTrue(all(not row['auto_eligible'] for row in result['observed_markets']))
+
+    def test_subscription_quorum_tolerates_a_lost_ack(self):
+        scan = OutcomeFlowScanner()
+        scan.connected, scan.connected_at, scan.catalog_at = True, NOW-90, NOW
+        scan.rows = {index: dict(id=index, name='M%d' % index) for index in range(10)}
+        scan.subscribed = {f"#{10*index+side}" for index in range(10) for side in (0, 1)}
+        self.assertTrue(scan._subscription_ready_locked(NOW))
+        scan.subscribed.discard('#100')  # 19/20 = 95% stays ready
+        self.assertTrue(scan._subscription_ready_locked(NOW))
+        scan.subscribed = set(sorted(scan.subscribed)[:15])  # 75% is not enough
+        self.assertFalse(scan._subscription_ready_locked(NOW))
+
+    def test_missing_subscription_reason_reports_progress(self):
+        scan = self.scanner()
+        scan.subscribed = {'#100', '#101', '#110'}
+        with patch('zeus.outcome_flow.time.time', return_value=NOW):
+            result = scan._snapshot('no', 110, 10)
+        self.assertFalse(result['ready'])
+        self.assertIn('Souscriptions en cours', result['reason'])
+
+    def test_l2_ack_is_tracked_and_an_error_forces_a_retry(self):
+        scan = OutcomeFlowScanner()
+        scan.rows = {10: dict(id=10, name='M')}
+        scan._message(json.dumps({'channel': 'subscriptionResponse', 'data': {
+            'method': 'subscribe', 'subscription': {'type': 'l2Book', 'coin': '#101'}}}))
+        self.assertIn('#101', scan.book_subscribed)
+        scan._message(json.dumps({'channel': 'l2Book', 'data': {
+            'coin': '#101', 'time': int(NOW*1000),
+            'levels': [[{'px': '.5', 'sz': '10'}], [{'px': '.5001', 'sz': '10'}]]}}))
+        self.assertIn('#101', scan.books)
+        scan._message(json.dumps({'channel': 'error', 'data': 'Too many subscriptions'}))
+        self.assertFalse(scan.book_subscribed)
+        self.assertEqual(scan.subscription_error, 'Too many subscriptions')
+
+    def test_stale_book_is_displayed_but_never_admitted(self):
+        scan = self.scanner()
+        scan.rows[10].update(fee_scale=1, deployer_fee_scale=1)
+        scan.history['#101'].clear()
+        scan.history['#101'].extend(trades())
+        scan.books['#101'] = (NOW-20, {
+            'time': (NOW-20)*1000,
+            'levels': [[{'px': '.5', 'sz': '1000'}], [{'px': '.5001', 'sz': '1000'}]]})
+        stale = scan.books['#101'][1]
+        with patch('zeus.outcome_flow.time.time', return_value=NOW):
+            observed = scan.observations('no', 110, 10)['observed_markets'][0]
+            self.assertIsNotNone(observed['spread_bps'])
+            self.assertIsNotNone(observed['queue_proxy_sec'])
+            self.assertIsNotNone(observed['net_touch_edge_bps'])
+            self.assertFalse(observed['auto_eligible'])
+            self.assertIn('Carnet ancien', observed['eligibility_reason'])
+            with ThreadPoolExecutor(1) as pool, \
+                    patch.object(scan, '_book_executor', return_value=pool), \
+                    patch.object(scan, '_book', return_value=stale):
+                snapshot = scan._snapshot('no', 110, 10, base_rate=0)
+        self.assertFalse(snapshot['ready'])
+
+    def test_history_and_warmup_survive_a_short_reconnect(self):
+        scan = self.scanner()
+        scan.history['#101'].extend(trades())
+        before = len(scan.history['#101'])
+        with patch('zeus.outcome_flow.time.time', return_value=NOW):
+            scan.connected_at = NOW-90
+            scan._mark_open()
+            self.assertEqual(len(scan.history['#101']), before)
+            self.assertEqual(scan.connected_at, NOW-90)
+            scan.connected_at = NOW-200
+            scan._mark_open()
+            self.assertEqual(scan.connected_at, NOW)

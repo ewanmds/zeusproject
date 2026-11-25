@@ -348,9 +348,9 @@ export function RunView({
                   caption="Tous les marchés observés · admissibilité Auto indiquée séparément"
                   rows={(scanner.observed_markets ?? scanner.candidates).map((m: any) => ({
                     ...m,
-                    net_touch_edge_bps: m.auto_eligible === false ? null
-                      : scanner.candidates?.find((c: any) => c.market === m.market)?.net_touch_edge_bps
-                        ?? m.net_touch_edge_bps ?? null,
+                    net_touch_edge_bps: m.net_touch_edge_bps
+                      ?? scanner.candidates?.find((c: any) => c.market === m.market)?.net_touch_edge_bps
+                      ?? null,
                   }))}
                   defaultSort={{ id: "volume", direction: "desc" }}
                   animateChanges

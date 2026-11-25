@@ -95,6 +95,95 @@ class FlatRotationTests(unittest.TestCase):
             self.assertTrue(rotation.groups['group']['cancelled'])
             rotation.close()
 
+    def test_unexpected_clean_exit_relaunches_instead_of_ending_the_group(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, owner, row, now = self.fixture(folder)
+            row.update(running=False, phase='failed', cleanup_confirmed=True, stale=False)
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=self.scan(now)):
+                rotation.tick(now=now)
+            group = rotation.groups['group']
+            self.assertFalse(group['cancelled'])
+            owner.start.assert_called_once()
+            request = owner.start.call_args.args[0]
+            self.assertEqual(request.market, '#111')
+            self.assertEqual(owner.start.call_args.kwargs['rotation_group'], 'group')
+            self.assertEqual(group['state'], 'observing')
+            self.assertEqual(group['rotations'], 1)
+            rotation.close()
+
+    def test_unconfirmed_crash_blocks_without_cancelling_then_resumes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, owner, row, now = self.fixture(folder)
+            row.update(running=False, phase='failed', cleanup_confirmed=False, stale=False)
+            with patch('zeus.outcome_flow.scanner.snapshot') as scan:
+                rotation.tick(now=now)
+            scan.assert_not_called()
+            owner.start.assert_not_called()
+            group = rotation.groups['group']
+            self.assertFalse(group['cancelled'])
+            self.assertEqual(group['state'], 'blocked')
+            self.assertIn('non confirmé', group['reason'])
+            # The delayed exchange confirmation releases the same logical group.
+            row.update(cleanup_confirmed=True)
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=self.scan(now)):
+                rotation.tick(now=now)
+            owner.start.assert_called_once()
+            self.assertFalse(group['cancelled'])
+            rotation.close()
+
+    def test_manual_exit_is_terminal_and_is_never_relaunched(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, owner, row, now = self.fixture(folder)
+            (Path(folder)/'drain.json').write_text(json.dumps(
+                {'manual': True, 'reason': 'Manual stop: maker exit'}))
+            row.update(running=False, phase='failed', cleanup_confirmed=False, stale=False)
+            rotation.tick(now=now)
+            group = rotation.groups['group']
+            self.assertEqual(group['state'], 'finishing')
+            self.assertFalse(group['cancelled'])
+            owner.start.assert_not_called()
+            row.update(cleanup_confirmed=True)
+            rotation.tick(now=now)
+            self.assertTrue(group['cancelled'])
+            owner.start.assert_not_called()
+            rotation.close()
+
+    def test_stale_launching_state_returns_to_observing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, owner, row, now = self.fixture(folder)
+            group = rotation.groups['group']
+            group.update(state='launching', retry_at=now-1)
+            rotation.tick(now=now)
+            self.assertEqual(group['state'], 'observing')
+            owner.start.assert_not_called()
+            rotation.close()
+
+    def test_recovered_exit_only_leg_stays_terminal(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, owner, row, now = self.fixture(folder)
+            row.update(running=False, phase='failed', cleanup_confirmed=True, stale=False,
+                       config={'resume_exit': True, 'resume_trading': False})
+            rotation.tick(now=now)
+            group = rotation.groups['group']
+            self.assertFalse(group['cancelled'])
+            self.assertEqual(group['state'], 'finishing')
+            owner.start.assert_not_called()
+            rotation.close()
+
+    def test_blocked_group_follows_a_recovered_worker_instead_of_draining(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, owner, row, now = self.fixture(folder)
+            group = rotation.groups['group']
+            group['state'] = 'blocked'
+            group['reason'] = 'Rotation blocked: interruption, arrêt non confirmé'
+            with patch('zeus.outcome_flow.scanner.snapshot') as scan:
+                rotation.tick(now=now)
+            scan.assert_not_called()
+            self.assertEqual(group['state'], 'observing')
+            self.assertFalse((Path(folder)/'drain.json').exists())
+            owner.start.assert_not_called()
+            rotation.close()
+
 
 class PartialMakerVolumeTests(unittest.TestCase):
     def fixture(self, quantity):

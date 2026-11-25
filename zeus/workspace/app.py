@@ -332,7 +332,7 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         if not 10.5 <= order_usd <= 1000000 or not 0 < spread_bps <= 100:
             raise HTTPException(422)
         from zeus.outcome_flow import scanner
-        result = scanner.observations(side, order_usd, spread_bps)
+        result = scanner.observations(side, order_usd, spread_bps, account=who['wallet'])
         state = runtimes.snapshot(who['wallet'])
         busy = {s['market']: ('Déjà en session' if s['running']
                               else 'Arrêt non confirmé sur ce marché')

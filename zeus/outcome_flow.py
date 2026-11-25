@@ -133,6 +133,8 @@ class OutcomeFlowScanner:
         self.error = ""
         self.books = {}
         self.book_lock = threading.Lock()
+        self.book_subscribed = set()
+        self.subscription_error = ""
         self.snapshot_lock = threading.Lock()
         self.snapshot_cache = {}
         self.catalog_revision = 0
@@ -147,6 +149,18 @@ class OutcomeFlowScanner:
             if self.book_pool is None:
                 self.book_pool = ThreadPoolExecutor(max_workers=24, thread_name_prefix="outcome-book")
             return self.book_pool
+
+    @staticmethod
+    def _quorum(expected):
+        """80% of trade subscriptions is enough; one lost ack must not block all."""
+        return max(1, math.ceil(expected * 0.8)) if expected else 0
+
+    def _subscription_ready_locked(self, now):
+        expected = 2 * len(self.rows)
+        return bool(self.connected and expected
+                    and now - self.catalog_at < 120
+                    and now - self.connected_at >= 60
+                    and len(self.subscribed) >= self._quorum(expected))
 
     def configure(self, rows):
         # 450 outcomes * two trade subscriptions: below the 1000-sub limit.
@@ -177,17 +191,11 @@ class OutcomeFlowScanner:
         import websocket
         while not self.stop.is_set():
             def opened(ws):
-                with self.lock:
-                    self.connected = True
-                    self.connected_at = time.time()
-                    self.generation += 1
-                    self.history.clear()
-                    self.subscribed.clear()
-                    self.error = ""
+                self._mark_open()
                 def subscribe():
                     # Receive snapshots while subscribing; do not burst 400 sends.
                     sent = set()
-                    sent_books = set()
+                    sent_books = {}
                     last_ping = time.monotonic()
                     try:
                         while not self.stop.is_set() and self.ws is ws and self.connected:
@@ -219,21 +227,36 @@ class OutcomeFlowScanner:
                             if time.monotonic()-last_ping >= 20:
                                 ws.send(json.dumps({"method": "ping"}))
                                 last_ping = time.monotonic()
+                            now = time.time()
                             with self.lock:
                                 watched = {coin: at for coin, at in self.book_watch.items()
-                                           if time.time()-at < 15 and int(coin[1:])//10 in self.rows}
+                                           if now-at < 20 and int(coin[1:])//10 in self.rows}
                                 self.book_watch = watched
+                                acked_books = set(self.book_subscribed)
                                 # 450 outcomes * two trade subscriptions + 48
                                 # L2 books stays below Hyperliquid's 1000-sub limit.
                                 wanted_books = set(sorted(watched, key=watched.get, reverse=True)[:48])
-                            for method, coins in (('unsubscribe', sent_books-wanted_books),
-                                                  ('subscribe', wanted_books-sent_books)):
-                                for coin in sorted(coins):
-                                    if self.stop.is_set() or self.ws is not ws or not self.connected:
-                                        return
-                                    ws.send(json.dumps({'method': method, 'subscription': {'type': 'l2Book', 'coin': coin}}))
-                                    if method == 'subscribe': sent_books.add(coin)
-                                    else: sent_books.discard(coin)
+                            # Unsubscribe from books no longer watched, including
+                            # subscriptions the server never acknowledged.
+                            for coin in sorted((set(sent_books) | acked_books) - wanted_books):
+                                if self.stop.is_set() or self.ws is not ws or not self.connected:
+                                    return
+                                ws.send(json.dumps({'method': 'unsubscribe',
+                                                    'subscription': {'type': 'l2Book', 'coin': coin}}))
+                                sent_books.pop(coin, None)
+                                with self.lock:
+                                    self.book_subscribed.discard(coin)
+                            # Retry a missing l2Book ack. A single dropped frame
+                            # used to leave the scanner without spreads forever.
+                            for coin in sorted(wanted_books - acked_books):
+                                sent_at = sent_books.get(coin, 0)
+                                if sent_at and now-sent_at < 5:
+                                    continue
+                                if self.stop.is_set() or self.ws is not ws or not self.connected:
+                                    return
+                                ws.send(json.dumps({'method': 'subscribe',
+                                                    'subscription': {'type': 'l2Book', 'coin': coin}}))
+                                sent_books[coin] = now
                             self.stop.wait(1)
                     except Exception:
                         failed(ws, None)
@@ -243,33 +266,7 @@ class OutcomeFlowScanner:
                 self.subscription_thread.start()
 
             def message(ws, raw):
-                try:
-                    payload = json.loads(raw)
-                    if payload.get('channel') == 'l2Book':
-                        data = payload.get('data', {})
-                        if not isinstance(data, dict):
-                            return
-                        coin = data.get('coin', '')
-                        with self.lock:
-                            if coin in self.book_watch:
-                                self.books[coin] = (time.time(), data)
-                        return
-                    if payload.get("channel") == "subscriptionResponse":
-                        subscription = payload.get("data", {}).get("subscription", {})
-                        if subscription.get("type") == "trades":
-                            with self.lock:
-                                coin = subscription["coin"]
-                                if (payload["data"].get("method") == "subscribe"
-                                        and int(coin[1:])//10 in self.rows):
-                                    self.subscribed.add(coin)
-                                else:
-                                    self.subscribed.discard(coin)
-                        return
-                    if payload.get("channel") != "trades" or not isinstance(payload.get("data"), list):
-                        return
-                    self.ingest(payload["data"])
-                except (ValueError, TypeError):
-                    pass
+                self._message(raw)
 
             def failed(ws, error):
                 with self.lock:
@@ -290,6 +287,69 @@ class OutcomeFlowScanner:
                 if self.subscription_thread:
                     self.subscription_thread.join(timeout=1)
             self.stop.wait(3)
+
+    def _mark_open(self):
+        """Mark a websocket open without discarding short-gap observations."""
+        now = time.time()
+        with self.lock:
+            self.connected = True
+            # A fast reconnect keeps the original 60 s observation window and
+            # all timestamped executed-flow history. A long outage restarts it.
+            if not self.connected_at or now - self.connected_at > 120:
+                self.connected_at = now
+            self.generation += 1
+            self.subscribed.clear()
+            self.book_subscribed.clear()
+            self.error = ""
+            self.subscription_error = ""
+
+    def _message(self, raw):
+        try:
+            payload = json.loads(raw)
+            if payload.get('channel') == 'error':
+                with self.lock:
+                    self.subscription_error = str(payload.get('data') or '')[:160]
+                    # Force a fresh round of l2Book subscriptions.
+                    self.book_subscribed.clear()
+                return
+            if payload.get('channel') == 'l2Book':
+                data = payload.get('data', {})
+                if not isinstance(data, dict):
+                    return
+                coin = data.get('coin', '')
+                with self.lock:
+                    if (coin in self.book_watch or coin in self.book_subscribed
+                            or int(coin[1:])//10 in self.rows):
+                        self.books[coin] = (time.time(), data)
+                        if coin in self.book_watch:
+                            # A delivered book is proof the subscription works,
+                            # even if its ack frame was lost.
+                            self.book_subscribed.add(coin)
+                return
+            if payload.get("channel") == "subscriptionResponse":
+                response = payload.get("data", {})
+                subscription = response.get("subscription", {}) if isinstance(response, dict) else {}
+                if subscription.get("type") == "l2Book":
+                    with self.lock:
+                        coin = subscription.get("coin", "")
+                        if response.get("method") == "subscribe":
+                            self.book_subscribed.add(coin)
+                        else:
+                            self.book_subscribed.discard(coin)
+                elif subscription.get("type") == "trades":
+                    with self.lock:
+                        coin = subscription["coin"]
+                        if (response.get("method") == "subscribe"
+                                and int(coin[1:])//10 in self.rows):
+                            self.subscribed.add(coin)
+                        else:
+                            self.subscribed.discard(coin)
+                return
+            if payload.get("channel") != "trades" or not isinstance(payload.get("data"), list):
+                return
+            self.ingest(payload["data"])
+        except (ValueError, TypeError):
+            pass
 
     def ingest(self, trades):
         now = time.time()
@@ -333,10 +393,10 @@ class OutcomeFlowScanner:
         base_rate = maker_profile(account)
         # Share concurrent previews/rotation scans without extending freshness.
         with self.snapshot_lock:
+            now = time.time()
             with self.lock:
                 key = (side, order_usd, max_spread_bps, base_rate, self.generation, self.catalog_revision)
-                reusable = (self.connected and time.time()-self.catalog_at < 120
-                            and len(self.subscribed) == 2*len(self.rows))
+                reusable = self._subscription_ready_locked(now)
             entry = self.snapshot_cache.get(key)
             cached_fresh = entry and all(
                 time.time()-r['book_updated_at'] <= 5 and
@@ -353,10 +413,12 @@ class OutcomeFlowScanner:
                 self.snapshot_cache[key] = (time.monotonic(), result)
             return copy.deepcopy(result)
 
-    def observations(self, side='no', order_usd=50, max_spread_bps=10):
-        """Display every observed market; no HTTP, fees, balances or admission changes."""
+    def observations(self, side='no', order_usd=50, max_spread_bps=10, *, account=None):
+        """Display every observed market; no HTTP, no admission changes."""
+        from zeus.outcome_costs import candidate_cost, maker_profile
         now = time.time()
         suffix = '0' if side == 'yes' else '1'
+        base_rate = maker_profile(account)
         with self.lock:
             rows = list(self.rows.values())
             history = {coin: list(values) for coin, values in self.history.items() if coin.endswith(suffix)}
@@ -394,10 +456,34 @@ class OutcomeFlowScanner:
                     data = book[1]
                     bid, ask = data['levels'][0][0], data['levels'][1][0]
                     bp, ap = float(bid['px']), float(ask['px'])
-                    if 0 < bp < ap < 1 and -1 <= now-float(data['time'])/1000 <= 5:
+                    bq, aq = float(bid['sz']), float(ask['sz'])
+                    book_age = max(0, now-float(data['time'])/1000)
+                    # Display the last book for up to 60 s; admission below
+                    # still requires a fresh snapshot with a <=5 s book.
+                    if 0 < bp < ap < 1 and -1 <= book_age <= 60:
                         item['spread_bps'] = 10000*(ap-bp)/((ap+bp)/2)
+                        item['book_age_sec'] = book_age
+                        if metric:
+                            sell_tokens = metric.get('sell_tokens_1m') or 0
+                            buy_tokens = metric.get('buy_tokens_1m') or 0
+                            if sell_tokens > 0 and buy_tokens > 0:
+                                item['queue_proxy_sec'] = max(
+                                    60*(bq+order_usd/bp)/sell_tokens,
+                                    60*(aq+order_usd/ap)/buy_tokens)
+                        if base_rate is not None:
+                            try:
+                                item.update(candidate_cost(
+                                    {**item, 'bid': bp, 'ask': ap,
+                                     'fee_scale': row.get('fee_scale'),
+                                     'deployer_fee_scale': row.get('deployer_fee_scale')},
+                                    base_rate))
+                            except (ValueError, TypeError, KeyError):
+                                item.update(maker_close_fee_bps=None, net_touch_edge_bps=None,
+                                            fees_covered=None, cost_status='unavailable')
                         if metric and metric['eligible']:
-                            if min(bp*float(bid['sz']), ap*float(ask['sz'])) < order_usd:
+                            if book_age > 5:
+                                reason = 'Carnet ancien (%d s)' % round(book_age)
+                            elif min(bq*bp, aq*ap) < order_usd:
                                 reason = 'Profondeur insuffisante'
                             elif item['spread_bps'] > max_spread_bps:
                                 reason = 'Spread trop large'
@@ -405,18 +491,21 @@ class OutcomeFlowScanner:
                     pass
             approved = candidates.get(coin) if connected and metric and metric['eligible'] else None
             if approved:
-                # Fee estimates belong to a tenant's full scan, never reuse
-                # another cached fee profile in this public observation view.
-                for key in ('spread_bps', 'queue_proxy_sec'):
-                    item[key] = approved.get(key)
+                # Fee estimates belong to this tenant's full scan.
+                for key in ('spread_bps', 'queue_proxy_sec', 'net_touch_edge_bps',
+                            'maker_close_fee_bps', 'fees_covered'):
+                    if approved.get(key) is not None:
+                        item[key] = approved.get(key)
                 reason = 'Admissible'
-            item.update(auto_eligible=bool(approved), eligibility_reason=reason if connected else 'Flux déconnecté')
+            item.update(auto_eligible=bool(approved),
+                        eligibility_reason=reason if connected else 'Flux déconnecté')
             observed.append(item)
         observed.sort(key=lambda row: (-row['volume_usd_1m'], row['market']))
         with self.lock:
             for row in observed[:24]:
                 self.book_watch[row['market']] = now
-        return dict(observed_markets=observed, observed_at=now, observation_connected=connected)
+        return dict(observed_markets=observed, observed_at=now,
+                    observation_connected=connected)
 
     def _snapshot(self, side="no", order_usd=50, max_spread_bps=10, *, base_rate=0.0004):
         from zeus.outcome_costs import candidate_cost
@@ -424,14 +513,23 @@ class OutcomeFlowScanner:
             raise ValueError("Invalid Outcome side")
         now = time.time()
         with self.lock:
-            ready = (self.connected and bool(self.rows) and len(self.subscribed) == 2*len(self.rows)
-                     and now-self.connected_at >= 60 and now-self.catalog_at < 120)
+            expected = 2 * len(self.rows)
+            quorum = self._quorum(expected)
+            observed_ids = {int(c[1:])//10 for c in self.subscribed
+                            if c.startswith('#') and c[1:].isdigit()}
+            warmup_done = now - self.connected_at >= 60
+            ready = self._subscription_ready_locked(now)
             generation = self.generation
             status = {"ready": False, "connected": self.connected,
-                      "warming_up": self.connected and (now-self.connected_at < 60 or len(self.subscribed) != 2*len(self.rows)),
+                      "warming_up": bool(self.connected and self.rows and not warmup_done),
+                      "subscriptions_pending": bool(self.connected and self.rows and warmup_done
+                                                    and len(self.subscribed) < quorum),
+                      "subscriptions_ready": len(self.subscribed),
+                      "subscriptions_expected": expected,
+                      "subscription_error": self.subscription_error,
                       "catalog_stale": now-self.catalog_at >= 120,
                       "observed_sec": max(0, now-self.connected_at) if self.connected else 0,
-                      "markets_observed": len(self.subscribed)//2, "markets_total": len(self.rows), "updated_at": now,
+                      "markets_observed": len(observed_ids), "markets_total": len(self.rows), "updated_at": now,
                       "error": self.error, "candidates": [], "side": side,
                       "flow_thresholds": dict(FLOW_LIMITS)}
             suffix = "0" if side == "yes" else "1"
@@ -456,6 +554,10 @@ class OutcomeFlowScanner:
                 status["reason"] = "Flux public déconnecté; reconnexion en cours"
             elif status.get("catalog_stale"):
                 status["reason"] = "Catalogue HIP-4 ancien (plus de 120 s); rechargement"
+            elif status.get("subscriptions_pending"):
+                status["reason"] = ("Souscriptions en cours: %d/%d flux"
+                                    % (status.get("subscriptions_ready", 0),
+                                       status.get("subscriptions_expected", 0)))
             elif status.get("warming_up"):
                 status["reason"] = "Observation initiale: %d s / 60 s" % int(status.get("observed_sec") or 0)
             elif detail:

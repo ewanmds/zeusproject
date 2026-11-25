@@ -23,6 +23,16 @@ def duration(seconds):
 
 
 class OutcomeSupervisor:
+    _fallback_cache_lock = threading.Lock()
+
+    def _cache_guard(self):
+        # Tests build supervisors with __new__; production always initializes
+        # the lock in __init__.
+        lock = getattr(self, "_cache_lock", None)
+        if lock is None:
+            lock = self._cache_lock = threading.Lock()
+        return lock
+
     @staticmethod
     def _attribution_started(record, records):
         family = {record['session_id']}
@@ -43,6 +53,7 @@ class OutcomeSupervisor:
         self.manager = manager
         self.procs = {}
         self.cache = {}
+        self._cache_lock = threading.Lock()
         # Parsed worker stats keyed by path; a display tick reads each file at
         # most once and skips files whose mtime/size did not change.
         self._stats_cache = {}
@@ -115,11 +126,13 @@ class OutcomeSupervisor:
                 groups[key] = (path, record)
         now = time.time()
         with self._recovery_lock:
+            with self.manager.lock:
+                procs = dict(self.procs)
             for key, (path, record) in groups.items():
                 sid = record.get("session_id")
                 if not sid or record.get("cleanup_confirmed"):
                     continue
-                info = self.procs.get(sid)
+                info = procs.get(sid)
                 if info is not None and info["proc"].poll() is None:
                     continue
                 if record.get("resumed_session_id") in by_id:
@@ -128,7 +141,7 @@ class OutcomeSupervisor:
                 if not market:
                     continue
                 if any(i.get("market") == market and i["proc"].poll() is None
-                       for i in self.procs.values()):
+                       for i in procs.values()):
                     continue
                 stop_file = Path(record["stop_file"]) if record.get("stop_file") else None
                 if stop_file is None:
@@ -365,9 +378,11 @@ class OutcomeSupervisor:
             except (OSError, ValueError, TypeError, KeyError):
                 snap = {}
         if snap:
-            self.cache[session_id] = snap
+            with self._cache_guard():
+                self.cache[session_id] = snap
         else:
-            snap = self.cache.get(session_id, {})
+            with self._cache_guard():
+                snap = self.cache.get(session_id, {})
         # Keep metadata frozen, but use the newest real lifecycle publication.
         lifecycle = snap if snap.get("ts", 0) >= (record.get("ts") or 0) else record
         phase = lifecycle.get("phase", phase)
@@ -431,8 +446,9 @@ class OutcomeSupervisor:
                         self.procs.pop(sid, None)
         if len(self.cache) > 2048:
             live = {record["session_id"] for _, record in kept.values()}
-            for sid in [sid for sid in self.cache if sid not in live]:
-                self.cache.pop(sid, None)
+            with self._cache_guard():
+                for sid in [sid for sid in self.cache if sid not in live]:
+                    self.cache.pop(sid, None)
         # Parsed stats files are only useful while their session is tracked.
         with self._stats_lock:
             if len(self._stats_cache) > 512:
@@ -589,7 +605,8 @@ class OutcomeSupervisor:
         """Durable one-click intent; worker cancels owned orders then closes IOC."""
         children = self.rotation.cancel(session_id)
         with self.manager.lock:
-            attached = [info for sid, info in self.procs.items()
+            procs = dict(self.procs)
+            attached = [info for sid, info in procs.items()
                 if sid == session_id or sid in children
                 or (info.get('config') or {}).get('auto_group_id') == session_id]
         all_records = {row['session_id']: dict(row, safety_file=str(path)) for path, row in self.records()}
@@ -605,7 +622,7 @@ class OutcomeSupervisor:
                     break
                 visited.add(child['session_id'])
                 if not child.get('cleanup_confirmed'):
-                    targets[child['session_id']] = self.procs.get(child['session_id'], child)
+                    targets[child['session_id']] = procs.get(child['session_id'], child)
                 row = child
         if not targets:
             if records and all(row.get('cleanup_confirmed') for row in records):
