@@ -1844,7 +1844,12 @@ class HyperliquidSpreadBot:
             return
         hard_block = self.risk_block_reason(st, closing_inventory=True)
         if hard_block:
-            if st.bid_oid or st.ask_oid:
+            # A quiet or briefly disconnected book does not invalidate a
+            # resting post-only quote. Pulling it on every stale tick loses
+            # queue and creates an endless open/cancel loop in low-activity
+            # markets. Keep the order; only a real risk/stop pulls it.
+            feed_gap = hard_block.startswith(("waiting bbo", "stale feed"))
+            if (st.bid_oid or st.ask_oid) and not feed_gap:
                 self.cancel_all(hard_block, [st.spec.symbol])
             st.last_action = hard_block
             return
@@ -1868,14 +1873,24 @@ class HyperliquidSpreadBot:
                 if keep:
                     st.pending_reprices.pop(side, None)
                     continue
+                if not req and not buy:
+                    # The exit quote is backed by inventory we already own.
+                    # A transient balance/open-order gap must never cancel it:
+                    # that is the open/cancel loop at an unchanged price.
+                    st.pending_reprices.pop(side, None)
+                    continue
                 # Normal repricing preserves queue age. Budget/risk/drain pulls
                 # bypass this hold, as do quotes which are no longer passive.
                 urgent_sell = not buy and bool(self.rotation_requested()
                     or self.risk_block_reason(st, closing_inventory=False))
-                if (req and passive and not urgent_sell
+                rotation_drain = "low executed" in str(getattr(self, "exit_reason", "")).lower()
+                preserve_queue = (not urgent_sell or (not buy and rotation_drain))
+                if (req and passive and preserve_queue
                         and time.time()-getattr(st, f"{side}_order_ts") < self.cfg.maker_opening_rest_sec):
                     continue
-                if self.cfg.worldcup and req and passive and not urgent_sell:
+                if self.cfg.worldcup and req and passive and preserve_queue:
+                    # A rotation drain still benefits from queue priority: a
+                    # one-tick flicker must persist before we cancel the sell.
                     now = time.time()
                     pending = st.pending_reprices.get(side)
                     if not pending or pending[0] != oid or abs(pending[1]-target) > 1e-12:
@@ -2059,7 +2074,8 @@ class HyperliquidSpreadBot:
         closing_inventory = st.position >= 1.0
         block = self.risk_block_reason(st, closing_inventory=closing_inventory)
         if block:
-            if st.bid_oid or st.ask_oid:
+            feed_gap = block.startswith(("waiting bbo", "stale feed"))
+            if (st.bid_oid or st.ask_oid) and not feed_gap:
                 self.cancel_all(block, [st.spec.symbol])
             st.last_action = block
             return

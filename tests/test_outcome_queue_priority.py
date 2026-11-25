@@ -144,13 +144,45 @@ class QueuePriorityTests(unittest.TestCase):
         raw.bulk_cancel.assert_called_once()
         self.assertEqual(st.last_cancel['reason'], 'limit')
 
-    def test_stale_book_still_pulls_an_order_even_at_the_same_price(self):
+    def test_stale_book_keeps_the_resting_exit_quote(self):
         bot, st, raw, now = self.fixture()
         st.last_book_ts = now-5
         bot.place_bilateral(st)
+        raw.bulk_cancel.assert_not_called()
+        self.assertEqual(st.ask_oid, 123)
+        self.assertIn('stale feed', st.last_action)
+
+    def test_transient_empty_plan_keeps_the_resting_ask(self):
+        bot, st, raw, now = self.fixture()
+        with patch.object(bot, 'bilateral_requests', return_value={}):
+            bot.place_bilateral(st)
+        raw.bulk_cancel.assert_not_called()
+        self.assertEqual(st.ask_oid, 123)
+        self.assertEqual(bot.stats.cancels_sent, 0)
+
+    def test_low_fill_rotation_keeps_a_fresh_ask_during_a_flicker(self):
+        bot, st, raw, now = self.fixture()
+        bot.exit_reason = 'low executed $/min'
+        st.ask_order_ts = now-0.5
+        st.update_bbo(.69868, .69878)
+        bot.place_bilateral(st)
+        raw.bulk_cancel.assert_not_called()
+        self.assertEqual(st.ask_oid, 123)
+
+    def test_low_fill_rotation_confirms_a_better_ask_before_canceling(self):
+        bot, st, raw, now = self.fixture()
+        bot.exit_reason = 'low executed $/min'
+        with patch('zeus.bots.worldcup.time.time', return_value=now):
+            st.update_bbo(.69868, .69878)
+            bot.place_bilateral(st)
+        raw.bulk_cancel.assert_not_called()
+        with patch('zeus.bots.worldcup.time.time', return_value=now+.1):
+            bot.place_bilateral(st)
+        raw.bulk_cancel.assert_not_called()
+        with patch('zeus.bots.worldcup.time.time', return_value=now+.3):
+            bot.place_bilateral(st)
         raw.bulk_cancel.assert_called_once()
-        self.assertIsNone(st.ask_oid)
-        self.assertTrue(st.last_cancel['reason'].startswith('stale feed'))
+        self.assertEqual(st.last_cancel['reason'], 'drain')
 
     def update(self, st, *, oid=123, size='100', timestamp=None):
         return {'data': [{'status': 'open', 'order': {'coin': '#101', 'side': 'B',
