@@ -1,5 +1,7 @@
 import { useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { Icon } from "../ui";
+import { ShineBorder } from "../components/ui/shine-border";
+import { Spotlight } from "../components/ui/spotlight";
 
 const strategies = [
   {
@@ -212,6 +214,12 @@ export function LandingView({
             className="session-preview"
             aria-label="Aperçu d'une session Zeus"
           >
+            <ShineBorder
+              borderWidth={1}
+              duration={16}
+              shineColor={["#f59e0b", "#8b5cf6", "#38bdf8"]}
+              aria-hidden="true"
+            />
             <div className="preview-head">
               <span className="preview-title">
                 <span className="preview-icon">
@@ -453,6 +461,7 @@ export function LandingView({
       </section>
 
       <section className="landing-cta" aria-labelledby="cta-title">
+        <Spotlight className="landing-spotlight" fill="#f59e0b" />
         <span className="section-eyebrow">Prêt ?</span>
         <h2 id="cta-title">Votre prochaine session.</h2>
         <p>Connectez votre wallet. Le cadre est prêt, l'arrêt aussi.</p>

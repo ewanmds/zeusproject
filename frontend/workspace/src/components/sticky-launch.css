@@ -1,0 +1,219 @@
+/*
+ * StickyLaunchBar — fixed above the 66px mobile bottom nav.
+ * z-index 35: above page content and the bottom nav (30), below popovers
+ * (100); native <dialog> is in the top layer, so dialogs still win.
+ */
+
+.sticky-launch {
+  --sticky-launch-nav: 66px;
+  --sticky-launch-gap: 10px;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--sticky-launch-nav) + var(--sticky-launch-gap));
+  bottom: calc(
+    var(--sticky-launch-nav) + env(safe-area-inset-bottom, 0px) +
+      var(--sticky-launch-gap)
+  );
+  z-index: 35;
+  display: flex;
+  justify-content: center;
+  padding-left: 12px;
+  padding-right: 12px;
+  padding-left: calc(12px + env(safe-area-inset-left, 0px));
+  padding-right: calc(12px + env(safe-area-inset-right, 0px));
+  pointer-events: none;
+  animation: sticky-launch-in 180ms var(--ease) both;
+}
+
+.sticky-launch__panel {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 560px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.97);
+  box-shadow:
+    0 14px 40px rgba(0, 0, 0, 0.45),
+    inset 0 1px rgba(255, 255, 255, 0.04);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  pointer-events: auto;
+}
+
+.sticky-launch__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sticky-launch__info {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-left: 2px;
+}
+
+.sticky-launch__amount {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sticky-launch__status {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sticky-launch__button {
+  display: inline-flex;
+  flex: 0 0 56%;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 56%;
+  height: 48px;
+  min-height: 48px;
+  max-width: 56%;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--purple);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    background-color 150ms,
+    box-shadow 180ms,
+    transform 120ms;
+}
+
+.sticky-launch__button:hover:not(:disabled) {
+  background: var(--purple-hover);
+  box-shadow: 0 6px 20px rgba(139, 92, 246, 0.3);
+}
+
+.sticky-launch__button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.sticky-launch__button:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.sticky-launch__button:disabled {
+  background: rgba(139, 92, 246, 0.4);
+  color: rgba(248, 250, 252, 0.72);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.sticky-launch__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sticky-launch__spinner {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: sticky-launch-spin 700ms linear infinite;
+}
+
+.sticky-launch__error {
+  margin: 8px 2px 0;
+  padding-top: 7px;
+  border-top: 1px solid rgba(239, 68, 68, 0.22);
+  color: #fca5a5;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+@keyframes sticky-launch-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes sticky-launch-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (max-width: 360px) {
+  .sticky-launch {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .sticky-launch__panel {
+    padding: 8px;
+  }
+  .sticky-launch__button {
+    max-width: 62%;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+  .sticky-launch__amount {
+    font-size: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sticky-launch {
+    animation: none;
+  }
+  .sticky-launch__button {
+    transition: none;
+  }
+  .sticky-launch__button:active:not(:disabled) {
+    transform: none;
+  }
+  .sticky-launch__spinner {
+    animation: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .summary-launch {
+    display: none !important;
+  }
+  body:has(.sticky-launch) .main {
+    padding-bottom: calc(178px + env(safe-area-inset-bottom, 0px));
+  }
+  .launch-form input,
+  .launch-form select,
+  .launch-form details {
+    scroll-margin-bottom: 170px;
+  }
+}

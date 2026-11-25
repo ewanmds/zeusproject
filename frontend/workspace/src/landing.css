@@ -278,7 +278,7 @@ body {
 
 .landing .landing-button.primary {
   border-color: rgba(255, 255, 255, 0.08);
-  background: linear-gradient(120deg, #8b5cf6 0%, #7c3aed 55%, #6d28d9 100%);
+  background: linear-gradient(120deg, #7c3aed 0%, #7c3aed 55%, #6d28d9 100%);
   box-shadow:
     0 14px 34px rgba(88, 44, 190, 0.3),
     inset 0 1px rgba(255, 255, 255, 0.18);
@@ -1193,6 +1193,12 @@ body {
 .landing-cta > * {
   position: relative;
   z-index: 1;
+}
+
+.landing-cta > .landing-spotlight {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
 }
 
 .landing-cta .section-eyebrow {

@@ -2,10 +2,18 @@ import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "../icons";
 import { nav } from "../config";
+import { useI18n } from "../i18n";
 import type { View } from "../types";
 
 // Layro: magicuidesign/dock — stable hit areas, icon response only on fine pointers.
 export function NavDock({ view, active }: { view: View; active: number }) {
+  const { t } = useI18n();
+  const labels: Record<string, string> = {
+    run: t("nav.run"),
+    sessions: t("nav.sessions"),
+    performance: t("nav.performance"),
+    account: t("nav.account"),
+  };
   return (
     <nav
       className="nav layro-dock"
@@ -20,7 +28,7 @@ export function NavDock({ view, active }: { view: View; active: number }) {
           aria-current={view === item.id ? "page" : undefined}
         >
           <Icon name={item.icon} size={17} />
-          <span>{item.name}</span>
+          <span>{labels[item.id] || item.name}</span>
           {item.id === "sessions" && active > 0 && (
             <span className="count">{active}</span>
           )}

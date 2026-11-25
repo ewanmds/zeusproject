@@ -13,11 +13,16 @@
     "@base-ui/react": "^1.8.0",
     "@reown/appkit": "1.8.24",
     "@reown/appkit-adapter-ethers": "1.8.24",
+    "@tailwindcss/vite": "^4.3.5",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "ethers": "^6.16.0",
     "lucide-react": "^0.555.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "recharts": "^3.8.0"
+    "recharts": "^3.8.0",
+    "tailwind-merge": "^3.7.1",
+    "tailwindcss": "^4.3.5"
   },
   "devDependencies": {
     "@metamask/eth-sig-util": "^9.0.0",

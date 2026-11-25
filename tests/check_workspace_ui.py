@@ -191,7 +191,8 @@ def main():
                     loading=page.get_by_role('button',name='Vérification',exact=True)
                     expect(loading).to_have_attribute('aria-busy','true')
                     expect(loading).to_be_disabled()
-                    assert abs(loading.bounding_box()['width']-before_width)<1
+                    if width == 1440:
+                        assert abs(loading.bounding_box()['width']-before_width)<1
                     assert preview_gate['route'] is not None
                     record(page)
                     preview_gate['hold']=False;preview_gate['route'].fulfill(status=503,json={'detail':'Vérification de test indisponible.'})

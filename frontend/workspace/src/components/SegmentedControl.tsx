@@ -15,12 +15,14 @@ export function SegmentedControl<T extends string | number>({
   options,
   onValueChange,
   className = "",
+  describedBy,
 }: {
   label: string;
   value: T;
   options: readonly Option<T>[];
   onValueChange: (value: T) => void;
   className?: string;
+  describedBy?: string;
 }) {
   const track = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState({ x: 0, width: 0 });
@@ -87,6 +89,7 @@ export function SegmentedControl<T extends string | number>({
       ref={track}
       role="group"
       aria-label={label}
+      aria-describedby={describedBy}
       data-layro="nolly-studio/halo-toggle-group"
       className={`segments zeus-segmented ${className}`}
       data-interacted={interacted || undefined}

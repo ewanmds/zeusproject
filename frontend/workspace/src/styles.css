@@ -141,7 +141,7 @@ small {
   left: 12px;
   transform: translateY(-150%);
   z-index: 100;
-  background: var(--purple);
+  background: var(--purple-action);
   padding: 10px 16px;
   border-radius: 8px;
 }
@@ -230,7 +230,7 @@ small {
   background: rgba(255, 255, 255, 0.035);
 }
 .nav a.active {
-  background: var(--purple);
+  background: var(--purple-action);
   color: white;
   box-shadow: 0 2px 12px rgba(139, 92, 246, 0.24);
 }
@@ -288,7 +288,7 @@ small {
   transform: scale(0.98);
 }
 .button.primary {
-  background: var(--purple);
+  background: var(--purple-action);
   box-shadow: 0 4px 18px rgba(139, 92, 246, 0.16);
 }
 .button.primary:hover:not(:disabled) {
@@ -535,7 +535,7 @@ small {
   flex-shrink: 0;
 }
 .selected .selection-check {
-  background: var(--purple);
+  background: var(--purple-action);
   border-color: var(--purple);
 }
 .amount-section label {
@@ -1979,7 +1979,7 @@ tbody tr:last-child td {
     font-size: 8px;
     min-width: 13px;
     height: 13px;
-    background: var(--purple);
+    background: var(--purple-action);
     color: white;
   }
   .header .live {
@@ -2505,8 +2505,5 @@ tbody tr:last-child td {
   .launch-grid {
     display: flex;
     flex-direction: column;
-  }
-  .launch-grid > .summary {
-    order: -1;
   }
 }

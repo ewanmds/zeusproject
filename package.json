@@ -1,6 +1,13 @@
 {
   "name": "zeusproject",
   "private": true,
-  "engines": { "node": "22.x" },
-  "scripts": { "build": "npm run build --prefix frontend/workspace" }
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "build": "npm run build --prefix frontend/workspace"
+  },
+  "devDependencies": {
+    "shadcn": "^4.23.0"
+  }
 }

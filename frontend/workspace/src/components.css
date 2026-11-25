@@ -1,6 +1,6 @@
 /* Layro components share the original Zeus tokens. No second styling framework. */
 .button.primary {
-  background: var(--purple);
+  background: var(--purple-action);
 }
 .halo-input {
   transition:
@@ -1093,4 +1093,35 @@
   margin: 1px 0 0;
   accent-color: var(--purple);
   flex-shrink: 0;
+}
+
+.locale-toggle {
+  display: inline-grid;
+  place-items: center;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.locale-toggle:hover {
+  color: var(--text);
+  border-color: rgba(139, 92, 246, 0.4);
+}
+.locale-toggle:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+@media (max-width: 720px) {
+  .locale-toggle {
+    min-width: 40px;
+    height: 40px;
+  }
 }

@@ -12,6 +12,7 @@ import type { Draft, View, Session, Agent, Operation, Snapshot } from "./types";
 import { resolveStopSnapshot } from "./presentation/stop";
 import { activeSessionCount, sessionVisible } from "./presentation/session";
 import { launchPayload } from "./presentation/launch";
+import { useI18n } from "./i18n";
 import { NavDock } from "./components/layout";
 import { Kbd } from "./components/fields";
 import { useMobile } from "./components/Dialog";
@@ -80,6 +81,7 @@ export default function App() {
   const currentOwner = useRef(owner);
   currentOwner.current = owner;
   const sessions = w.snapshot?.sessions || [];
+  const { locale, setLocale, t } = useI18n();
   const metrics = w.snapshot?.metrics;
   // Compare only client-side clocks: published_at comes from the server, and
   // any client/server skew would otherwise mark a healthy stream as delayed
@@ -526,34 +528,45 @@ export default function App() {
   return (
     <>
       <a className="skip" href="#main">
-        Aller au contenu
+        {t("header.skipToContent")}
       </a>
       <header className={"header" + (scrolled ? " is-scrolled" : "")}>
-        <a className="brand" href="#run" aria-label="Zeus, accueil">
+        <a className="brand" href="#run" aria-label={t("header.brandHome")}>
           <span className="brand-mark">Z</span>
           <span>
-            Zeus<span className="brand-sub">ESPACE DE TRADING</span>
+            Zeus<span className="brand-sub">{t("header.brandSub")}</span>
           </span>
         </a>
         {owner && <NavDock view={view} active={activeCount} />}
         <div className="header-actions">
+          <button
+            type="button"
+            className="locale-toggle"
+            onClick={() => setLocale(locale === "fr" ? "en" : "fr")}
+            aria-label={
+              locale === "fr" ? "Switch to English" : "Passer en français"
+            }
+            title={locale === "fr" ? "English" : "Français"}
+          >
+            {locale.toUpperCase()}
+          </button>
           {owner ? (
             <>
               <button
                 className={"live " + (!stale ? "is-live" : "")}
                 onClick={reconnect}
-                title="Actualiser les données"
+                title={t("header.refreshData")}
               >
                 <i />
-                {stale ? "Actualisation" : "Live"}
+                {stale ? t("header.refreshing") : t("header.live")}
               </button>
               <button
                 className="icon-btn search-launch"
-                aria-label="Ouvrir la recherche"
+                aria-label={t("header.openSearch")}
                 onClick={() => setSearchOpen(true)}
               >
                 <Icon name="search" size={19} />
-                <span className="search-label">Rechercher</span>
+                <span className="search-label">{t("header.search")}</span>
                 <Kbd>/</Kbd>
               </button>
               <Suspense
@@ -741,8 +754,14 @@ export default function App() {
         review.account?.toLowerCase() === owner.toLowerCase() && (
           <Modal
             title="Vérifiez votre session."
-            locked={!!busy}
-            onClose={() => !busy && setReview(null)}
+            onClose={() => {
+              if (busy === "launch") {
+                setNotice(
+                  "Lancement en cours. Vérifiez Sessions avant de relancer.",
+                );
+              }
+              setReview(null);
+            }}
           >
             <div className="review-strategy">
               <span className="strategy-icon">

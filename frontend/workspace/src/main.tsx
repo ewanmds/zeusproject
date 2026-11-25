@@ -1,7 +1,9 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { I18nProvider } from "./i18n";
 import "./tokens.css";
+import "./shadcn.css";
 import "./styles.css";
 import "./brand.css";
 import "./components.css";
@@ -34,6 +36,8 @@ class Boundary extends React.Component<
 }
 createRoot(document.getElementById("root")!).render(
   <Boundary>
-    <App />
+    <I18nProvider>
+      <App />
+    </I18nProvider>
   </Boundary>,
 );

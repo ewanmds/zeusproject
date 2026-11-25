@@ -8,6 +8,7 @@ import { LiveAmount } from "../components/LiveAmount";
 import { InlineAlert } from "../components/feedback";
 import { SegmentedControl } from "../components/SegmentedControl";
 import { FeedbackButton } from "../components/FeedbackButton";
+import { StickyLaunchBar } from "../components/StickyLaunchBar";
 import { usd, short } from "../data";
 import { strategies } from "../config";
 import {
@@ -18,6 +19,7 @@ import {
   formBlockReason,
   orderMax,
   quickAmounts,
+  sideLabel,
 } from "../presentation/launch";
 import type { RunProps } from "../viewTypes";
 const MarketSelect = lazy(() =>
@@ -183,11 +185,6 @@ export function RunView({
                   aria-valuetext={capInfo.text}
                 />
                 <span className="field-hint">{capInfo.text}</span>
-                {capIssue && (
-                  <p className="error-text" role="alert">
-                    {capIssue}
-                  </p>
-                )}
               </div>
             )}
           </div>
@@ -198,6 +195,9 @@ export function RunView({
                 <SegmentedControl
                   label="Côté Outcome"
                   value={draft.side ?? ""}
+                  describedBy={
+                    draft.side === null ? "outcome-side-help" : undefined
+                  }
                   options={[
                     { value: "yes", label: "Yes" },
                     { value: "no", label: "No" },
@@ -524,6 +524,12 @@ export function RunView({
                   : draft.market || "À sélectionner"}
               </dd>
             </div>
+            {draft.strategy === "outcome" && (
+              <div>
+                <dt>Côté Outcome</dt>
+                <dd>{sideLabel(draft.side)}</dd>
+              </div>
+            )}
             <div>
               <dt>Exécution</dt>
               <dd>
@@ -568,12 +574,18 @@ export function RunView({
                 ? "Connectez votre wallet pour continuer."
                 : !ready
                   ? "Autorisez le trading pour continuer."
-                  : block
-                    ? "Complétez le montant, le plafond et le côté Outcome."
-                    : "Prêt à vérifier."}
+                  : block === "amount"
+                    ? "Corrigez le montant par ordre."
+                    : block === "cap"
+                      ? "Le plafond doit couvrir au moins un ordre."
+                      : block === "side"
+                        ? "Choisissez Yes ou No pour continuer."
+                        : block === "market"
+                          ? "Sélectionnez un marché pour continuer."
+                          : "Prêt à vérifier."}
             </p>
             <FeedbackButton
-              className="button primary launch-button"
+              className="button primary launch-button summary-launch"
               onClick={preview}
               loading={busy === "preview"}
               loadingLabel="Vérification"
@@ -598,6 +610,30 @@ export function RunView({
           </div>
         </aside>
       </div>
+      <StickyLaunchBar
+        mobileOnly
+        amount={usd(draft.order_usd)}
+        status={
+          !owner
+            ? "Wallet non connecté"
+            : !ready
+              ? "Autorisation requise"
+              : block
+                ? "Complétez les paramètres"
+                : "Prêt à vérifier"
+        }
+        label={
+          !owner
+            ? "Connecter mon wallet"
+            : !ready
+              ? "Continuer vers l'autorisation"
+              : "Vérifier et lancer"
+        }
+        loading={busy === "preview"}
+        loadingLabel="Vérification"
+        disabled={!!busy || (!!owner && ready && !!block)}
+        onAction={preview}
+      />
       <div className="bottom-guide">
         <span>
           <Icon name="link" size={15} />
