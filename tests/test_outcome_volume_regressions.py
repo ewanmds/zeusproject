@@ -184,6 +184,22 @@ class FlatRotationTests(unittest.TestCase):
             owner.start.assert_not_called()
             rotation.close()
 
+    def test_repeated_immediate_crash_backs_off_instead_of_looping(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, owner, row, now = self.fixture(folder)
+            row.update(running=False, phase='failed', cleanup_confirmed=True, stale=False)
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=self.scan(now)):
+                rotation.tick(now=now)
+            self.assertEqual(owner.start.call_count, 1)
+            group = rotation.groups['group']
+            self.assertEqual(group['resume_failures'], 1)
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=self.scan(now+1)):
+                rotation.tick(now=now+1)
+            self.assertEqual(owner.start.call_count, 1)
+            self.assertEqual(group['state'], 'draining')
+            self.assertGreater(group['retry_at'], now+1)
+            rotation.close()
+
 
 class PartialMakerVolumeTests(unittest.TestCase):
     def fixture(self, quantity):

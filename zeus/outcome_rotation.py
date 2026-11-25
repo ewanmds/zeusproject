@@ -347,6 +347,15 @@ class OutcomeRotation:
                         cooldowns[market] = max(
                             cooldowns.get(market, 0),
                             now+config.get("auto_market_cooldown_sec", 300))
+                    failures = int(group.get("resume_failures", 0)) + 1
+                    group["resume_failures"] = failures
+                    if failures > 1:
+                        # A worker which dies immediately after spawning must
+                        # not create a tight relaunch loop across markets.
+                        group.update(state="draining",
+                                     retry_at=now+min(60, 5*2**min(failures, 4)),
+                                     reason="Rotation: reprise après interruption")
+                        return
                     group.update(state="draining", retry_at=now,
                                  reason="Rotation: reprise après interruption")
                     state = "draining"
@@ -361,6 +370,10 @@ class OutcomeRotation:
 
             window = float(config.get("auto_rotation_after_sec", 60))
             if state == "observing":
+                if now - group["started"] > 30:
+                    # A leg which survives its startup proves the relaunch was
+                    # healthy; a later crash starts a fresh backoff window.
+                    group["resume_failures"] = 0
                 volume = float(current["volume_usd"])
                 group["samples"].append((now, volume))
                 while len(group["samples"]) > 1 and group["samples"][1][0] <= now-window:
