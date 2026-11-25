@@ -38,7 +38,7 @@ export interface Draft {
   order_usd: number;
   position_cap: number;
   market: string;
-  side: "yes" | "no";
+  side: "yes" | "no" | null;
   spread_bps: number;
   offset_bps: number;
   duration_sec: number | null;

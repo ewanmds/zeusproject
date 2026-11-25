@@ -3,6 +3,7 @@ import { Empty } from "../ui";
 import { SegmentedControl } from "../components/SegmentedControl";
 import { StatsGrid, Skeleton } from "../components/feedback";
 import { DataTable } from "../components/DataTable";
+import { TradeJournalTable } from "../components/TradeJournalTable";
 import { RichPopover } from "../components/fields";
 import { usd } from "../data";
 import { strategies } from "../config";
@@ -27,6 +28,31 @@ export function PerformanceView({
     name: st.name,
     rows: history.filter((s) => s.strategy === st.id),
   }));
+  const journalRows = history.map((s) => {
+    const pnl = s.net_pnl ?? 0;
+    const status = s.running
+      ? ("open" as const)
+      : pnl > 0
+        ? ("win" as const)
+        : pnl < 0
+          ? ("loss" as const)
+          : ("stopped" as const);
+    return {
+      id: s.id,
+      date: s.started,
+      market: s.name,
+      side:
+        s.config.outcome_side === "yes"
+          ? "Yes"
+          : s.config.outcome_side === "no"
+            ? "No"
+            : s.strategy.toUpperCase(),
+      size: s.volume_usd,
+      net_pnl: s.net_pnl,
+      duration_sec: s.duration_sec,
+      status,
+    };
+  });
   return (
     <>
       <div className="page-heading">
@@ -81,6 +107,13 @@ export function PerformanceView({
               Sessions démarrées sur la période · PnL réalisé, frais inclus ·
               Les positions ouvertes restent dans Sessions.
             </p>
+            <TradeJournalTable
+              rows={journalRows}
+              title="Journal des sessions"
+              subtitle={`${journalRows.length} session${journalRows.length > 1 ? "s" : ""} sur la période`}
+              emptyTitle="Aucune session sur la période."
+              emptyText="Lancez une session pour alimenter votre journal."
+            />
             <div className="panel table-panel">
               <DataTable
                 rows={summary}

@@ -107,6 +107,9 @@ def main():
                     expect(page.get_by_role('dialog')).not_to_be_visible()
                     expect(page.get_by_role('heading',name='Lancer, simplement.')).to_be_visible()
                     side=page.get_by_role('group',name='Côté Outcome',exact=True)
+                    expect(side.get_by_role('button',name='No',exact=True)).to_have_attribute('aria-pressed','false')
+                    expect(side.get_by_role('button',name='Yes',exact=True)).to_have_attribute('aria-pressed','false')
+                    side.get_by_role('button',name='No',exact=True).click()
                     expect(side.get_by_role('button',name='No',exact=True)).to_have_attribute('aria-pressed','true')
                     side.get_by_role('button',name='No',exact=True).focus()
                     page.keyboard.press('ArrowLeft')
@@ -173,6 +176,13 @@ def main():
                     record(page)
                     if width==390:
                         page.get_by_role('button',name='Terminer les réglages',exact=True).click()
+                    amount_input=page.get_by_role('spinbutton',name='Montant par ordre',exact=True)
+                    amount_input.fill('200')
+                    expect(page.get_by_role('button',name='Vérifier et lancer',exact=True)).to_be_disabled()
+                    expect(page.get_by_text('Montant supérieur au solde spot disponible',exact=False)).to_be_visible()
+                    amount_input.fill('90')
+                    expect(page.get_by_text('plus de 80 %',exact=False)).to_be_visible()
+                    amount_input.fill('25')
                     preview_button=page.get_by_role('button',name='Vérifier et lancer',exact=True)
                     before_width=preview_button.bounding_box()['width']
                     preview_gate['hold']=True
@@ -191,7 +201,9 @@ def main():
                     expect(page.get_by_role('dialog')).to_contain_text('00:15:00')
                     expect(page.get_by_role('dialog')).to_contain_text('$8.00')
                     capture(page, f'review-{width}.png')
-                    page.get_by_role('dialog').get_by_role('button',name='Lancer la session',exact=True).click()
+                    dialog=page.get_by_role('dialog')
+                    dialog.get_by_role('checkbox').check()
+                    dialog.get_by_role('button',name='Confirmer et lancer',exact=True).click()
                     if width==1440:
                         expect(page.get_by_text('Résultat en attente. Vérifiez la session avant de réessayer.',exact=True)).to_be_visible()
                         page.get_by_role('link',name='Sessions',exact=False).click()

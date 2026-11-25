@@ -242,6 +242,11 @@
   width: auto;
   padding-inline: 8px;
 }
+.search-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
 .keyboard-help {
   display: flex;
   align-items: center;
@@ -967,4 +972,125 @@
   .switch-thumb {
     transition: none;
   }
+}
+
+@media (max-width: 720px) {
+  .search-label {
+    display: none;
+  }
+}
+
+/* Launch validation and review */
+.amount-input.has-error {
+  border-color: var(--red);
+}
+.amount-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 8px 0 0;
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.cap-block {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.cap-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.cap-head strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+.cap-block progress {
+  width: 100%;
+  height: 6px;
+}
+.cap-block progress::-webkit-progress-bar {
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+}
+.cap-block progress::-webkit-progress-value {
+  background: var(--purple);
+  border-radius: 999px;
+}
+.cap-block progress::-moz-progress-bar {
+  background: var(--purple);
+  border-radius: 999px;
+}
+.stepper-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.review-facts dd small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.review-guards,
+.review-stop {
+  margin-top: 18px;
+}
+.review-guards h3,
+.review-stop h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.review-guards ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.review-guards li::before {
+  content: "?";
+  margin-right: 7px;
+  color: var(--green);
+}
+.review-stop p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.risk-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 18px 0 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+  cursor: pointer;
+}
+.risk-ack input {
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: var(--purple);
+  flex-shrink: 0;
 }

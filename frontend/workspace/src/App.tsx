@@ -11,6 +11,7 @@ import { FeedbackButton } from "./components/FeedbackButton";
 import type { Draft, View, Session, Agent, Operation, Snapshot } from "./types";
 import { resolveStopSnapshot } from "./presentation/stop";
 import { activeSessionCount, sessionVisible } from "./presentation/session";
+import { launchPayload } from "./presentation/launch";
 import { NavDock } from "./components/layout";
 import { Kbd } from "./components/fields";
 import { useMobile } from "./components/Dialog";
@@ -62,7 +63,9 @@ export default function App() {
   const [selected, setSelected] = useState<Session | null>(null);
   const [pendingStops, setPendingStops] = useState<Record<string, number>>({});
   const stopRequests = useRef(new Set<string>());
+  const [riskAccepted, setRiskAccepted] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const previewToken = useRef(0);
   const [filter, setFilter] = useState("active"),
     [period, setPeriod] = useState(7),
     [now, setNow] = useState(Date.now());
@@ -82,6 +85,9 @@ export default function App() {
   // any client/server skew would otherwise mark a healthy stream as delayed
   // forever. A stalled stream already stops refreshing `received`.
   const stale = !!owner && (!w.received || now - w.received > 6000);
+  useEffect(() => {
+    setRiskAccepted(false);
+  }, [review]);
   useEffect(() => {
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(tick);
@@ -126,7 +132,7 @@ export default function App() {
         const saved = JSON.parse(
           localStorage.getItem("zeus-draft:" + owner) || "null",
         );
-        setDraft(saved ? { ...initial, ...saved } : initial);
+        setDraft(saved ? { ...initial, ...saved, side: null } : initial);
       } catch {
         setDraft(initial);
       }
@@ -154,6 +160,12 @@ export default function App() {
   }, [owner, draft.strategy]);
   useEffect(() => {
     if (!owner || draft.strategy !== "outcome") {
+      setScanner(null);
+      return;
+    }
+    if (!draft.side) {
+      // No default side: do not observe the wrong Outcome coin before the
+      // user explicitly chooses Yes or No.
       setScanner(null);
       return;
     }
@@ -234,6 +246,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", keyboard);
   }, []);
   const update = (key: keyof Draft, value: string | number | null) => {
+    previewToken.current += 1;
     setActionErrors((old) => ({ ...old, run: "" }));
     setDraft((old) => ({ ...old, [key]: value }));
     setReview(null);
@@ -317,19 +330,30 @@ export default function App() {
       navigate("account");
       return;
     }
+    if (draft.strategy === "outcome" && !draft.side) {
+      setActionErrors((old) => ({
+        ...old,
+        run: "Choisissez Yes ou No avant de lancer.",
+      }));
+      return;
+    }
+    const token = ++previewToken.current;
+    const payload = launchPayload(draft);
     setBusy("preview");
     setActionErrors((old) => ({ ...old, run: "" }));
     setNotice("");
     try {
-      setReview(await api("/sessions/preview", draft));
+      const result = await api("/sessions/preview", payload);
+      if (previewToken.current === token) setReview(result);
     } catch (e: any) {
-      setActionErrors((old) => ({ ...old, run: e.message }));
+      if (previewToken.current === token)
+        setActionErrors((old) => ({ ...old, run: e.message }));
     } finally {
       setBusy("");
     }
   };
   const launch = async () => {
-    if (!review || !owner || busy) return;
+    if (!review || !owner || busy || !riskAccepted) return;
     setBusy("launch");
     const key = crypto.randomUUID();
     try {
@@ -347,9 +371,8 @@ export default function App() {
             "Lancement non confirmé. Vérifiez la session avant de réessayer.",
         );
     } catch (e: any) {
-      setReview(null);
       // A definitive 4xx rejection (validation, CSRF, conflict) means nothing
-      // was launched: show the reason instead of an ambiguous "pending" notice.
+      // was launched: keep the review open and show the reason next to it.
       if (
         typeof e?.status === "number" &&
         e.status >= 400 &&
@@ -358,6 +381,7 @@ export default function App() {
       ) {
         setActionErrors((old) => ({ ...old, run: e.message }));
       } else {
+        setReview(null);
         setNotice("Résultat en attente. Vérifiez la session avant de réessayer.");
       }
     } finally {
@@ -450,7 +474,11 @@ export default function App() {
     busy,
     navigate,
     setShowHelp,
-    actionError: view === "account" ? actionErrors.account : actionErrors.run,
+    actionError: review
+      ? ""
+      : view === "account"
+        ? actionErrors.account
+        : actionErrors.run,
     loading: !!owner && !w.snapshot,
     metrics,
     stale,
@@ -474,6 +502,26 @@ export default function App() {
   const detail = selected
     ? sessions.find((s) => s.id === selected.id) || selected
     : null;
+  const reviewOutcome = review?.config.strategy === "outcome";
+  const reviewFeeBps = reviewOutcome
+    ? scanner?.candidates?.[0]?.maker_close_fee_bps
+    : null;
+  const reviewFeeUsd =
+    Number.isFinite(reviewFeeBps) && Number.isFinite(review?.config.order_usd)
+      ? (review.config.order_usd * Number(reviewFeeBps)) / 10000
+      : null;
+  const reviewMaxLoss = reviewOutcome
+    ? Math.min(
+        review?.config.position_cap ?? 0,
+        review?.usdc_available ?? 0,
+      ) + (reviewFeeUsd ?? 0)
+    : null;
+  const reviewSide =
+    review?.config.side === "yes"
+      ? "Yes"
+      : review?.config.side === "no"
+        ? "No"
+        : "Non sélectionné";
 
   return (
     <>
@@ -505,6 +553,7 @@ export default function App() {
                 onClick={() => setSearchOpen(true)}
               >
                 <Icon name="search" size={19} />
+                <span className="search-label">Rechercher</span>
                 <Kbd>/</Kbd>
               </button>
               <Suspense
@@ -735,7 +784,7 @@ export default function App() {
                 <dt>Marché</dt>
                 <dd>
                   {review.config.strategy === "outcome"
-                    ? "Scanner Auto · " + review.config.side
+                    ? "Scanner Auto · " + reviewSide
                     : review.config.market}
                 </dd>
               </div>
@@ -762,6 +811,79 @@ export default function App() {
                 </>
               )}
             </dl>
+            <dl className="summary-list review-facts">
+              <div>
+                <dt>Frais maker estimés</dt>
+                <dd>
+                  {review.config.strategy === "outcome" ? (
+                    reviewFeeBps != null && reviewFeeUsd != null ? (
+                      <>
+                        {Number(reviewFeeBps).toFixed(2)} bps ·{" "}
+                        {usd(reviewFeeUsd)} par ordre de clôture.
+                        <small>
+                          Ouverture Outcome gratuite · aucun rebate Outcome.
+                        </small>
+                      </>
+                    ) : (
+                      <>
+                        Estimation indisponible ; les frais restent déduits du
+                        PnL.
+                      </>
+                    )
+                  ) : (
+                    <>
+                      Frais maker non estimés avant exécution ; aucun rebate
+                      n’est supposé.
+                    </>
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Perte maximale théorique</dt>
+                <dd>
+                  {reviewOutcome && reviewMaxLoss != null
+                    ? usd(reviewMaxLoss)
+                    : "Non estimable — limites du moteur."}
+                </dd>
+              </div>
+            </dl>
+            <section className="review-guards">
+              <h3>Garde-fous actifs</h3>
+              <ul>
+                <li>Post-only : aucun ordre taker à l’entrée.</li>
+                <li>Montant minimum : 10,50 $.</li>
+                <li>Solde spot vérifié avant chaque ordre.</li>
+                {reviewOutcome && (
+                  <>
+                    <li>Un ordre ne dépasse pas le plafond de position.</li>
+                    <li>
+                      Spread maximal : {review.config.spread_bps} bps · arrêt à{" "}
+                      {usd(review.config.stop_loss_usd)} de perte réalisée.
+                    </li>
+                    <li>Rotation à plat, sans vente forcée.</li>
+                  </>
+                )}
+              </ul>
+            </section>
+            <section className="review-stop">
+              <h3>Comment arrêter</h3>
+              <p>
+                Onglet Sessions → Arrêter. Les ordres de la session sont
+                annulés et son inventaire attribué est clôturé au marché.
+              </p>
+            </section>
+            <label className="risk-ack">
+              <input
+                type="checkbox"
+                checked={riskAccepted}
+                onChange={(event) => setRiskAccepted(event.target.checked)}
+              />
+              <span>
+                Je comprends que cette session passe des ordres réels sur
+                Hyperliquid Mainnet et que je peux perdre le montant engagé.
+              </span>
+            </label>
+            {actionErrors.run && <InlineAlert>{actionErrors.run}</InlineAlert>}
             <p className="hint">
               Les quantités Outcome sont arrondies à des tokens entiers. Le
               montant réel peut légèrement dépasser la taille demandée.
@@ -769,11 +891,11 @@ export default function App() {
             <FeedbackButton
               className="button primary full"
               onClick={launch}
-              disabled={!!busy}
+              disabled={!!busy || !riskAccepted}
               loading={busy === "launch"}
               loadingLabel="Lancement en cours"
             >
-              Lancer la session
+              Confirmer et lancer
               <Icon name="run" size={17} />
             </FeedbackButton>
           </Modal>

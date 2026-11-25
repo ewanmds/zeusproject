@@ -10,6 +10,15 @@ import { SegmentedControl } from "../components/SegmentedControl";
 import { FeedbackButton } from "../components/FeedbackButton";
 import { usd, short } from "../data";
 import { strategies } from "../config";
+import {
+  amountError,
+  amountWarning,
+  capError,
+  capGauge,
+  formBlockReason,
+  orderMax,
+  quickAmounts,
+} from "../presentation/launch";
 import type { RunProps } from "../viewTypes";
 const MarketSelect = lazy(() =>
   import("../components/MarketSelect").then((m) => ({
@@ -33,6 +42,13 @@ export function RunView({
   setShowHelp,
   actionError,
 }: RunProps) {
+  const available = w.balance?.usdc_available ?? null;
+  const amountIssue = amountError(draft, available);
+  const warning = amountWarning(draft, available);
+  const capIssue = capError(draft);
+  const capInfo = capGauge(draft);
+  const block = formBlockReason(draft, available);
+  const quick = quickAmounts(draft, available);
   return (
     <>
       <div className="page-heading">
@@ -95,33 +111,85 @@ export function RunView({
           </div>
           <div className="amount-section">
             <label htmlFor="order">Montant par ordre</label>
-            <div className="amount-input">
+            <div className={"amount-input" + (amountIssue ? " has-error" : "")}>
               <span>$</span>
               <HaloInput
                 id="order"
                 type="number"
                 inputMode="decimal"
                 min="10.5"
+                max={orderMax(draft, available) ?? undefined}
                 step="0.01"
                 value={draft.order_usd || ""}
+                aria-invalid={!!amountIssue || undefined}
+                aria-describedby="order-help order-error order-warning"
                 onChange={(e) => update("order_usd", Number(e.target.value))}
               />
               <span className="amount-unit">USD</span>
             </div>
             <div className="amount-bottom">
-              <span>Minimum 10,50 $</span>
-              <div className="quick-amounts">
-                {[25, 50, 100].map((n) => (
-                  <button
-                    key={n}
-                    onClick={() => update("order_usd", n)}
-                    className={draft.order_usd === n ? "selected" : ""}
-                  >
-                    ${n}
-                  </button>
-                ))}
+              <span id="order-help">Minimum 10,50 $</span>
+              <div
+                className="quick-amounts"
+                role="group"
+                aria-label="Montants rapides"
+              >
+                {quick.length ? (
+                  quick.map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => update("order_usd", item.value)}
+                      className={
+                        Math.abs(draft.order_usd - item.value) < 0.005
+                          ? "selected"
+                          : ""
+                      }
+                      aria-label={
+                        item.label === "MAX"
+                          ? "Utiliser le montant maximal autorisé"
+                          : `${item.label} du maximum autorisé`
+                      }
+                    >
+                      {item.label}
+                    </button>
+                  ))
+                ) : (
+                  <span className="field-hint">Solde en cours de chargement…</span>
+                )}
               </div>
             </div>
+            {amountIssue && (
+              <p id="order-error" className="error-text" role="alert">
+                {amountIssue}
+              </p>
+            )}
+            {warning && (
+              <p id="order-warning" className="amount-warning" role="status">
+                <Icon name="info" size={14} />
+                {warning}
+              </p>
+            )}
+            {draft.strategy === "outcome" && (
+              <div className="cap-block">
+                <div className="cap-head">
+                  <span>Plafond de position</span>
+                  <strong>{usd(draft.position_cap)}</strong>
+                </div>
+                <progress
+                  max={100}
+                  value={capInfo.percent}
+                  aria-label="Montant par ordre par rapport au plafond de position"
+                  aria-valuetext={capInfo.text}
+                />
+                <span className="field-hint">{capInfo.text}</span>
+                {capIssue && (
+                  <p className="error-text" role="alert">
+                    {capIssue}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
           {draft.strategy === "outcome" ? (
             <div className="inline-fields">
@@ -129,13 +197,20 @@ export function RunView({
                 <span className="field-label">Côté Outcome</span>
                 <SegmentedControl
                   label="Côté Outcome"
-                  value={draft.side}
+                  value={draft.side ?? ""}
                   options={[
                     { value: "yes", label: "Yes" },
                     { value: "no", label: "No" },
                   ]}
-                  onValueChange={(side) => update("side", side)}
+                  onValueChange={(side) =>
+                    update("side", side as "yes" | "no")
+                  }
                 />
+                {draft.side === null && (
+                  <p className="field-hint" id="outcome-side-help">
+                    Choisissez Yes ou No avant de lancer.
+                  </p>
+                )}
               </div>
               <div className="selection-note">
                 <Icon name="auto" />
@@ -195,10 +270,14 @@ export function RunView({
             <div className="advanced-body">
               {draft.strategy === "outcome" ? (
                 <div className="two-fields">
-                  <HaloField label="Plafond de position · USD">
+                  <HaloField
+                    label="Plafond de position · USD"
+                    error={capIssue || undefined}
+                    description="Le plafond limite l’exposition cumulée de la session ; un ordre ne peut pas le dépasser."
+                  >
                     <HaloInput
                       type="number"
-                      min={draft.order_usd}
+                      min="10.5"
                       value={draft.position_cap}
                       onChange={(e) =>
                         update("position_cap", Number(e.target.value))
@@ -484,19 +563,21 @@ export function RunView({
           </dl>
           <div className="summary-bottom">
             <SessionStepper connected={!!owner} ready={ready} />
+            <p className="stepper-note">
+              {!owner
+                ? "Connectez votre wallet pour continuer."
+                : !ready
+                  ? "Autorisez le trading pour continuer."
+                  : block
+                    ? "Complétez le montant, le plafond et le côté Outcome."
+                    : "Prêt à vérifier."}
+            </p>
             <FeedbackButton
               className="button primary launch-button"
               onClick={preview}
               loading={busy === "preview"}
               loadingLabel="Vérification"
-              disabled={
-                !!busy ||
-                (!!owner &&
-                  ready &&
-                  (!Number.isFinite(draft.order_usd) ||
-                    draft.order_usd < 10.5 ||
-                    (draft.strategy !== "outcome" && !draft.market)))
-              }
+              disabled={!!busy || (!!owner && ready && !!block)}
             >
               <>
                 {!owner

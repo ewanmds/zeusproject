@@ -2500,3 +2500,13 @@ tbody tr:last-child td {
     border-right-color: currentColor;
   }
 }
+
+@media (max-width: 720px) {
+  .launch-grid {
+    display: flex;
+    flex-direction: column;
+  }
+  .launch-grid > .summary {
+    order: -1;
+  }
+}
