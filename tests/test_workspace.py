@@ -1,8 +1,10 @@
 """Real signed login, replay/tenant isolation, encrypted credentials; no exchange I/O."""
 import json
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+import sys
 import tempfile
 import threading
 import time
@@ -15,6 +17,7 @@ from eth_account.messages import encode_defunct, encode_typed_data
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from zeus import PROJECT_ROOT
 from zeus.workspace.app import Settings, create_app
 from zeus.workspace.accounts import HyperliquidAccounts
 
@@ -63,6 +66,25 @@ class FakeManager:
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_workspace_import_is_isolated_from_the_private_dashboard(self):
+        code = (
+            "import os;"
+            "os.environ.pop('WALLET_ADDRESS_OUTCOME', None);"
+            "os.environ.pop('ZEUS_WORKSPACE_ONLY', None);"
+            "import zeus.workspace.app;"
+            "import zeus.server;"
+            "assert zeus.server.manager is None, 'legacy manager created';"
+            "assert 'WALLET_ADDRESS_OUTCOME' not in os.environ, 'operator env loaded';"
+            "print('isolated')"
+        )
+        env = os.environ.copy()
+        env.pop('WALLET_ADDRESS_OUTCOME', None)
+        env.pop('ZEUS_WORKSPACE_ONLY', None)
+        result = subprocess.run([sys.executable, '-c', code], cwd=PROJECT_ROOT,
+                                env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('isolated', result.stdout)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.origin = 'http://127.0.0.1:8081'

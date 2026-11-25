@@ -4,6 +4,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 import os
+# This process owns isolated tenant managers. Shared server helpers may be
+# imported, but never the private-dashboard manager or its operator env.
+os.environ.setdefault("ZEUS_WORKSPACE_ONLY", "1")
 from pathlib import Path
 import secrets
 import threading

@@ -114,20 +114,55 @@ class OutcomeSupervisor:
         records = list(self.records())
         if not records:
             return
-        by_id = {r.get("session_id"): r for _, r in records}
-        groups = {}
-        for path, record in records:
-            if not record.get("symbols"):
-                continue
-            key = ((record.get("config") or {}).get("auto_group_id")
-                   or record.get("session_id"))
-            current = groups.get(key)
-            if current is None or record.get("started", 0) > current[1].get("started", 0):
-                groups[key] = (path, record)
         now = time.time()
+        by_id = {r.get("session_id"): r for _, r in records}
         with self._recovery_lock:
             with self.manager.lock:
                 procs = dict(self.procs)
+            # The safety gate sets exposure_started before journaling any
+            # CLOID/submission. A session with no exposure, no CLOIDs and no
+            # owned orders therefore never reached the exchange: archive it
+            # instead of blocking its market forever as "stop unconfirmed".
+            for path, record in records:
+                if record.get("cleanup_confirmed") or record.get("exposure_started"):
+                    continue
+                if now - float(record.get("started") or 0) < 30:
+                    continue  # launch may still be between journal write and Popen
+                sid = record.get("session_id")
+                info = procs.get(sid)
+                if info is not None and info["proc"].poll() is None:
+                    continue
+                successor = by_id.get(record.get("resumed_session_id"))
+                if successor is not None and not successor.get("cleanup_confirmed"):
+                    continue  # parent must not hide an unresolved child exposure
+                meta = read_json(path) if Path(path).exists() else record
+                meta = meta if isinstance(meta, dict) else record
+                if (meta.get("exposure_started") or meta.get("cleanup_confirmed")
+                        or any(meta.get(k) for k in ("pending_cloids", "cloids", "owned_oids"))):
+                    continue
+                stats = read_json(meta["stats_file"]) if meta.get("stats_file") else {}
+                if isinstance(stats, dict) and (
+                        finite(stats.get("fills", 0)) > 0
+                        or abs(finite(stats.get("position_usd", 0))) > 1e-9):
+                    continue
+                if self._orphan_alive(meta) or self._worker_pid(meta):
+                    continue
+                updated = {**meta, "cleanup_confirmed": True, "phase": "stopped",
+                           "can_start": True, "cleanup_error": "", "error": "",
+                           "cleanup_note": "Aucun ordre soumis; session archivée automatiquement"}
+                atomic_json(path, updated)
+                record["cleanup_confirmed"] = True
+                logging.getLogger(__name__).warning(
+                    "Outcome archived unstarted session %s", sid)
+            groups = {}
+            for path, record in records:
+                if not record.get("symbols"):
+                    continue
+                key = ((record.get("config") or {}).get("auto_group_id")
+                       or record.get("session_id"))
+                current = groups.get(key)
+                if current is None or record.get("started", 0) > current[1].get("started", 0):
+                    groups[key] = (path, record)
             for key, (path, record) in groups.items():
                 sid = record.get("session_id")
                 if not sid or record.get("cleanup_confirmed"):

@@ -198,6 +198,26 @@ class OutcomeQuoteTests(unittest.TestCase):
         self.assertGreater(st.book_depth_ts, 0)
 
 
+class OutcomeFillSnapshotTests(unittest.TestCase):
+    def test_reconnect_fill_snapshot_is_recorded_once(self):
+        bot = make_bot()
+        st = MarketState(MarketSpec('#101', 0, balance_coin='+101'))
+        st.update_bbo(.5, .5001)
+        bot.states = {'#101': st}
+        bot.stats.start_ts = time.time() - 60
+        fill = {'coin': '#101', 'tid': 7, 'time': time.time() * 1000,
+                'px': '.5', 'sz': '10', 'fee': '.01', 'closedPnl': '0'}
+        bot.on_user_fills({'data': {'isSnapshot': True, 'fills': [fill]}})
+        self.assertEqual(bot.stats.fills, 1)
+        self.assertEqual(bot.stats.volume_usd, 5)
+        self.assertAlmostEqual(bot.stats.fees_paid, .01)
+        bot.on_user_fills({'data': {'isSnapshot': True, 'fills': [fill]}})
+        self.assertEqual(bot.stats.fills, 1)
+        old = dict(fill, tid=8, time=(bot.stats.start_ts - 10) * 1000)
+        bot.on_user_fills({'data': {'isSnapshot': True, 'fills': [old]}})
+        self.assertEqual(bot.stats.fills, 1)
+
+
 class SupervisorEntryTests(unittest.TestCase):
     def supervisor(self):
         sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
@@ -399,7 +419,8 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
         sup._recovery = {}
         sup._recovery_lock = threading.RLock()
         rec = dict(record, stop_file=str(stop_file), symbols=['#101'],
-                   account_kind='outcome', cleanup_confirmed=False, started=1.0)
+                   account_kind='outcome', cleanup_confirmed=False)
+        rec.setdefault('started', 1.0)
         sup.records = lambda: [(str(journal), rec)]
         sup._resume = Mock(return_value={'session_id': 'new'})
         return sup
@@ -448,6 +469,36 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
             sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': False})
             sup._auto_recover()
             sup._resume.assert_not_called()
+
+    def test_dead_no_exposure_session_is_archived_and_unblocks_the_market(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {'session_id': 's1', 'started': time.time()-60})
+            sup._auto_recover()
+            row = json.loads((Path(folder) / 'journal.json').read_text())
+            self.assertTrue(row['cleanup_confirmed'])
+            self.assertTrue(row['can_start'])
+            self.assertEqual(row['phase'], 'stopped')
+            self.assertIn('Aucun ordre soumis', row['cleanup_note'])
+            sup._resume.assert_not_called()
+
+    def test_no_exposure_archive_respects_live_process_and_recent_launch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {'session_id': 's1', 'started': time.time()-60})
+            sup.procs = {'s1': {'proc': Mock(poll=Mock(return_value=None))}}
+            sup._auto_recover()
+            row = json.loads((Path(folder) / 'journal.json').read_text())
+            self.assertIsNot(row.get('cleanup_confirmed'), True)
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {'session_id': 's1', 'started': time.time()})
+            sup._auto_recover()
+            row = json.loads((Path(folder) / 'journal.json').read_text())
+            self.assertIsNot(row.get('cleanup_confirmed'), True)
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {'session_id': 's1', 'started': time.time()-60})
+            sup._orphan_alive = Mock(return_value=True)
+            sup._auto_recover()
+            row = json.loads((Path(folder) / 'journal.json').read_text())
+            self.assertIsNot(row.get('cleanup_confirmed'), True)
 
 
 class WorkspaceProjectionTests(unittest.TestCase):

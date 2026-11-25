@@ -13,6 +13,11 @@ invokes its normal cancellation/inventory cleanup and can close positions.
 Journals, `.env`, database contents and agent keys are preserved. The deployment
 does not start a trading session.
 
+Workspace isolation: the `zeus-workspace` unit loads only `.env.workspace` and
+sets `ZEUS_WORKSPACE_ONLY=1`. It never loads the private dashboard's `.env`, so
+operator wallet keys and bot tokens stay in the `zeus-bot` process. Reinstall the
+unit and run `sudo systemctl daemon-reload` when upgrading an older workspace.
+
 ```bash
 cd /home/ec2-user/zeusproject
 git status --short

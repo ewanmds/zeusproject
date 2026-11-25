@@ -156,6 +156,52 @@ class ObservationsTests(unittest.TestCase):
         self.assertTrue(observed['auto_eligible'])
         self.assertNotIn('Carnet ancien', observed['eligibility_reason'])
 
+    def test_fresh_rest_fallback_book_is_admitted(self):
+        scan = self.scanner()
+        scan.rows[10].update(fee_scale=1, deployer_fee_scale=1)
+        scan.history['#101'].clear()
+        scan.history['#101'].extend(trades())
+        book = {'time': int(NOW*1000),
+                'levels': [[{'px': '.5', 'sz': '1000'}],
+                           [{'px': '.5001', 'sz': '1000'}]]}
+        scan.generation = 3
+        scan.connected = True
+        scan.book_received['#101'] = NOW
+        scan.books['#101'] = (NOW, book)  # REST fallback, not a live WS book
+        with patch('zeus.outcome_flow.time.time', return_value=NOW), \
+                ThreadPoolExecutor(1) as pool, \
+                patch.object(scan, '_book_executor', return_value=pool), \
+                patch.object(scan, '_book', return_value=book):
+            result = scan._snapshot('no', 110, 10, base_rate=0)
+        self.assertTrue(result['ready'])
+        self.assertEqual(result['candidates'][0]['market'], '#101')
+
+    def test_rest_refresh_after_the_prefetch_snapshot_is_admitted(self):
+        scan = self.scanner()
+        scan.rows[10].update(fee_scale=1, deployer_fee_scale=1)
+        scan.history['#101'].clear()
+        scan.history['#101'].extend(trades())
+        book = {'time': int((NOW-90)*1000),
+                'levels': [[{'px': '.5', 'sz': '1000'}],
+                           [{'px': '.5001', 'sz': '1000'}]]}
+        scan.generation = 3
+        scan.connected = True
+        scan.book_received['#101'] = NOW-30  # old cached receipt
+        scan.books['#101'] = (NOW-30, book)
+
+        def refreshed(coin):
+            scan.book_received[coin] = NOW
+            scan.book_live.pop(coin, None)
+            return book
+
+        with patch('zeus.outcome_flow.time.time', return_value=NOW), \
+                ThreadPoolExecutor(1) as pool, \
+                patch.object(scan, '_book_executor', return_value=pool), \
+                patch.object(scan, '_book', side_effect=refreshed):
+            result = scan._snapshot('no', 110, 10, base_rate=0)
+        self.assertTrue(result['ready'])
+        self.assertEqual(result['candidates'][0]['market'], '#101')
+
     def test_book_from_a_previous_connection_is_not_admitted(self):
         scan = self.scanner()
         scan.rows[10].update(fee_scale=1, deployer_fee_scale=1)
@@ -175,6 +221,31 @@ class ObservationsTests(unittest.TestCase):
                 patch.object(scan, '_book', return_value=book):
             result = scan._snapshot('no', 110, 10, base_rate=0)
         self.assertFalse(result['ready'])
+
+    def test_observations_explain_scanner_state_instead_of_blaming_the_book(self):
+        book = {'time': int((NOW-20)*1000),
+                'levels': [[{'px': '.5', 'sz': '1000'}],
+                           [{'px': '.5001', 'sz': '1000'}]]}
+        for stage, expected in (
+                ('warmup', 'Observation initiale'),
+                ('subscriptions', 'Souscriptions en cours'),
+                ('ready', 'Scan en attente')):
+            with self.subTest(stage=stage):
+                scan = self.scanner()
+                scan.history['#101'].clear()
+                scan.history['#101'].extend(trades())
+                scan.generation = 3
+                scan.book_received['#101'] = NOW
+                scan.book_live['#101'] = 3
+                scan.books['#101'] = (NOW, book)
+                if stage == 'warmup':
+                    scan.connected_at = NOW-20
+                elif stage == 'subscriptions':
+                    scan.subscribed.remove('#100')
+                with patch('zeus.outcome_flow.time.time', return_value=NOW):
+                    row = scan.observations('no', 110, 10)['observed_markets'][0]
+                self.assertIn(expected, row['eligibility_reason'])
+                self.assertNotIn('Carnet à vérifier', row['eligibility_reason'])
 
     def test_rest_book_budget_prevents_api_bursts(self):
         scan = OutcomeFlowScanner()

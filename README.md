@@ -40,10 +40,19 @@ locally the page falls back to the current origin and asks for the access code.
 
 ## Layout
 
-- [zeus/server.py](zeus/server.py) — HTTP API, WebSocket publisher, session lifecycle.
+- [zeus/server.py](zeus/server.py) — legacy private-dashboard API and shared
+  compatibility exports. The multiuser workspace must not instantiate its global
+  manager; see [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md).
+- [zeus/config.py](zeus/config.py) — side-effect-free `.env` loader and project paths.
+- [zeus/workspace/](zeus/workspace/) — tenant-isolated multiuser API and managers.
 - [zeus/dashboard.py](zeus/dashboard.py) — snapshot projection, localization and the
   shared read broker (one collection and one JSON encoding per revision).
-- [zeus/outcome_supervisor.py](zeus/outcome_supervisor.py) — Outcome sessions and rotation.
+- [zeus/outcome_flow.py](zeus/outcome_flow.py) — public Outcome flow scanner and
+  L2 book subscriptions.
+- [zeus/outcome_rotation.py](zeus/outcome_rotation.py) — Auto Outcome drain, flat
+  rotation and replacement lifecycle.
+- [zeus/outcome_supervisor.py](zeus/outcome_supervisor.py) — per-market Outcome
+  process supervisor, recovery and durable snapshots.
 - [zeus/bots/order_book.py](zeus/bots/order_book.py) — BBO/MID market maker.
 - [zeus/bots/worldcup.py](zeus/bots/worldcup.py) — HIP-4 Outcome execution worker.
 - [zeus/safety.py](zeus/safety.py) — atomic journals, signing and submission guards.

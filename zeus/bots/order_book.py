@@ -1566,7 +1566,7 @@ class OrderBookBot:
         received_ns = time.perf_counter_ns()
         try:
             payload = data["data"]
-            if payload.get("coin") != SYMBOL:
+            if not self._coin_matches(payload.get("coin")):
                 return
             bid, ask = payload["bbo"]
             bb, ba = finite(bid["px"]), finite(ask["px"])
@@ -1588,14 +1588,17 @@ class OrderBookBot:
     def _on_l2(self, data, generation=None):
         received_ns = time.perf_counter_ns()
         try:
-            levels = data.get("data", {}).get("levels", [])
+            payload = data.get("data", {})
+            if not self._coin_matches(payload.get("coin")):
+                return
+            levels = payload.get("levels", [])
             if len(levels) < 2 or not levels[0] or not levels[1]:
                 return
             bb = float(levels[0][0]["px"])
             ba = float(levels[1][0]["px"])
             if not math.isfinite(bb + ba) or bb <= 0 or ba <= bb:
                 return
-            exchange_ms = int(data.get("data", {}).get("time", 0) or 0)
+            exchange_ms = int(payload.get("time", 0) or 0)
             coin = data.get("data", {}).get("coin", SYMBOL)
             if exchange_ms <= 0:
                 return

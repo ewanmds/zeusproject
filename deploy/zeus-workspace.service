@@ -7,7 +7,9 @@ Wants=network-online.target
 Type=simple
 User=ec2-user
 WorkingDirectory=/home/ec2-user/zeusproject
-EnvironmentFile=-/home/ec2-user/zeusproject/.env
+# The workspace is tenant-isolated. It must not inherit the private
+# dashboard's operator wallet keys or bot tokens from .env.
+Environment=ZEUS_WORKSPACE_ONLY=1
 EnvironmentFile=/home/ec2-user/zeusproject/.env.workspace
 ExecStart=/home/ec2-user/zeusproject/.venv-workspace/bin/python -m zeus.workspace
 Restart=always

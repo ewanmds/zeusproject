@@ -493,8 +493,10 @@ class OutcomeFlowScanner:
             result = self._snapshot(side, order_usd, max_spread_bps, base_rate=base_rate)
             result['scan_ms'] = (time.perf_counter()-started)*1000
             with self.lock:
-                if len(self.snapshot_cache) >= 16:
-                    self.snapshot_cache.clear()
+                if len(self.snapshot_cache) >= 64:
+                    oldest = min(self.snapshot_cache,
+                                 key=lambda k: self.snapshot_cache[k][0])
+                    self.snapshot_cache.pop(oldest, None)
                 self.snapshot_cache[key] = (time.monotonic(), result)
             return copy.deepcopy(result)
 
@@ -512,8 +514,26 @@ class OutcomeFlowScanner:
             book_live = dict(self.book_live)
             generation = self.generation
             connected = self.connected
+            warmup_done = now - self.connected_at >= 60
+            quorum = self._quorum(2 * len(self.rows))
+            subscriptions_pending = bool(connected and self.rows and warmup_done
+                                         and len(self.subscribed) < quorum)
+            catalog_stale = now - self.catalog_at >= 120
+            ready = self._subscription_ready_locked(now)
+            if not connected:
+                scanner_reason = 'Flux déconnecté'
+            elif catalog_stale:
+                scanner_reason = 'Catalogue en cours de rechargement'
+            elif not warmup_done:
+                scanner_reason = ('Observation initiale (%d s / 60 s)'
+                                  % int(max(0, now - self.connected_at)))
+            elif subscriptions_pending:
+                scanner_reason = 'Souscriptions en cours'
+            else:
+                scanner_reason = 'Scan en attente'
             cached = [value[1] for key, value in self.snapshot_cache.items()
                       if key[:3] == (side, order_usd, max_spread_bps)
+                      and key[3] == base_rate
                       and key[4:] == (self.generation, self.catalog_revision)]
         candidates = {c['market']: c for result in cached for c in result.get('candidates', [])
                       if now-c.get('book_updated_at', 0) <= 5
@@ -541,6 +561,7 @@ class OutcomeFlowScanner:
                 else:
                     reason = 'Carnet à vérifier'
             book = books.get(coin)
+            book_usable = False
             if book:
                 try:
                     data = book[1]
@@ -558,6 +579,7 @@ class OutcomeFlowScanner:
                     # Display the last book for up to 60 s; a cold/REST book
                     # still needs a recent receipt for admission.
                     if 0 < bp < ap < 1 and book_age <= 60 and exchange_age >= -1:
+                        book_usable = True
                         item['spread_bps'] = 10000*(ap-bp)/((ap+bp)/2)
                         item['book_age_sec'] = book_age
                         if metric:
@@ -595,6 +617,11 @@ class OutcomeFlowScanner:
                     if approved.get(key) is not None:
                         item[key] = approved.get(key)
                 reason = 'Admissible'
+            elif metric and metric['eligible']:
+                if not ready:
+                    reason = scanner_reason
+                elif book_usable and reason == 'Carnet à vérifier':
+                    reason = 'Scan en attente'
             item.update(auto_eligible=bool(approved),
                         eligibility_reason=reason if connected else 'Flux déconnecté')
             observed.append(item)
@@ -698,6 +725,12 @@ class OutcomeFlowScanner:
             return not_ready("pool de lecture des carnets indisponible")
         with self.book_lock:
             books = list(pool.map(self._book, [r["market"] for r in targets]))
+        # `_book` may have refreshed a cold REST book or a WS snapshot may have
+        # arrived during the reads. Use the post-fetch receipt/generation so a
+        # just-fetched book is not rejected with pre-fetch metadata.
+        with self.lock:
+            book_received = dict(self.book_received)
+            book_live = dict(self.book_live)
         candidates = []
         fees_not_covered = 0
         cost_unavailable = 0
@@ -720,7 +753,14 @@ class OutcomeFlowScanner:
                 # A live l2Book is current until the exchange pushes a change.
                 # Only cold/REST books and old connections use a short age.
                 age = book_now-received if received is not None else exchange_age
-                stale = (not (live and age <= 60)) if received is not None else not (-1 <= age <= 5)
+                if received is None:
+                    stale = not (-1 <= age <= 5)
+                elif live:
+                    stale = age > 60
+                else:
+                    # A just-fetched REST fallback is valid for a short receipt
+                    # window; only an old cold book is stale.
+                    stale = age > 5
                 spread = 10000*(ask-bid)/((bid+ask)/2)
                 depth = min(bq*bid, aq*ask)
                 if (not all(map(math.isfinite, (bid, ask, bq, aq, exchange_age, spread)))

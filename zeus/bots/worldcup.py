@@ -1141,11 +1141,19 @@ class HyperliquidSpreadBot:
             self.ws_info.subscribe({"type": "orderUpdates", "user": self.cfg.account_address}, self.on_order_updates)
         self.status = "ws live"
 
+    def _ws_transport_alive(self) -> bool:
+        manager = getattr(self.ws_info, "ws_manager", None)
+        socket = getattr(manager, "ws", None) if manager is not None else None
+        return bool(manager is not None and manager.ws_ready
+                    and getattr(socket, "keep_running", False))
+
     def restart_ws_if_needed(self) -> None:
         now = time.time()
-        newest = max((st.last_book_ts for st in self.states.values()), default=0.0)
-        if newest <= 0 or now - newest <= self.cfg.stale_sec * 3:
-            return
+        transport_dead = self.ws_info is not None and not self._ws_transport_alive()
+        if not transport_dead:
+            newest = max((st.last_book_ts for st in self.states.values()), default=0.0)
+            if newest <= 0 or now - newest <= self.cfg.stale_sec * 3:
+                return
         if now - self.last_ws_restart_ts < 10:
             return
         self.last_ws_restart_ts = now
@@ -1320,13 +1328,9 @@ class HyperliquidSpreadBot:
         try:
             payload = data.get("data", data)
             fills = payload.get("fills", []) if isinstance(payload, dict) else []
-            if payload.get("isSnapshot"):
-                with self.lock:
-                    for fill in fills:
-                        tid = str(fill.get("tid", ""))
-                        if tid:
-                            self.stats.processed_fills.add(tid)
-                return
+            # Snapshots are sent on every (re)connect. They contain the fills
+            # missed during a WS gap; _record_fills filters pre-session time and
+            # deduplicates by tid.
             self._record_fills(fills)
         except Exception:
             return

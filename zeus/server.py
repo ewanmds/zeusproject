@@ -49,36 +49,15 @@ from zeus.process_control import pid_alive
 
 logger = logging.getLogger("zeus.server")
 # ---------------------------------------------------------------------------
-# .env loader (manual, no external dependency)
+# .env loader (shared with the workspace bootstrap)
 # ---------------------------------------------------------------------------
-def load_dotenv(path: Path) -> None:
-    """Read a .env file and populate os.environ (does not overwrite)."""
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        if key.startswith("export "):
-            key = key[7:].strip()
-        if not key:
-            continue
-        value = value.strip()
-        # Quoted values keep their content verbatim; an unquoted trailing
-        # comment (`TOKEN=abc  # rotate`) is not part of the value.
-        if value[:1] in ('"', "'"):
-            quote = value[0]
-            end = value.find(quote, 1)
-            value = value[1:end] if end > 0 else value[1:]
-        elif " #" in value:
-            value = value.split(" #", 1)[0].rstrip()
-        os.environ.setdefault(key, value)
+from zeus.config import BASE_DIR, load_dotenv  # noqa: E402  (compatibility re-export)
 
-# Load .env at import time so bot modules can see the env vars
-BASE_DIR = PROJECT_ROOT
-load_dotenv(BASE_DIR / ".env")
+# Load .env at import time so bot modules can see the env vars. The workspace
+# process sets ZEUS_WORKSPACE_ONLY=1 first: it must never inherit the private
+# dashboard's operator credentials or start the legacy manager/recovery loop.
+if os.getenv("ZEUS_WORKSPACE_ONLY") != "1":
+    load_dotenv(BASE_DIR / ".env")
 
 BOT_API_TOKEN = os.getenv("BOT_API_TOKEN", "").strip()
 BOT_CORS_ORIGINS = [
@@ -961,7 +940,10 @@ app.add_middleware(
 # the single largest win for remote/mobile first load and live updates.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-manager = BotManager()
+# The multiuser workspace imports request models and BotManager from this
+# module. It must not create a second private-dashboard manager over .zeus-state
+# or start the operator auto-recovery thread.
+manager = None if os.getenv("ZEUS_WORKSPACE_ONLY") == "1" else BotManager()
 from zeus.dashboard import DashboardBroker
 dashboard = DashboardBroker({"grid": lambda: manager.get_grid_stats(),
                              "outcome": lambda: manager.get_worldcup_stats()},
