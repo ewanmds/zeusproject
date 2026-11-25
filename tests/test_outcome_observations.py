@@ -202,6 +202,26 @@ class ObservationsTests(unittest.TestCase):
         self.assertTrue(result['ready'])
         self.assertEqual(result['candidates'][0]['market'], '#101')
 
+    def test_observations_rank_admissible_markets_by_selection_order(self):
+        scan = OutcomeFlowScanner()
+        scan.connected, scan.connected_at, scan.catalog_at = True, NOW-90, NOW
+        scan.rows = {10: dict(id=10, name='One', fee_scale=1, deployer_fee_scale=1),
+                     20: dict(id=20, name='Two', fee_scale=1, deployer_fee_scale=1)}
+        scan.subscribed = {'#100', '#101', '#200', '#201'}
+        for coin in ('#101', '#201'):
+            scan.history[coin].extend(trades())
+        key = ('no', 110, 10, .0004, scan.generation, scan.catalog_revision)
+        scan.snapshot_cache[key] = (0, dict(updated_at=NOW, candidates=[
+            dict(market='#201', book_updated_at=NOW, last_trade_age_sec=25,
+                 spread_bps=2, net_touch_edge_bps=-5, queue_proxy_sec=30, rank=1),
+            dict(market='#101', book_updated_at=NOW, last_trade_age_sec=25,
+                 spread_bps=2, net_touch_edge_bps=-5, queue_proxy_sec=40, rank=2),
+        ]))
+        with patch('zeus.outcome_flow.time.time', return_value=NOW):
+            rows = scan.observations('no', 110, 10)['observed_markets']
+        self.assertEqual([r['market'] for r in rows], ['#201', '#101'])
+        self.assertEqual([r['rank'] for r in rows], [1, 2])
+
     def test_book_from_a_previous_connection_is_not_admitted(self):
         scan = self.scanner()
         scan.rows[10].update(fee_scale=1, deployer_fee_scale=1)

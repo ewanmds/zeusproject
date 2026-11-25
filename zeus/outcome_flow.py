@@ -613,7 +613,7 @@ class OutcomeFlowScanner:
             if approved:
                 # Fee estimates belong to this tenant's full scan.
                 for key in ('spread_bps', 'queue_proxy_sec', 'net_touch_edge_bps',
-                            'maker_close_fee_bps', 'fees_covered'):
+                            'maker_close_fee_bps', 'fees_covered', 'rank'):
                     if approved.get(key) is not None:
                         item[key] = approved.get(key)
                 reason = 'Admissible'
@@ -625,7 +625,16 @@ class OutcomeFlowScanner:
             item.update(auto_eligible=bool(approved),
                         eligibility_reason=reason if connected else 'Flux déconnecté')
             observed.append(item)
-        observed.sort(key=lambda row: (-row['volume_usd_1m'], row['market']))
+        # Rank is the exact Auto selection order: highest executing $/min first,
+        # then queue/flow tie-breakers. Admissible rows lead the table.
+        ranked = sorted((row for row in observed if row.get('auto_eligible')),
+                        key=lambda row: (row.get('rank') or 10**9,
+                                        -row['volume_usd_1m'], row['market']))
+        for index, row in enumerate(ranked, 1):
+            row['rank'] = index
+        observed.sort(key=lambda row: (
+            not row.get('auto_eligible'), row.get('rank') or 10**9,
+            -row['volume_usd_1m'], row['market']))
         with self.lock:
             for row in observed[:24]:
                 self.book_watch[row['market']] = now
@@ -802,10 +811,11 @@ class OutcomeFlowScanner:
                 candidates.append(item)
             except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
                 continue
-        # Fills first: the shortest estimated touch queue wins. The balanced-flow
-        # score breaks ties so a dead or one-way book never leads on a stale quote.
-        candidates.sort(key=lambda r: (r["queue_proxy_sec"], -r["score"],
-                                       -r["volume_usd_1m"], r["market"]))
+        # Volume first: the operator wants the highest executing $/min market.
+        # Queue and balanced flow break ties so a dead or one-way book never
+        # leads on a stale quote.
+        candidates.sort(key=lambda r: (-r["volume_usd_1m"], r["queue_proxy_sec"],
+                                       -r["score"], r["market"]))
         with self.lock:
             if not self.connected or self.generation != generation or time.time()-self.catalog_at >= 120:
                 return {**status, "connected": False}
@@ -813,8 +823,9 @@ class OutcomeFlowScanner:
         candidates = [r for r in candidates if
                       r["last_trade_age_sec"]+time.time()-now <= FLOW_LIMITS['max_trade_age_sec']]
         completed = time.time()
-        for row in candidates:
+        for index, row in enumerate(candidates, 1):
             row['last_trade_age_sec'] += completed-now
+            row['rank'] = index
         reason = ""
         if not candidates:
             parts = []
@@ -838,7 +849,7 @@ class OutcomeFlowScanner:
                 "cost_policy": "informational",
                 "order_usd": order_usd, "max_spread_bps": max_spread_bps,
                 "min_depth_usd": order_usd,
-                "updated_at": completed, "ranking": "queue_proxy_sec",
+                "updated_at": completed, "ranking": "volume_usd_1m",
                 "flow_candidates": len(shortlist), "books_checked": len(books)}
 
     def close(self):
@@ -902,5 +913,9 @@ def candidate_rank(candidate, results, now):
     failures = min(3, previous.get('zero_fill_attempts', 0))
     age = max(0, now-previous.get('updated_at', now))
     penalty = 1+failures*math.exp(-age/1800)
-    return (float(candidate.get('queue_proxy_sec', math.inf))*penalty,
-            -float(candidate.get('score', 0)), -float(candidate.get('volume_usd_1m', 0)), candidate['market'])
+    # Volume first: the operator wants the highest executing $/min market.
+    # Queue/flow score break ties so a high-volume but instantaneous sweep
+    # does not beat a steadier market with the same volume.
+    return (-float(candidate.get('volume_usd_1m', 0)),
+            float(candidate.get('queue_proxy_sec', math.inf))*penalty,
+            -float(candidate.get('score', 0)), candidate['market'])

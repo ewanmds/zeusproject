@@ -446,6 +446,22 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
             sup._auto_recover()
             sup._resume.assert_called_once_with('s1', exit_only=False)
 
+    def test_flat_terminal_session_is_confirmed_without_resume(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(
+                folder,
+                {'session_id': 's1', 'exposure_started': True},
+                drain={'manual': True, 'reason': 'Manual stop: maker exit'},
+            )
+            sup.manager._verify_session_flat = Mock()
+            sup._auto_recover()
+            row = json.loads((Path(folder) / 'journal.json').read_text())
+            self.assertTrue(row['cleanup_confirmed'])
+            self.assertEqual(row['phase'], 'stopped')
+            self.assertTrue(row['can_start'])
+            self.assertIn('vérifié à plat', row['cleanup_note'])
+            sup._resume.assert_not_called()
+
     def test_manual_stop_resumes_only_the_exit_and_hard_shutdown_never_restarts(self):
         with tempfile.TemporaryDirectory() as folder:
             sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': True},

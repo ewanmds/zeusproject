@@ -430,10 +430,21 @@ export function RunView({
                       ?? scanner.candidates?.find((c: any) => c.market === m.market)?.net_touch_edge_bps
                       ?? null,
                   }))}
-                  defaultSort={{ id: "volume", direction: "desc" }}
+                  defaultSort={{ id: "rank", direction: "asc" }}
                   animateChanges
                   rowKey={(m) => m.market}
                   columns={[
+                    {
+                      id: "rank",
+                      label: "#",
+                      render: (m) =>
+                        Number.isFinite(m.rank) ? (
+                          <span className="scanner-rank">#{m.rank}</span>
+                        ) : (
+                          "—"
+                        ),
+                      sort: (m) => m.rank ?? 9999,
+                    },
                     {
                       id: "name",
                       label: "Marché",

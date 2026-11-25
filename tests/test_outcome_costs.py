@@ -130,6 +130,20 @@ class OutcomeCostsTests(unittest.TestCase):
         self.assertFalse(tight['fees_covered'])
         self.assertFalse(result['error'])
 
+    def test_candidates_are_ranked_by_executed_volume(self):
+        scan, book = self.ready_scanner()
+        now = scan.catalog_at
+        for coin, size in (('#101', 100), ('#201', 900)):
+            scan.history[coin].clear()
+            scan.history[coin].extend(
+                {'time': (now-age)*1000, 'px': .38268, 'sz': size,
+                 'side': 'B' if i % 2 else 'A', 'tid': i}
+                for i, age in enumerate(range(59, 0, -4)))
+        with ThreadPoolExecutor(2) as pool, patch.object(scan, '_book_executor', return_value=pool), patch.object(scan, '_book', side_effect=book):
+            result = scan._snapshot('no', 15, 10, base_rate=.000384)
+        self.assertEqual([r['market'] for r in result['candidates']], ['#201', '#101'])
+        self.assertEqual([r['rank'] for r in result['candidates']], [1, 2])
+
     def test_unknown_fee_profile_or_metadata_does_not_hide_eligible_flow(self):
         for base in [None, .000384]:
             scan, book = self.ready_scanner()

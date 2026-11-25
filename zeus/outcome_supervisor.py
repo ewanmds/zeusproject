@@ -227,6 +227,33 @@ class OutcomeSupervisor:
                 state = self._recovery.get(sid) or {}
                 if now < state.get("next_at", 0):
                     continue
+                if exit_only:
+                    # A terminal session with no live worker can be archived as
+                    # soon as the exchange proves the account is flat. This
+                    # clears "Arrêt non confirmé" without waiting for a manual
+                    # reconciliation click.
+                    verify = getattr(self.manager, "_verify_session_flat", None)
+                    if verify is not None and not (meta.get("pending_cloids")
+                                                   or record.get("pending_cloids")):
+                        last_check = float(state.get("flat_check_at", 0) or 0)
+                        if now - last_check >= 60:
+                            try:
+                                verify(meta)
+                            except Exception as exc:
+                                self._recovery[sid] = {
+                                    **state, "flat_check_at": now,
+                                    "error": safe_error(exc)}
+                            else:
+                                atomic_json(path, {
+                                    **meta, "cleanup_confirmed": True,
+                                    "phase": "stopped", "can_start": True,
+                                    "cleanup_error": "", "error": "",
+                                    "pending_cloids": [],
+                                    "cleanup_note": "Compte vérifié à plat; session archivée automatiquement"})
+                                self._recovery.pop(sid, None)
+                                logging.getLogger(__name__).warning(
+                                    "Outcome confirmed flat session %s", sid)
+                                continue
                 try:
                     if manual_taker:
                         self._resume(sid, exit_only=True, manual_taker=True)

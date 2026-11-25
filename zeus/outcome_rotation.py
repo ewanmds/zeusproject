@@ -397,8 +397,14 @@ class OutcomeRotation:
                 threshold = config.get("auto_min_fill_usd_per_min")
                 threshold = config["order_size_usd"] if threshold is None else float(threshold)
                 if group["fill_rate"] >= threshold:
-                    group["reason"] = ""
-                    return
+                    # The market is filling, but the operator wants the best
+                    # available volume rank. Re-check at most once per window.
+                    if now - group.get("last_rank_check", 0) < window:
+                        group["reason"] = ""
+                        return
+                    group["rank_check"] = True
+                else:
+                    group["rank_check"] = False
                 inventory_reason = self.rotation_inventory_reason(current)
                 if inventory_reason:
                     group["reason"] = inventory_reason
@@ -410,6 +416,11 @@ class OutcomeRotation:
                                     config.get("auto_max_spread_bps", 10),
                                     account=account)
         if not snapshot.get("ready") or now-float(snapshot.get("updated_at", now)) > 20:
+            with self.lock:
+                group = self.groups.get(group_id)
+                if group is not None and not group.get("cancelled"):
+                    group["rank_check"] = False
+                    group["last_rank_check"] = now
             return
         busy = {b["market"] for b in status.get("bots", [])
                 if b["running"] or not b.get("cleanup_confirmed")}
@@ -423,6 +434,17 @@ class OutcomeRotation:
         top = next((r for r in ranked if r["market"] not in busy
                     and r["market"] != current["market"]
                     and self.candidate_allowed(group_id, r["market"], now)), None)
+        current_candidate = next(
+            (r for r in snapshot["candidates"] if r["market"] == current["market"]),
+            None)
+        current_market_volume = float(
+            (current_candidate or {}).get("volume_usd_1m") or 0)
+        decayed = bool(top) and (
+            current_candidate is None
+            or (int(top.get("rank", 10**9)) + 2
+                <= int(current_candidate.get("rank", 10**9))
+                and float(top.get("volume_usd_1m") or 0)
+                >= current_market_volume * 1.5))
         # Scanner reads can take time. A fill during that read must not turn a
         # low-volume rotation into an involuntary inventory exit.
         latest = next((b for b in self.owner.status().get('bots', [])
@@ -435,14 +457,25 @@ class OutcomeRotation:
             if group["state"] == "observing":
                 if (not latest or not latest.get('running')
                         or latest.get('phase') != 'running' or latest.get('stale')):
+                    group["rank_check"] = False
                     return
+                rank_check = bool(group.get("rank_check"))
+                group["rank_check"] = False
                 inventory_reason = self.rotation_inventory_reason(latest)
                 if inventory_reason:
+                    group["last_rank_check"] = now
                     group['reason'] = inventory_reason
                     return
                 if top is None:
+                    group["last_rank_check"] = now
                     group["reason"] = "Low fills: waiting for another eligible $/min market"
                     return
+                if rank_check:
+                    group["last_rank_check"] = now
+                    if not decayed:
+                        group["reason"] = ""
+                        return
+                    group["reason"] = "Rotation: meilleur volume disponible"
                 info = (getattr(self.owner, "procs", {}) or {}).get(current_id)
                 if info is None:
                     return
@@ -450,7 +483,9 @@ class OutcomeRotation:
                     "requested_at": now, "reason": "low executed $/min",
                     "next_market": top["market"]})
                 group.update(state="draining",
-                             reason="Rotation: draining current market")
+                             reason=("Rotation: meilleur volume disponible"
+                                     if rank_check else
+                                     "Rotation: draining current market"))
                 previous = group.setdefault('market_results', {}).get(current['market'], {})
                 failures = (previous.get('zero_fill_attempts', 0)+1
                             if float(current.get('volume_usd', 0)) <= 0 else 0)

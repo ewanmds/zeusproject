@@ -71,6 +71,24 @@ class FlatRotationTests(unittest.TestCase):
             owner.start.assert_not_called()  # old worker has not confirmed cleanup
             rotation.close()
 
+    def test_filling_market_is_drained_when_its_volume_rank_decays(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, owner, row, now = self.fixture(folder)
+            group = rotation.groups['group']
+            group['auto_min_fill_usd_per_min'] = 1
+            group['config']['auto_min_fill_usd_per_min'] = 1
+            scan = dict(ready=True, updated_at=now, candidates=[
+                dict(market='#111', queue_proxy_sec=10, volume_usd_1m=900, rank=1),
+                dict(market='#101', queue_proxy_sec=80, volume_usd_1m=200, rank=4),
+            ])
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=scan):
+                rotation.tick(now=now)
+            drain = json.loads((Path(folder)/'drain.json').read_text())
+            self.assertEqual(drain['next_market'], '#111')
+            self.assertIn('volume', rotation.groups['group']['reason'])
+            self.assertEqual(rotation.groups['group']['state'], 'draining')
+            rotation.close()
+
     def test_fill_during_slow_scan_cancels_the_rotation_decision(self):
         with tempfile.TemporaryDirectory() as folder:
             rotation, _, row, now = self.fixture(folder)

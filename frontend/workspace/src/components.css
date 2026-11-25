@@ -1125,3 +1125,12 @@
     height: 40px;
   }
 }
+
+.scanner-rank {
+  display: inline-block;
+  min-width: 30px;
+  color: var(--gold);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+}
