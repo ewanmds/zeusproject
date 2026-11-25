@@ -55,13 +55,17 @@ if [[ -e .venv-workspace ]] && ! workspace_python_supported .venv-workspace/bin/
 fi
 [[ -x .venv-workspace/bin/python ]] || "$WORKSPACE_PYTHON" -m venv .venv-workspace
 .venv-workspace/bin/python -m pip install -r requirements.txt
-# npm ci is reproducible, but optional native packages can differ between
-# npm versions. Fall back to a no-lock install so a deployment is never blocked
-# by a client-side lockfile mismatch.
-if ! npm ci --prefix frontend/workspace --no-audit --no-fund; then
+# Keep the deploy lean: optional wallet connectors (Solana/Coinbase) are not
+# needed for the EVM workspace and can exhaust a small EC2 root volume. Install
+# the Linux native bindings required by Tailwind/Vite explicitly.
+if ! npm ci --prefix frontend/workspace --no-audit --no-fund --omit=optional; then
   echo 'npm ci mismatch: falling back to npm install (lockfile left untouched).'
-  npm install --prefix frontend/workspace --no-audit --no-fund --no-package-lock
+  npm install --prefix frontend/workspace --no-audit --no-fund --no-package-lock --omit=optional
 fi
+npm install --prefix frontend/workspace --no-save --no-audit --no-fund --no-package-lock \
+  @tailwindcss/oxide-linux-x64-gnu@4.3.5 \
+  lightningcss-linux-x64-gnu@1.33.0 \
+  @rolldown/binding-linux-x64-gnu@1.2.19
 # Bundle only: the full `npm run build` type-check can exhaust a small
 # EC2 heap. `npm run build` (tsc + vite) remains the local/CI check.
 npm run build:deploy --prefix frontend/workspace
