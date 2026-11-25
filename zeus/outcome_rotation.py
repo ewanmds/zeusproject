@@ -47,7 +47,7 @@ class OutcomeRotation:
                          started=now, state="observing",
                          samples=deque([(now, 0.0)], maxlen=2000), reason="", retry_at=0.0,
                          current_selection=selection, fills_seen=0,
-                         last_leg_fill_at=now, rank_check=False,
+                         last_leg_fill_at=now,
                          promote_check=False, last_rank_check=0.0,
                          market_rank=selection.get("rank"))
             group["members"].add(session["session_id"])
@@ -422,17 +422,15 @@ class OutcomeRotation:
                     threshold = config.get("auto_min_fill_usd_per_min")
                     threshold = config["order_size_usd"] if threshold is None else float(threshold)
                     if group["fill_rate"] >= threshold:
-                        # A filling market keeps its queue and is only checked
-                        # for a stronger volume rank on a short interval.
-                        if now - group.get("last_rank_check", 0) < max(30, window/3):
-                            group["reason"] = ""
-                            return
-                    else:
-                        # Low executed throughput: reselect the best free
-                        # market even when it is only one rank better.
-                        promote = True
+                        # A market that is actually producing fills keeps its
+                        # queue. Rotation is only for stalled legs, not for
+                        # chasing a slightly better rank and losing fills.
+                        group["reason"] = ""
+                        return
+                    # Low executed throughput: reselect the best free market
+                    # even when it is only one rank better.
+                    promote = True
                 group["promote_check"] = promote
-                group["rank_check"] = not promote
                 inventory_reason = self.rotation_inventory_reason(current)
                 if inventory_reason:
                     group["reason"] = inventory_reason
@@ -447,7 +445,6 @@ class OutcomeRotation:
             with self.lock:
                 group = self.groups.get(group_id)
                 if group is not None and not group.get("cancelled"):
-                    group["rank_check"] = False
                     group["promote_check"] = False
                     group["last_rank_check"] = now
             return
@@ -466,14 +463,6 @@ class OutcomeRotation:
         current_candidate = next(
             (r for r in snapshot["candidates"] if r["market"] == current["market"]),
             None)
-        current_market_volume = float(
-            (current_candidate or {}).get("volume_usd_1m") or 0)
-        decayed = bool(top) and (
-            current_candidate is None
-            or (int(top.get("rank", 10**9)) + 2
-                <= int(current_candidate.get("rank", 10**9))
-                and float(top.get("volume_usd_1m") or 0)
-                >= current_market_volume * 1.5))
         # Scanner reads can take time. A fill during that read must not turn a
         # low-volume rotation into an involuntary inventory exit.
         latest = next((b for b in self.owner.status().get('bots', [])
@@ -486,12 +475,9 @@ class OutcomeRotation:
             if group["state"] == "observing":
                 if (not latest or not latest.get('running')
                         or latest.get('phase') != 'running' or latest.get('stale')):
-                    group["rank_check"] = False
                     group["promote_check"] = False
                     return
                 promote = bool(group.get("promote_check"))
-                rank_check = bool(group.get("rank_check"))
-                group["rank_check"] = False
                 group["promote_check"] = False
                 inventory_reason = self.rotation_inventory_reason(latest)
                 if inventory_reason:
@@ -515,30 +501,23 @@ class OutcomeRotation:
                     else:
                         group["reason"] = "Low fills: waiting for another eligible $/min market"
                     return
+                if not promote:
+                    return
                 current_rank = (current_candidate or {}).get("rank")
                 top_rank = top.get("rank")
                 better = (current_rank is None or top_rank is None
                           or int(top_rank) < int(current_rank))
-                if promote:
-                    group["last_rank_check"] = now
-                    if not better:
-                        # Never rotate to a lower-volume market: the current
-                        # one already is the best free market.
-                        group["reason"] = ("Rotation: déjà sur le meilleur marché "
-                                           "disponible (#%s)" % current_rank)
-                        return
-                    group["reason"] = ("Rotation: meilleur marché disponible "
-                                       "(#%s → #%s)" % (
-                                           current_rank if current_rank else "-",
-                                           top_rank if top_rank else "?"))
-                elif rank_check:
-                    group["last_rank_check"] = now
-                    if not decayed:
-                        group["reason"] = ""
-                        return
-                    group["reason"] = "Rotation: meilleur volume disponible"
-                else:
+                group["last_rank_check"] = now
+                if not better:
+                    # Never rotate to a lower-volume market: the current
+                    # one already is the best free market.
+                    group["reason"] = ("Rotation: déjà sur le meilleur marché "
+                                       "disponible (#%s)" % current_rank)
                     return
+                group["reason"] = ("Rotation: meilleur marché disponible "
+                                   "(#%s → #%s)" % (
+                                       current_rank if current_rank else "-",
+                                       top_rank if top_rank else "?"))
                 info = (getattr(self.owner, "procs", {}) or {}).get(current_id)
                 if info is None:
                     return

@@ -355,6 +355,7 @@ class SupervisorStopTests(unittest.TestCase):
                            'order_size_usd': 15, 'max_position_usd': 200,
                            'exec_mode': 'maker', 'selection_mode': 'auto',
                            'two_sided': True, 'auto_rotate': True,
+                           'auto_rotation_after_sec': 60,
                            'target_volume_usd': 100,
                            'session_expires_at': time.time() + 60}})]
             sup.start = Mock(return_value={'session_id': 'new'})
@@ -365,6 +366,7 @@ class SupervisorStopTests(unittest.TestCase):
             self.assertTrue(request.resume_trading)
             self.assertFalse(request.resume_exit)
             self.assertTrue(request.auto_rotate)
+            self.assertEqual(request.auto_rotation_after_sec, 180)
             self.assertIsNone(request.target_volume_usd)
             self.assertIsNone(request.session_expires_at)
             seed = sup.start.call_args.kwargs['seed']

@@ -903,10 +903,10 @@ import math
 def no_fill_grace(config, selection):
     window = float(config.get('auto_rotation_after_sec', 180))
     queue = float((selection or {}).get('queue_proxy_sec') or 0)
-    # The queue estimate is only a prior. A post-only leg with zero fill has
-    # already disproved it once its quotes are resting: re-evaluate quickly
-    # against the best free market instead of waiting the whole window.
-    return min(window, max(20, min(90, queue*1.25)))
+    # Give the queue a real chance to trade. A zero-fill leg still gets a
+    # bounded wait, but never the old instantaneous hop: at least one minute,
+    # then the estimated queue, capped by the configured window.
+    return min(window, max(60, queue*1.25))
 
 
 def candidate_rank(candidate, results, now):

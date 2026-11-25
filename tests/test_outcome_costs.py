@@ -144,10 +144,10 @@ class OutcomeCostsTests(unittest.TestCase):
         self.assertEqual([r['market'] for r in result['candidates']], ['#201', '#101'])
         self.assertEqual([r['rank'] for r in result['candidates']], [1, 2])
 
-    def test_no_fill_grace_is_short_and_bounded_by_the_rotation_window(self):
-        self.assertEqual(no_fill_grace({'auto_rotation_after_sec': 180}, None), 20)
-        self.assertEqual(no_fill_grace({}, {'queue_proxy_sec': 40}), 50)
-        self.assertEqual(no_fill_grace({}, {'queue_proxy_sec': 600}), 90)
+    def test_no_fill_grace_waits_a_minute_and_never_exceeds_the_window(self):
+        self.assertEqual(no_fill_grace({'auto_rotation_after_sec': 180}, None), 60)
+        self.assertEqual(no_fill_grace({}, {'queue_proxy_sec': 40}), 60)
+        self.assertEqual(no_fill_grace({}, {'queue_proxy_sec': 600}), 180)
         self.assertEqual(no_fill_grace({'auto_rotation_after_sec': 30},
                                        {'queue_proxy_sec': 600}), 30)
 

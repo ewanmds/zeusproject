@@ -879,6 +879,10 @@ class OutcomeSupervisor:
             # duration/volume target; the user can stop it explicitly.
             values.update(session_expires_at=None, target_volume_usd=None,
                           session_volume_carry=0)
+            # Sessions launched during the short-window experiment must return
+            # to the standard dwell when recovered after this upgrade.
+            values["auto_rotation_after_sec"] = max(
+                180.0, float(values.get("auto_rotation_after_sec") or 180.0))
         old = read_json(journal_path) if Path(journal_path).exists() else {}
         old = old if isinstance(old, dict) else {}
         if not old.get("exposure_started"):

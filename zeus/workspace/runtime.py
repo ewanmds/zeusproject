@@ -277,9 +277,9 @@ class Runtimes:
                       max_position_usd=payload['position_cap'], auto_max_spread_bps=payload['spread_bps'],
                       # Low fills rotate to the next market. The logical
                       # session stays visible under one auto_group_id; it never
-                      # ends unless the user presses Stop. Keep the window
-                      # short: the operator wants volume, not a dormant queue.
-                      auto_rotate=True, auto_rotation_after_sec=60,
+                      # ends unless the user presses Stop. Keep a long enough
+                      # window for the post-only queue to actually fill.
+                      auto_rotate=True, auto_rotation_after_sec=180,
                       session_duration_sec=payload.get('duration_sec'), target_volume_usd=payload.get('target_volume_usd'),
                       session_stop_loss_usd=payload.get('stop_loss_usd', 50))
                 result = manager.start_worldcup(req)

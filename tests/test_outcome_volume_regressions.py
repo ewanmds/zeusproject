@@ -90,11 +90,11 @@ class FlatRotationTests(unittest.TestCase):
             self.assertEqual(group['best_rank'], 1)
             rotation.close()
 
-    def test_zero_fill_grace_uses_the_queue_estimate_not_the_full_window(self):
+    def test_zero_fill_waits_the_minimum_grace_before_moving(self):
         with tempfile.TemporaryDirectory() as folder:
             rotation, _, _, now = self.fixture(folder, volume_usd=0, fills=0)
             group = rotation.groups['group']
-            group['current_selection'] = {'queue_proxy_sec': 40}  # grace = 50 s
+            group['current_selection'] = {'queue_proxy_sec': 40}  # grace = 60 s
             group['started'] = now-40
             scan = dict(ready=True, updated_at=now, candidates=[
                 dict(market='#111', queue_proxy_sec=10, volume_usd_1m=900, rank=1),
@@ -103,7 +103,7 @@ class FlatRotationTests(unittest.TestCase):
             with patch('zeus.outcome_flow.scanner.snapshot', return_value=scan):
                 rotation.tick(now=now)
             self.assertFalse((Path(folder)/'drain.json').exists())
-            group['started'] = now-51
+            group['started'] = now-61
             scan['updated_at'] = now+1
             with patch('zeus.outcome_flow.scanner.snapshot', return_value=scan):
                 rotation.tick(now=now+1)
@@ -141,7 +141,7 @@ class FlatRotationTests(unittest.TestCase):
             self.assertIn('indisponible', rotation.groups['group']['reason'])
             rotation.close()
 
-    def test_filling_market_is_drained_when_its_volume_rank_decays(self):
+    def test_filling_market_keeps_its_queue_even_when_a_better_market_is_free(self):
         with tempfile.TemporaryDirectory() as folder:
             rotation, owner, row, now = self.fixture(folder)
             group = rotation.groups['group']
@@ -153,10 +153,9 @@ class FlatRotationTests(unittest.TestCase):
             ])
             with patch('zeus.outcome_flow.scanner.snapshot', return_value=scan):
                 rotation.tick(now=now)
-            drain = json.loads((Path(folder)/'drain.json').read_text())
-            self.assertEqual(drain['next_market'], '#111')
-            self.assertIn('volume', rotation.groups['group']['reason'])
-            self.assertEqual(rotation.groups['group']['state'], 'draining')
+            self.assertFalse((Path(folder)/'drain.json').exists())
+            self.assertEqual(rotation.groups['group']['state'], 'observing')
+            self.assertEqual(rotation.groups['group']['reason'], '')
             rotation.close()
 
     def test_fill_during_slow_scan_cancels_the_rotation_decision(self):
