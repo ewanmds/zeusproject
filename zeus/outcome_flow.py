@@ -28,6 +28,13 @@ FLOW_LIMITS = {
     'min_active_bins_1m': 2,
     'min_events_per_side_1m': 1,
     'max_median_gap_sec': 45,
+    # A high-volume two-way market can look "slow" only because its last
+    # minute contains one burst. Keep the steady path unchanged and add a
+    # material-flow path that still requires 5-minute recurrence.
+    'volume_exception_usd_1m': 250.0,
+    'volume_exception_min_side_usd_1m': 25.0,
+    'volume_exception_min_side_share': 0.10,
+    'volume_exception_min_bins_5m': 2,
 }
 NO_ELIGIBLE_FLOW_REASON = (
     'Flux trop irrégulier pour Auto : dernier trade ≤45 s et activité dans les deux sens sur 60 s.'
@@ -67,6 +74,7 @@ def flow_metrics(trades, now):
     buy = sum(p*q for _, p, q, side in recent if side == "B")
     sell = sum(p*q for _, p, q, side in recent if side == "A")
     bins = {int((now-t)//10) for t, _, _, _ in recent}
+    bins_5m = {int((now-t)//10) for t, _, _, _ in values}
     directions = {s: len({int(t) for t, _, _, side in recent if side == s}) for s in ("A", "B")}
     age = max(0, now-values[-1][0])
     span = values[-1][0]-values[0][0]
@@ -76,15 +84,31 @@ def flow_metrics(trades, now):
     balanced = 2*buy*sell/(buy+sell) if buy+sell else 0
     coverage = min(1, len(bins)/6)
     score = balanced * coverage * math.exp(-age/20)
-    eligible = (len(events) >= FLOW_LIMITS['min_event_seconds']
+    volume = buy+sell
+    min_side = min(buy, sell)
+    steady = (len(events) >= FLOW_LIMITS['min_event_seconds']
+              and span >= FLOW_LIMITS['min_span_sec']
+              and age <= FLOW_LIMITS['max_trade_age_sec']
+              and len(bins) >= FLOW_LIMITS['min_active_bins_1m']
+              and min(directions.values()) >= FLOW_LIMITS['min_events_per_side_1m']
+              and cadence <= FLOW_LIMITS['max_median_gap_sec'])
+    # Material two-way flow: admit repeated, high-volume markets whose last
+    # minute is one burst (one 10 s bin / few unique seconds). A single
+    # same-second sweep is still rejected: it has one 5-minute bin and/or no
+    # 20 s span. This path never relaxes age, book, spread or depth guards.
+    material = (volume >= FLOW_LIMITS['volume_exception_usd_1m']
+                and min_side >= max(FLOW_LIMITS['volume_exception_min_side_usd_1m'],
+                                    FLOW_LIMITS['volume_exception_min_side_share']*volume)
                 and span >= FLOW_LIMITS['min_span_sec']
                 and age <= FLOW_LIMITS['max_trade_age_sec']
-                and len(bins) >= FLOW_LIMITS['min_active_bins_1m']
-                and min(directions.values()) >= FLOW_LIMITS['min_events_per_side_1m']
-                and cadence <= FLOW_LIMITS['max_median_gap_sec'])
-    return {"score": score, "eligible": eligible, "trades_5m": len(values),
-            "events_5m": len(events), "active_bins_1m": len(bins), "span_sec": span,
-            "buy_usd_1m": buy, "sell_usd_1m": sell, "volume_usd_1m": buy+sell,
+                and len(bins_5m) >= FLOW_LIMITS['volume_exception_min_bins_5m'])
+    eligible = steady or material
+    flow_mode = 'steady' if steady else 'burst' if material else 'none'
+    return {"score": score, "eligible": eligible, "flow_mode": flow_mode,
+            "trades_5m": len(values), "events_5m": len(events),
+            "active_bins_1m": len(bins), "active_bins_5m": len(bins_5m),
+            "span_sec": span, "min_side_usd_1m": min_side,
+            "buy_usd_1m": buy, "sell_usd_1m": sell, "volume_usd_1m": volume,
             "balanced_usd_1m": balanced, "last_trade_age_sec": age,
             "buy_events_1m": directions['B'], "sell_events_1m": directions['A'],
             "median_gap_sec": cadence,
@@ -135,6 +159,14 @@ class OutcomeFlowScanner:
         self.book_lock = threading.Lock()
         self.book_subscribed = set()
         self.subscription_error = ""
+        # A websocket book is the current state until the exchange pushes a
+        # change. Its exchange timestamp is the last change, not an expiry.
+        self.book_received = {}
+        self.book_live = {}
+        self.book_refresh_at = {}
+        self.book_rate_lock = threading.Lock()
+        self.book_next_rest = 0.0
+        self.book_backoff_until = 0.0
         self.snapshot_lock = threading.Lock()
         self.snapshot_cache = {}
         self.catalog_revision = 0
@@ -180,7 +212,12 @@ class OutcomeFlowScanner:
             for coin in list(self.history):
                 if int(coin[1:])//10 not in rows:
                     self.history.pop(coin, None)
+            for coin in list(self.books):
+                if int(coin[1:])//10 not in rows:
                     self.books.pop(coin, None)
+                    self.book_received.pop(coin, None)
+                    self.book_live.pop(coin, None)
+                    self.book_refresh_at.pop(coin, None)
             self.subscribed = {c for c in self.subscribed if int(c[1:])//10 in rows}
             if self.thread is None or not self.thread.is_alive():
                 self.stop.clear()
@@ -236,6 +273,13 @@ class OutcomeFlowScanner:
                                 # 450 outcomes * two trade subscriptions + 48
                                 # L2 books stays below Hyperliquid's 1000-sub limit.
                                 wanted_books = set(sorted(watched, key=watched.get, reverse=True)[:48])
+                                # Quiet books legitimately send no updates. Ask
+                                # the websocket for a fresh snapshot periodically
+                                # instead of polling the REST API.
+                                refresh_books = {
+                                    coin for coin in wanted_books & acked_books
+                                    if now - self.book_received.get(coin, 0) > 45
+                                    and now - self.book_refresh_at.get(coin, 0) > 45}
                             # Unsubscribe from books no longer watched, including
                             # subscriptions the server never acknowledged.
                             for coin in sorted((set(sent_books) | acked_books) - wanted_books):
@@ -257,6 +301,17 @@ class OutcomeFlowScanner:
                                 ws.send(json.dumps({'method': 'subscribe',
                                                     'subscription': {'type': 'l2Book', 'coin': coin}}))
                                 sent_books[coin] = now
+                                with self.lock:
+                                    self.book_refresh_at[coin] = now
+                            # Re-subscribing returns a full snapshot without any
+                            # REST call. Staggered by the 45 s receipt window.
+                            for coin in sorted(refresh_books):
+                                if self.stop.is_set() or self.ws is not ws or not self.connected:
+                                    return
+                                ws.send(json.dumps({'method': 'subscribe',
+                                                    'subscription': {'type': 'l2Book', 'coin': coin}}))
+                                with self.lock:
+                                    self.book_refresh_at[coin] = now
                             self.stop.wait(1)
                     except Exception:
                         failed(ws, None)
@@ -317,10 +372,13 @@ class OutcomeFlowScanner:
                 if not isinstance(data, dict):
                     return
                 coin = data.get('coin', '')
+                now = time.time()
                 with self.lock:
                     if (coin in self.book_watch or coin in self.book_subscribed
                             or int(coin[1:])//10 in self.rows):
-                        self.books[coin] = (time.time(), data)
+                        self.books[coin] = (now, data)
+                        self.book_received[coin] = now
+                        self.book_live[coin] = self.generation
                         if coin in self.book_watch:
                             # A delivered book is proof the subscription works,
                             # even if its ack frame was lost.
@@ -373,20 +431,47 @@ class OutcomeFlowScanner:
                 except (KeyError, TypeError, ValueError):
                     continue
 
+    def _rest_book_allowed(self):
+        """Global REST budget: live websocket books need no HTTP polling."""
+        now = time.monotonic()
+        with self.book_rate_lock:
+            if now < self.book_backoff_until or now < self.book_next_rest:
+                return False
+            self.book_next_rest = now + 1/3
+            return True
+
     def _book(self, coin):
+        now = time.time()
         with self.lock:
             cached = self.books.get(coin)
-        if cached and time.time()-cached[0] < 1:
+            received = self.book_received.get(coin, cached[0] if cached else 0)
+            live = bool(cached and self.connected
+                        and self.book_live.get(coin) == self.generation
+                        and now-received <= 60)
+        # An acknowledged l2Book subscription is the current book state.
+        # Its exchange timestamp is the last change, not an expiry.
+        if live:
             return cached[1]
+        if cached and now-cached[0] < 1:
+            return cached[1]
+        if not self._rest_book_allowed():
+            return cached[1] if cached else None
         try:
             r = _http().post("https://api.hyperliquid.xyz/info", json={"type": "l2Book", "coin": coin}, timeout=3)
+            if r.status_code == 429:
+                with self.book_rate_lock:
+                    self.book_backoff_until = time.monotonic()+10
+                return cached[1] if cached else None
             r.raise_for_status()
             book = r.json()
+            received = time.time()
             with self.lock:
-                self.books[coin] = (time.time(), book)
+                self.books[coin] = (received, book)
+                self.book_received[coin] = received
+                self.book_live.pop(coin, None)
             return book
         except (requests.RequestException, ValueError):
-            return None
+            return cached[1] if cached else None
 
     def snapshot(self, side="no", order_usd=50, max_spread_bps=10, *, account=None):
         from zeus.outcome_costs import maker_profile
@@ -423,6 +508,9 @@ class OutcomeFlowScanner:
             rows = list(self.rows.values())
             history = {coin: list(values) for coin, values in self.history.items() if coin.endswith(suffix)}
             books = dict(self.books)
+            book_received = dict(self.book_received)
+            book_live = dict(self.book_live)
+            generation = self.generation
             connected = self.connected
             cached = [value[1] for key, value in self.snapshot_cache.items()
                       if key[:3] == (side, order_usd, max_spread_bps)
@@ -447,7 +535,9 @@ class OutcomeFlowScanner:
                 elif metric['last_trade_age_sec'] > FLOW_LIMITS['max_trade_age_sec']:
                     reason = 'Dernier trade trop ancien'
                 elif not metric['eligible']:
-                    reason = 'Cadence encore insuffisante'
+                    reason = ('Flux trop bref (rafale unique)'
+                              if metric['volume_usd_1m'] >= FLOW_LIMITS['volume_exception_usd_1m']
+                              else 'Cadence encore insuffisante')
                 else:
                     reason = 'Carnet à vérifier'
             book = books.get(coin)
@@ -457,15 +547,23 @@ class OutcomeFlowScanner:
                     bid, ask = data['levels'][0][0], data['levels'][1][0]
                     bp, ap = float(bid['px']), float(ask['px'])
                     bq, aq = float(bid['sz']), float(ask['sz'])
-                    book_age = max(0, now-float(data['time'])/1000)
-                    # Display the last book for up to 60 s; admission below
-                    # still requires a fresh snapshot with a <=5 s book.
-                    if 0 < bp < ap < 1 and -1 <= book_age <= 60:
+                    received = book_received.get(coin)
+                    live = bool(connected and book_live.get(coin) == generation)
+                    try:
+                        exchange_age = now-float(data['time'])/1000
+                    except (KeyError, TypeError, ValueError):
+                        exchange_age = 0.0
+                    book_age = max(0, now-received) if received is not None else max(0, exchange_age)
+                    # A live websocket book is current until a change arrives.
+                    # Display the last book for up to 60 s; a cold/REST book
+                    # still needs a recent receipt for admission.
+                    if 0 < bp < ap < 1 and book_age <= 60 and exchange_age >= -1:
                         item['spread_bps'] = 10000*(ap-bp)/((ap+bp)/2)
                         item['book_age_sec'] = book_age
                         if metric:
-                            sell_tokens = metric.get('sell_tokens_1m') or 0
-                            buy_tokens = metric.get('buy_tokens_1m') or 0
+                            coverage = max(1/6, min(1, float(metric.get('active_bins_1m', 0))/6))
+                            sell_tokens = (metric.get('sell_tokens_1m') or 0)*coverage
+                            buy_tokens = (metric.get('buy_tokens_1m') or 0)*coverage
                             if sell_tokens > 0 and buy_tokens > 0:
                                 item['queue_proxy_sec'] = max(
                                     60*(bq+order_usd/bp)/sell_tokens,
@@ -481,7 +579,7 @@ class OutcomeFlowScanner:
                                 item.update(maker_close_fee_bps=None, net_touch_edge_bps=None,
                                             fees_covered=None, cost_status='unavailable')
                         if metric and metric['eligible']:
-                            if book_age > 5:
+                            if not live and book_age > 5:
                                 reason = 'Carnet ancien (%d s)' % round(book_age)
                             elif min(bq*bp, aq*ap) < order_usd:
                                 reason = 'Profondeur insuffisante'
@@ -547,6 +645,9 @@ class OutcomeFlowScanner:
                     continue
                 history[coin] = list(trades)
             rows = dict(self.rows)
+            book_received = dict(self.book_received)
+            book_live = dict(self.book_live)
+            connected = status["connected"]
         def not_ready(detail=""):
             if status.get("error"):
                 status["reason"] = "Scanner indisponible: " + str(status["error"])
@@ -603,16 +704,27 @@ class OutcomeFlowScanner:
         rejected_book = rejected_depth = rejected_spread = 0
         widest_spread = 0.0
         deepest_book = 0.0
+        book_now = time.time()
         for item, book in zip(targets, books):
+            if not isinstance(book, dict):
+                rejected_book += 1
+                continue
             try:
                 bids, asks = book["levels"]
                 bid, ask = float(bids[0]["px"]), float(asks[0]["px"])
                 bq, aq = float(bids[0]["sz"]), float(asks[0]["sz"])
-                age = time.time()-float(book["time"])/1000
+                coin = item["market"]
+                exchange_age = book_now-float(book["time"])/1000
+                received = book_received.get(coin)
+                live = bool(connected and book_live.get(coin) == generation)
+                # A live l2Book is current until the exchange pushes a change.
+                # Only cold/REST books and old connections use a short age.
+                age = book_now-received if received is not None else exchange_age
+                stale = (not (live and age <= 60)) if received is not None else not (-1 <= age <= 5)
                 spread = 10000*(ask-bid)/((bid+ask)/2)
                 depth = min(bq*bid, aq*ask)
-                if (not all(map(math.isfinite, (bid, ask, bq, aq, age, spread)))
-                        or not 0 < bid < ask < 1 or not -1 <= age <= 5):
+                if (not all(map(math.isfinite, (bid, ask, bq, aq, exchange_age, spread)))
+                        or not 0 < bid < ask < 1 or exchange_age < -1 or stale):
                     rejected_book += 1
                     continue
                 widest_spread = max(widest_spread, spread)
@@ -625,11 +737,16 @@ class OutcomeFlowScanner:
                     continue
                 # Queue clearance proxy, not a fill promise; use token flow so
                 # quote token prices cannot distort the displayed queue size.
-                wait_buy = 60*(bq+order_usd/bid)/item["sell_tokens_1m"]
-                wait_sell = 60*(aq+order_usd/ask)/item["buy_tokens_1m"]
+                # A one-bin burst overstates the flow that remains available.
+                coverage = max(1/6, min(1, float(item.get("active_bins_1m", 0))/6))
+                sell_tokens = max(1e-9, item["sell_tokens_1m"]*coverage)
+                buy_tokens = max(1e-9, item["buy_tokens_1m"]*coverage)
+                wait_buy = 60*(bq+order_usd/bid)/sell_tokens
+                wait_sell = 60*(aq+order_usd/ask)/buy_tokens
                 item.update(bid=bid, ask=ask, spread_bps=spread,
                     depth_bid_usd=bq*bid, depth_ask_usd=aq*ask,
-                    book_updated_at=float(book['time'])/1000,
+                    book_updated_at=book_now if live else (
+                        received if received is not None else float(book['time'])/1000),
                     queue_proxy_sec=max(wait_buy, wait_sell))
                 try:
                     item.update(candidate_cost(item, base_rate))

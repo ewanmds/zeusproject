@@ -53,6 +53,12 @@ class OutcomeMakerConfigTests(unittest.TestCase):
         self.assertTrue(build_config(public, None).resume_trading)
         self.assertFalse(build_config(public, None).resume_exit)
 
+    def test_outcome_worker_keeps_rest_bbo_as_a_slow_fallback(self):
+        cfg = make_config()
+        self.assertEqual(cfg.rest_bbo_hz, 2)
+        self.assertEqual(cfg.rest_max_per_sweep, 1)
+        self.assertEqual(cfg.rest_429_backoff_sec, 5)
+
 
 class OutcomeSafetyGateTests(unittest.TestCase):
     def test_strict_maker_spot_blocks_market_and_crossing_orders(self):

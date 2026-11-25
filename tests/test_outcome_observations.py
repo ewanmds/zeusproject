@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from zeus.outcome_flow import OutcomeFlowScanner
 from test_outcome_flow_moderate import NOW, trades
@@ -129,3 +129,76 @@ class ObservationsTests(unittest.TestCase):
             scan.connected_at = NOW-200
             scan._mark_open()
             self.assertEqual(scan.connected_at, NOW)
+
+    def test_live_ws_book_is_current_even_when_the_exchange_timestamp_is_old(self):
+        scan = self.scanner()
+        scan.rows[10].update(fee_scale=1, deployer_fee_scale=1)
+        scan.history['#101'].clear()
+        scan.history['#101'].extend(trades())
+        # The exchange timestamp is the last change (90 s ago); the websocket
+        # delivered this unchanged book 20 s ago on the current connection.
+        book = {'time': int((NOW-90)*1000),
+                'levels': [[{'px': '.5', 'sz': '1000'}],
+                           [{'px': '.5001', 'sz': '1000'}]]}
+        scan.generation = 3
+        scan.connected = True
+        scan.book_received['#101'] = NOW-20
+        scan.book_live['#101'] = 3
+        scan.books['#101'] = (NOW-20, book)
+        with patch('zeus.outcome_flow.time.time', return_value=NOW), \
+                ThreadPoolExecutor(1) as pool, \
+                patch.object(scan, '_book_executor', return_value=pool), \
+                patch.object(scan, '_book', return_value=book):
+            result = scan.snapshot('no', 110, 10)
+            observed = scan.observations('no', 110, 10)['observed_markets'][0]
+        self.assertTrue(result['ready'])
+        self.assertEqual(result['candidates'][0]['market'], '#101')
+        self.assertTrue(observed['auto_eligible'])
+        self.assertNotIn('Carnet ancien', observed['eligibility_reason'])
+
+    def test_book_from_a_previous_connection_is_not_admitted(self):
+        scan = self.scanner()
+        scan.rows[10].update(fee_scale=1, deployer_fee_scale=1)
+        scan.history['#101'].clear()
+        scan.history['#101'].extend(trades())
+        book = {'time': int(NOW*1000),
+                'levels': [[{'px': '.5', 'sz': '1000'}],
+                           [{'px': '.5001', 'sz': '1000'}]]}
+        scan.generation = 4
+        scan.connected = True
+        scan.book_received['#101'] = NOW-20
+        scan.book_live['#101'] = 3  # received before the reconnect
+        scan.books['#101'] = (NOW-20, book)
+        with patch('zeus.outcome_flow.time.time', return_value=NOW), \
+                ThreadPoolExecutor(1) as pool, \
+                patch.object(scan, '_book_executor', return_value=pool), \
+                patch.object(scan, '_book', return_value=book):
+            result = scan._snapshot('no', 110, 10, base_rate=0)
+        self.assertFalse(result['ready'])
+
+    def test_rest_book_budget_prevents_api_bursts(self):
+        scan = OutcomeFlowScanner()
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            'time': int(NOW*1000),
+            'levels': [[{'px': '.5', 'sz': '100'}], [{'px': '.5001', 'sz': '100'}]],
+        }
+        with patch('zeus.outcome_flow.time.monotonic', return_value=100.0), \
+                patch('zeus.outcome_flow._http') as http:
+            http.return_value.post.return_value = response
+            for index in range(6):
+                scan._book(f'#{100+index}')
+        self.assertEqual(http.return_value.post.call_count, 1)
+
+    def test_rest_429_backs_off_before_the_next_book(self):
+        scan = OutcomeFlowScanner()
+        limited = Mock()
+        limited.status_code = 429
+        with patch('zeus.outcome_flow.time.monotonic', return_value=100.0), \
+                patch('zeus.outcome_flow._http') as http:
+            http.return_value.post.return_value = limited
+            scan._book('#101')
+            scan._book('#102')
+        self.assertEqual(http.return_value.post.call_count, 1)
+        self.assertGreater(scan.book_backoff_until, 100.1)

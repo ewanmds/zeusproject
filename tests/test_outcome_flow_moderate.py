@@ -63,6 +63,56 @@ class ModerateFlowTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(self.run_scan(self.scanner(history))['ready'])
 
+    def test_high_volume_repeated_burst_is_admitted(self):
+        # $800 in the last minute, split in two bursts 70 s apart. The last
+        # minute has only one 10 s bin, but the 5-minute history proves the
+        # market is repeatedly two-way.
+        history = [
+            dict(coin='#101', time=(NOW-age)*1000, px='.5', sz='800',
+                 side=side, tid=index)
+            for index, (age, side) in enumerate(zip((76, 75, 6, 5), ('B', 'A', 'B', 'A')))
+        ]
+        metric = flow_metrics(history, NOW)
+        self.assertTrue(metric['eligible'])
+        self.assertEqual(metric['flow_mode'], 'burst')
+        self.assertEqual(metric['volume_usd_1m'], 800)
+        self.assertEqual(metric['active_bins_1m'], 1)
+        self.assertEqual(metric['active_bins_5m'], 2)
+
+    def test_high_volume_single_burst_or_one_sided_flow_stays_excluded(self):
+        burst = [
+            dict(coin='#101', time=(NOW-age)*1000, px='.5', sz='400',
+                 side=side, tid=index)
+            for index, (age, side) in enumerate(zip((6, 6, 5, 5), ('B', 'A', 'B', 'A')))
+        ]
+        metric = flow_metrics(burst, NOW)
+        self.assertFalse(metric['eligible'])
+        self.assertEqual(metric['flow_mode'], 'none')
+        self.assertEqual(metric['active_bins_5m'], 1)
+
+        one_sided = [
+            dict(coin='#101', time=(NOW-age)*1000, px='.5', sz='400',
+                 side='B', tid=index)
+            for index, age in enumerate((76, 75, 6, 5))
+        ]
+        metric = flow_metrics(one_sided, NOW)
+        self.assertFalse(metric['eligible'])
+        self.assertEqual(metric['min_side_usd_1m'], 0)
+
+    def test_material_flow_floor_keeps_small_bursts_out(self):
+        for size, expected in ((249, False), (251, True)):
+            with self.subTest(size=size):
+                history = [
+                    dict(coin='#101', time=(NOW-age)*1000, px='.5', sz=str(size),
+                         side=side, tid=index)
+                    for index, (age, side) in enumerate(zip((76, 75, 6, 5),
+                                                            ('B', 'A', 'B', 'A')))
+                ]
+                metric = flow_metrics(history, NOW)
+                self.assertEqual(metric['eligible'], expected)
+                if expected:
+                    self.assertEqual(metric['flow_mode'], 'burst')
+
     def test_book_freshness_spread_and_user_depth_budget_are_unchanged(self):
         for name, book in (
             ('shallow', self.book(quantity='100')),
