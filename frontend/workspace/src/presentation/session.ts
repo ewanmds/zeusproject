@@ -9,6 +9,14 @@ export function sessionVisible(
   return filter === "active" ? session.running : !session.running;
 }
 
+/** A pending Stop disappears from the live count immediately. */
+export function activeSessionCount(
+  sessions: Pick<Session, "id" | "running">[],
+  pendingStops: Record<string, number>,
+) {
+  return sessions.filter((s) => s.running && !pendingStops[s.id]).length;
+}
+
 export function sessionProgress(session: Session, extraSeconds = 0) {
   const duration =
     session.config.session_duration_sec ?? session.config.duration_sec;

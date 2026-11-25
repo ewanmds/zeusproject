@@ -68,16 +68,16 @@ export function LandingView({
       <section className="landing-hero">
         <div className="landing-copy">
           <span className="landing-kicker">
-            <Icon name="auto" size={15} />
-            Market making Hyperliquid
+            <Icon name="shield" size={15} />
+            Post-only · Non-custodial · Hyperliquid
           </span>
           <h1>
             Le market making,
             <span className="landing-accent"> sans surveillance.</span>
           </h1>
           <p className="landing-lead">
-            Des sessions post-only sur Outcome et HIP-3, avec rotation à plat et
-            arrêt attribué.
+            Des sessions post-only sur Outcome et HIP-3. Rotation à plat, arrêt
+            attribué, fonds conservés sur Hyperliquid.
           </p>
           <div className="landing-actions">
             <button
@@ -106,9 +106,9 @@ export function LandingView({
                 </span>
                 Session Auto Outcome
               </span>
-              <span className="preview-live">
+              <span className="preview-live preview-static">
                 <i aria-hidden="true" />
-                En direct
+                Aperçu
               </span>
             </div>
             <div className="preview-market">
@@ -151,14 +151,17 @@ export function LandingView({
               <Icon name="shield" size={14} />
               Post-only. Aucun ordre taker non autorisé.
             </div>
+            <p className="preview-caption">
+              Exemple de session — aucune donnée réelle.
+            </p>
           </section>
         </div>
       </section>
 
       <section className="landing-section" aria-labelledby="features-title">
         <div className="landing-section-head">
-          <h2 id="features-title">Ce que Zeus exécute.</h2>
-          <p>Trois stratégies, un seul niveau de contrôle.</p>
+          <h2 id="features-title">Trois stratégies. Trois garde-fous.</h2>
+          <p>Le même niveau de contrôle, quel que soit le mode de cotation.</p>
         </div>
         <div className="feature-grid">
           {features.map((feature) => (

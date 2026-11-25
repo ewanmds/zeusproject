@@ -20,7 +20,6 @@ export function AccountView({
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">VOTRE WORKSPACE</span>
           <h1>Votre compte.</h1>
         </div>
       </div>
@@ -47,7 +46,6 @@ export function AccountView({
           </WalletCard>
           <section className="panel authorization">
             <SessionStepper connected ready={ready} />
-            <span className="eyebrow">AUTORISATION HYPERLIQUID</span>
             <h2>
               Connecté.
               <br />

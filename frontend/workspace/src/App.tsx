@@ -10,7 +10,7 @@ import { Icon, Modal, Pending } from "./ui";
 import { FeedbackButton } from "./components/FeedbackButton";
 import type { Draft, View, Session, Agent, Operation, Snapshot } from "./types";
 import { resolveStopSnapshot } from "./presentation/stop";
-import { sessionVisible } from "./presentation/session";
+import { activeSessionCount, sessionVisible } from "./presentation/session";
 import { NavDock } from "./components/layout";
 import { Kbd } from "./components/fields";
 import { useMobile } from "./components/Dialog";
@@ -62,6 +62,7 @@ export default function App() {
   const [selected, setSelected] = useState<Session | null>(null);
   const [pendingStops, setPendingStops] = useState<Record<string, number>>({});
   const stopRequests = useRef(new Set<string>());
+  const [scrolled, setScrolled] = useState(false);
   const [filter, setFilter] = useState("active"),
     [period, setPeriod] = useState(7),
     [now, setNow] = useState(Date.now());
@@ -84,6 +85,12 @@ export default function App() {
   useEffect(() => {
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(tick);
+  }, []);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
   useEffect(() => {
     const change = () => {
@@ -181,7 +188,7 @@ export default function App() {
         )
           setScanner((old: any) => ({ ...old, observation_error: true }));
       } finally {
-        if (alive) timers[observed ? "observed" : "full"] = window.setTimeout(() => refresh(observed), observed ? 2000 : 10000);
+        if (alive) timers[observed ? "observed" : "full"] = window.setTimeout(() => refresh(observed), observed ? 2000 : 5000);
       }
     };
     timers.full = window.setTimeout(() => refresh(false), 350);
@@ -415,6 +422,7 @@ export default function App() {
   const filtered = sessions.filter(
     (s) => !pendingStops[s.id] && sessionVisible(s, filter),
   );
+  const activeCount = activeSessionCount(sessions, pendingStops);
   const history = sessions.filter(
     (s) => s.started >= now / 1000 - period * 86400,
   );
@@ -472,14 +480,14 @@ export default function App() {
       <a className="skip" href="#main">
         Aller au contenu
       </a>
-      <header className="header">
+      <header className={"header" + (scrolled ? " is-scrolled" : "")}>
         <a className="brand" href="#run" aria-label="Zeus, accueil">
           <span className="brand-mark">Z</span>
           <span>
-            Zeus<span className="brand-sub">TRADING WORKSPACE</span>
+            Zeus<span className="brand-sub">ESPACE DE TRADING</span>
           </span>
         </a>
-        {owner && <NavDock view={view} active={metrics?.active || 0} />}
+        {owner && <NavDock view={view} active={activeCount} />}
         <div className="header-actions">
           {owner ? (
             <>

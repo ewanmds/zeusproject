@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "../types";
-import { aggregate, sessionProgress, sessionVisible } from "./session";
+import { aggregate, sessionProgress, sessionVisible, activeSessionCount } from "./session";
 const session = {
   running: true,
   stale: false,
@@ -19,6 +19,16 @@ describe("real session projections", () => {
     expect(sessionVisible({ ...session, running: false }, "closed")).toBe(true);
     expect(sessionVisible({ ...session, running: true }, "closed")).toBe(false);
     expect(sessionVisible({ ...session, running: false }, "all")).toBe(true);
+  });
+  it("drops a pending stop from the live badge immediately", () => {
+    const rows = [
+      { id: "a", running: true },
+      { id: "b", running: true },
+      { id: "c", running: false },
+    ];
+    expect(activeSessionCount(rows, {})).toBe(2);
+    expect(activeSessionCount(rows, { a: 1 })).toBe(1);
+    expect(activeSessionCount(rows, { a: 1, b: 1 })).toBe(0);
   });
   it("does not invent a target for a manual session", () =>
     expect(sessionProgress(session)).toBeNull());

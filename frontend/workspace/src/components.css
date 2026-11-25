@@ -1,6 +1,6 @@
 /* Layro components share the original Zeus tokens. No second styling framework. */
 .button.primary {
-  background: var(--purple-hover);
+  background: var(--purple);
 }
 .halo-input {
   transition:
@@ -334,7 +334,7 @@
   border-radius: 50%;
   background: var(--gold);
 }
-.wallet-panel .account-card {
+.account-card.wallet-panel {
   text-align: left;
 }
 .wallet-panel .address {
@@ -612,7 +612,7 @@
 .session-progress {
   margin: 14px 0 22px;
 }
-.session-progress label {
+.session-progress-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -908,7 +908,7 @@
     width: 44px;
     height: 44px;
   }
-  .session-progress label {
+  .session-progress-row {
     font-size: 12px;
   }
   .metric-label {

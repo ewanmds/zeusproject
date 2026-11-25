@@ -65,7 +65,6 @@ export function Dialog({
       )}
       <div className="modal-head">
         <div>
-          <span className="eyebrow">ZEUS WORKSPACE</span>
           <h2>{title}</h2>
         </div>
         <button

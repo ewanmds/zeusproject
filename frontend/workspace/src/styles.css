@@ -161,6 +161,14 @@ small {
   position: sticky;
   top: 0;
   z-index: 20;
+  transition: height .2s ease, background .2s ease, box-shadow .2s ease;
+}
+@media (min-width: 721px) {
+  .header.is-scrolled {
+    height: 72px;
+    background: rgba(9, 13, 22, 0.985);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
+  }
 }
 .brand {
   display: flex;

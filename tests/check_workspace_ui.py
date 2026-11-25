@@ -136,7 +136,7 @@ def main():
                     page.get_by_role('link',name='Lancer',exact=True).click()
                     # Real SIWE cookie, CSRF and encrypted agent preparation/approval.
                     page.get_by_role('button',name='Vérifier et lancer',exact=True).count()
-                    page.get_by_role('button',name='Autoriser le trading',exact=True).click()
+                    page.get_by_role('button',name="Continuer vers l'autorisation",exact=True).click()
                     expect(page.get_by_role('heading',name='Votre compte.')).to_be_visible()
                     if width==1440:
                         expect(page.locator('[data-layro="preetsuthar17/skeleton"]')).to_be_visible();record(page)

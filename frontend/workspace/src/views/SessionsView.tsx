@@ -196,7 +196,6 @@ export function SessionsView({
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">ACTIVITÉ DU COMPTE</span>
           <h1>Vos sessions.</h1>
         </div>
         <button

@@ -18,7 +18,7 @@ export function SessionProgress({
   if (!progress) return null;
   return (
     <div className="session-progress" data-layro="nolly-studio/halo-progress">
-      <label>
+      <div className="session-progress-row" aria-label={progress.label}>
         <span>
           {progress.label} ·{" "}
           {progress.kind === "duration"
@@ -37,7 +37,7 @@ export function SessionProgress({
             progress.percent == null ? "Progression inconnue" : undefined
           }
         />
-      </label>
+      </div>
     </div>
   );
 }

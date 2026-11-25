@@ -37,7 +37,6 @@ export function RunView({
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">VOTRE PROCHAINE SESSION</span>
           <h1>Lancer, simplement.</h1>
         </div>
         <span className="environment">
@@ -411,12 +410,11 @@ export function RunView({
         </section>
         <aside className="panel summary">
           <div className="summary-top">
-            <span className="eyebrow">RÉCAPITULATIF</span>
             <span className="summary-icon">
-              <Icon name="spark" />
+              <Icon name="shield" />
             </span>
           </div>
-          <h2>Votre session.</h2>
+          <h2>Résumé de l'ordre.</h2>
           <div className="available">
             <span>Solde spot disponible</span>
             <strong>
@@ -460,8 +458,28 @@ export function RunView({
               </div>
             )}
             <div>
-              <dt>Compte de trading</dt>
-              <dd>{owner ? short(owner) : "Non connecté"}</dd>
+              <dt>Fin de session</dt>
+              <dd>
+                {draft.duration_sec
+                  ? `${Math.round(draft.duration_sec / 60)} min`
+                  : draft.target_volume_usd
+                    ? `${usd(draft.target_volume_usd)} de volume`
+                    : "Manuelle"}
+              </dd>
+            </div>
+            <div>
+              <dt>Seuil de perte</dt>
+              <dd>{usd(draft.stop_loss_usd)}</dd>
+            </div>
+            <div>
+              <dt>Compte Hyperliquid</dt>
+              <dd>
+                {w.identity?.account
+                  ? short(w.identity.account)
+                  : owner
+                    ? short(owner)
+                    : "Non connecté"}
+              </dd>
             </div>
           </dl>
           <div className="summary-bottom">
@@ -484,7 +502,7 @@ export function RunView({
                 {!owner
                   ? "Connecter mon wallet"
                   : !ready
-                    ? "Autoriser le trading"
+                    ? "Continuer vers l'autorisation"
                     : "Vérifier et lancer"}
                 <Icon name="arrow" size={18} />
               </>

@@ -31,7 +31,6 @@ export function PerformanceView({
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">VOS RÉSULTATS</span>
           <h1>Une vue claire.</h1>
         </div>
         <SegmentedControl
