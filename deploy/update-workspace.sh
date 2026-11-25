@@ -9,6 +9,14 @@ cd "$ROOT"
 if [[ "$ROOT" != /home/ec2-user/zeusproject || $(id -un) != ec2-user ]]; then
   echo 'This deployment targets ec2-user and /home/ec2-user/zeusproject.' >&2; exit 1
 fi
+# Node builds need headroom on the root volume. Fail before a partial install
+# fills the disk and leaves the service serving a stale bundle.
+FREE_KB=$(df -Pk "$ROOT" | awk 'END {print $4}')
+if [[ ${FREE_KB:-0} -lt 1572864 ]]; then
+  echo "Only $((FREE_KB / 1024)) MB free on the workspace volume; at least 1.5 GB is required." >&2
+  echo 'Run deploy/free-workspace-space.sh, then retry.' >&2
+  exit 1
+fi
 git diff --quiet && git diff --cached --quiet || { echo 'Commit or preserve local source changes first.' >&2; exit 1; }
 # Validate an actual permitted command: sudo -v can prompt despite NOPASSWD
 # when the user's sudoers entries have different authentication tags.
