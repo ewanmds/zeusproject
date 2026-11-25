@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from zeus.outcome_costs import base_maker_rate, closing_rate, net_edge_bps, maker_profile
-from zeus.outcome_flow import OutcomeFlowScanner
+from zeus.outcome_flow import OutcomeFlowScanner, no_fill_grace
 from zeus.bots.outcome_worker import build_config
 from zeus.bots.worldcup import HyperliquidSpreadBot, MarketState, MarketSpec, SessionStats
 
@@ -143,6 +143,13 @@ class OutcomeCostsTests(unittest.TestCase):
             result = scan._snapshot('no', 15, 10, base_rate=.000384)
         self.assertEqual([r['market'] for r in result['candidates']], ['#201', '#101'])
         self.assertEqual([r['rank'] for r in result['candidates']], [1, 2])
+
+    def test_no_fill_grace_is_short_and_bounded_by_the_rotation_window(self):
+        self.assertEqual(no_fill_grace({'auto_rotation_after_sec': 180}, None), 20)
+        self.assertEqual(no_fill_grace({}, {'queue_proxy_sec': 40}), 50)
+        self.assertEqual(no_fill_grace({}, {'queue_proxy_sec': 600}), 90)
+        self.assertEqual(no_fill_grace({'auto_rotation_after_sec': 30},
+                                       {'queue_proxy_sec': 600}), 30)
 
     def test_unknown_fee_profile_or_metadata_does_not_hide_eligible_flow(self):
         for base in [None, .000384]:

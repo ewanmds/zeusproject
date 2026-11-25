@@ -195,11 +195,6 @@ class OutcomeSupervisor:
                         continue  # explicit hard shutdown, never auto-trade again
                 meta = read_json(path) if Path(path).exists() else record
                 meta = meta if isinstance(meta, dict) else record
-                if meta.get('pending_cloids') or record.get('pending_cloids'):
-                    # A fresh worker cannot resolve an unknown placement; keep
-                    # one stable unconfirmed row instead of spawning repeatedly.
-                    self._recovery.pop(sid, None)
-                    continue
                 # The explicit taker grant is durable in the journal even when
                 # a repeated crash leaves no marker on the successor runtime.
                 manual_taker = manual_taker or bool(meta.get('manual_taker_close_requested'))
@@ -231,10 +226,10 @@ class OutcomeSupervisor:
                     # A terminal session with no live worker can be archived as
                     # soon as the exchange proves the account is flat. This
                     # clears "Arrêt non confirmé" without waiting for a manual
-                    # reconciliation click.
+                    # reconciliation click, even when a timed-out placement
+                    # left client ids that orderStatus can still dismiss.
                     verify = getattr(self.manager, "_verify_session_flat", None)
-                    if verify is not None and not (meta.get("pending_cloids")
-                                                   or record.get("pending_cloids")):
+                    if verify is not None:
                         last_check = float(state.get("flat_check_at", 0) or 0)
                         if now - last_check >= 60:
                             try:
@@ -254,6 +249,11 @@ class OutcomeSupervisor:
                                 logging.getLogger(__name__).warning(
                                     "Outcome confirmed flat session %s", sid)
                                 continue
+                if meta.get('pending_cloids') or record.get('pending_cloids'):
+                    # A fresh worker cannot resolve an unknown placement; keep
+                    # one stable unconfirmed row instead of spawning repeatedly.
+                    self._recovery.pop(sid, None)
+                    continue
                 try:
                     if manual_taker:
                         self._resume(sid, exit_only=True, manual_taker=True)

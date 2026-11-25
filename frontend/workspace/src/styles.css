@@ -1106,6 +1106,7 @@ small {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
   margin-bottom: 6px;
 }
 .session-tags > span:first-child {
@@ -1129,6 +1130,23 @@ small {
 .session-title h2 small {
   font-size: 12px;
   color: var(--muted);
+}
+.session-tags .session-rank,
+.session-tags .session-best {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--gold);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.08);
+}
+.session-tags .session-best {
+  color: #a3b6ab;
+  border-color: rgba(148, 163, 184, 0.2);
+  background: transparent;
 }
 .state-badge {
   display: inline-flex;

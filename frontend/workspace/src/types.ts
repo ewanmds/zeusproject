@@ -78,6 +78,9 @@ export interface Session {
   exit_requested?: boolean;
   stop_reason?: string;
   rotations: number;
+  rank?: number | null;
+  best_rank?: number | null;
+  best_market?: string | null;
   config: Partial<Draft> & {
     order_size_usd?: number;
     outcome_side?: string;

@@ -71,6 +71,76 @@ class FlatRotationTests(unittest.TestCase):
             owner.start.assert_not_called()  # old worker has not confirmed cleanup
             rotation.close()
 
+    def test_zero_fill_leg_moves_to_the_best_free_market(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, _, _, now = self.fixture(folder, volume_usd=0, fills=0)
+            scan = dict(ready=True, updated_at=now, candidates=[
+                dict(market='#111', queue_proxy_sec=10, volume_usd_1m=900, rank=1),
+                dict(market='#101', queue_proxy_sec=80, volume_usd_1m=200, rank=4),
+            ])
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=scan):
+                rotation.tick(now=now)
+            drain = json.loads((Path(folder)/'drain.json').read_text())
+            self.assertEqual(drain['next_market'], '#111')
+            group = rotation.groups['group']
+            self.assertEqual(group['state'], 'draining')
+            self.assertIn('#4', group['reason'])
+            self.assertIn('#1', group['reason'])
+            self.assertEqual(group['market_rank'], 4)
+            self.assertEqual(group['best_rank'], 1)
+            rotation.close()
+
+    def test_zero_fill_grace_uses_the_queue_estimate_not_the_full_window(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, _, _, now = self.fixture(folder, volume_usd=0, fills=0)
+            group = rotation.groups['group']
+            group['current_selection'] = {'queue_proxy_sec': 40}  # grace = 50 s
+            group['started'] = now-40
+            scan = dict(ready=True, updated_at=now, candidates=[
+                dict(market='#111', queue_proxy_sec=10, volume_usd_1m=900, rank=1),
+                dict(market='#101', queue_proxy_sec=80, volume_usd_1m=200, rank=4),
+            ])
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=scan):
+                rotation.tick(now=now)
+            self.assertFalse((Path(folder)/'drain.json').exists())
+            group['started'] = now-51
+            scan['updated_at'] = now+1
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=scan):
+                rotation.tick(now=now+1)
+            drain = json.loads((Path(folder)/'drain.json').read_text())
+            self.assertEqual(drain['next_market'], '#111')
+            rotation.close()
+
+    def test_zero_fill_leg_already_on_the_best_market_does_not_churn(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, _, _, now = self.fixture(folder, volume_usd=0, fills=0)
+            scan = dict(ready=True, updated_at=now, candidates=[
+                dict(market='#101', queue_proxy_sec=10, volume_usd_1m=900, rank=1),
+                dict(market='#111', queue_proxy_sec=80, volume_usd_1m=200, rank=2),
+            ])
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=scan):
+                rotation.tick(now=now)
+            self.assertFalse((Path(folder)/'drain.json').exists())
+            self.assertEqual(rotation.groups['group']['state'], 'observing')
+            self.assertIn('déjà', rotation.groups['group']['reason'])
+            rotation.close()
+
+    def test_zero_fill_leg_waits_when_every_better_market_is_busy(self):
+        with tempfile.TemporaryDirectory() as folder:
+            rotation, owner, row, now = self.fixture(folder, volume_usd=0, fills=0)
+            other = dict(row, session_id='two', market='#111')
+            owner.status = Mock(return_value={'bots': [row, other]})
+            scan = dict(ready=True, updated_at=now, candidates=[
+                dict(market='#111', queue_proxy_sec=10, volume_usd_1m=900, rank=1),
+                dict(market='#101', queue_proxy_sec=80, volume_usd_1m=200, rank=2),
+            ])
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=scan):
+                rotation.tick(now=now)
+            self.assertFalse((Path(folder)/'drain.json').exists())
+            self.assertEqual(rotation.groups['group']['state'], 'observing')
+            self.assertIn('indisponible', rotation.groups['group']['reason'])
+            rotation.close()
+
     def test_filling_market_is_drained_when_its_volume_rank_decays(self):
         with tempfile.TemporaryDirectory() as folder:
             rotation, owner, row, now = self.fixture(folder)

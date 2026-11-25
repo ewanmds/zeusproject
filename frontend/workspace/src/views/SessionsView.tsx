@@ -283,6 +283,17 @@ export function SessionsView({
                       sort: (s) => s.name,
                     },
                     {
+                      id: "rank",
+                      label: "#",
+                      render: (s) =>
+                        s.rank != null ? (
+                          <span className="scanner-rank">#{s.rank}</span>
+                        ) : (
+                          "—"
+                        ),
+                      sort: (s) => s.rank ?? 9999,
+                    },
+                    {
                       id: "state",
                       label: "État",
                       render: (s) => (
@@ -348,6 +359,24 @@ export function SessionsView({
                                   : s.strategy.toUpperCase()}
                               </span>
                               <span>Maker</span>
+                              {s.rank != null && (
+                                <span
+                                  className="session-rank"
+                                  title={`Classement volume actuel : #${s.rank}`}
+                                >
+                                  #{s.rank}
+                                </span>
+                              )}
+                              {s.best_rank != null &&
+                                s.rank != null &&
+                                s.best_rank < s.rank && (
+                                  <span
+                                    className="session-best"
+                                    title={`Meilleur marché libre : #${s.best_rank} (${s.best_market ?? ""})`}
+                                  >
+                                    → #{s.best_rank}
+                                  </span>
+                                )}
                             </div>
                             <h2>
                               {s.name}

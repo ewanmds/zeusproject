@@ -42,10 +42,14 @@ class OutcomeRotation:
                     "members": set(), "cancelled": False, "rotations": 0, "cooldown": {},
                     "pnl_carry": 0.0, "volume_carry": 0.0, "accounted": set()}
             now = time.time()
+            selection = config.get("auto_selection") or {}
             group.update(current=session["session_id"], market=session.get("market"),
                          started=now, state="observing",
                          samples=deque([(now, 0.0)], maxlen=2000), reason="", retry_at=0.0,
-                         current_selection=config.get("auto_selection", {}))
+                         current_selection=selection, fills_seen=0,
+                         last_leg_fill_at=now, rank_check=False,
+                         promote_check=False, last_rank_check=0.0,
+                         market_rank=selection.get("rank"))
             group["members"].add(session["session_id"])
             if self.thread is None or not self.thread.is_alive():
                 self.thread = threading.Thread(target=self._loop, name="outcome-auto-rotation", daemon=True)
@@ -104,6 +108,9 @@ class OutcomeRotation:
                     return {"auto_group_id": group["id"], "auto_rotations": group["rotations"],
                             "auto_rotation_state": group["state"], "auto_rotation_reason": group["reason"],
                             "auto_fill_usd_per_min": group.get("fill_rate", 0),
+                            "auto_market_rank": group.get("market_rank"),
+                            "auto_best_rank": group.get("best_rank"),
+                            "auto_best_market": group.get("best_market"),
                             "auto_evaluate_after_sec": group.get("evaluate_after_sec"),
                             "auto_evaluate_in_sec": max(0, group.get("evaluate_at", time.time())-time.time())}
         return {}
@@ -381,30 +388,51 @@ class OutcomeRotation:
                 first_time, first_volume = group["samples"][0]
                 elapsed = now-first_time
                 group["fill_rate"] = max(0, volume-first_volume)*60/max(1, elapsed)
-                zero_fills = volume <= 0 and not current.get("fills", 0)
-                deadline = no_fill_grace(config, group.get("current_selection")) if zero_fills else window
+                # The strongest signal that a selected queue is not executing
+                # is a leg with no fill at all. Track it separately from the
+                # carried volume so a previous leg can never mask it.
+                leg_fills = int(current.get("fills", 0) or 0)
+                if leg_fills > int(group.get("fills_seen", 0) or 0):
+                    group["last_leg_fill_at"] = now
+                group["fills_seen"] = leg_fills
+                zero_fills = leg_fills <= 0
+                deadline = (no_fill_grace(config, group.get("current_selection"))
+                            if zero_fills else window)
                 group.update(evaluate_after_sec=deadline,
                              evaluate_at=group["started"]+deadline)
-                if now-group["started"] < deadline or elapsed < deadline-10:
-                    return
-                if current.get("execution_state") == "Insufficient USDC":
-                    group["reason"] = "Available USDC below full order size"
-                    return
-                if (current.get("last_fill_at")
-                        and now-current["last_fill_at"] < min(30, window/3)):
-                    group["reason"] = ""
-                    return
-                threshold = config.get("auto_min_fill_usd_per_min")
-                threshold = config["order_size_usd"] if threshold is None else float(threshold)
-                if group["fill_rate"] >= threshold:
-                    # The market is filling, but the operator wants the best
-                    # available volume rank. Re-check at most once per window.
-                    if now - group.get("last_rank_check", 0) < window:
+                promote = False
+                if zero_fills:
+                    # Do not wait the whole rotation window on a market which
+                    # has not filled once. As soon as the short no-fill grace
+                    # expires, compare with the best market that is actually
+                    # free and move there without waiting for a fill.
+                    if now-group["started"] < deadline:
+                        return
+                    promote = True
+                else:
+                    if now-group["started"] < window or elapsed < window-10:
+                        return
+                    if current.get("execution_state") == "Insufficient USDC":
+                        group["reason"] = "Available USDC below full order size"
+                        return
+                    if (current.get("last_fill_at")
+                            and now-current["last_fill_at"] < min(30, window/3)):
                         group["reason"] = ""
                         return
-                    group["rank_check"] = True
-                else:
-                    group["rank_check"] = False
+                    threshold = config.get("auto_min_fill_usd_per_min")
+                    threshold = config["order_size_usd"] if threshold is None else float(threshold)
+                    if group["fill_rate"] >= threshold:
+                        # A filling market keeps its queue and is only checked
+                        # for a stronger volume rank on a short interval.
+                        if now - group.get("last_rank_check", 0) < max(30, window/3):
+                            group["reason"] = ""
+                            return
+                    else:
+                        # Low executed throughput: reselect the best free
+                        # market even when it is only one rank better.
+                        promote = True
+                group["promote_check"] = promote
+                group["rank_check"] = not promote
                 inventory_reason = self.rotation_inventory_reason(current)
                 if inventory_reason:
                     group["reason"] = inventory_reason
@@ -420,6 +448,7 @@ class OutcomeRotation:
                 group = self.groups.get(group_id)
                 if group is not None and not group.get("cancelled"):
                     group["rank_check"] = False
+                    group["promote_check"] = False
                     group["last_rank_check"] = now
             return
         busy = {b["market"] for b in status.get("bots", [])
@@ -458,34 +487,65 @@ class OutcomeRotation:
                 if (not latest or not latest.get('running')
                         or latest.get('phase') != 'running' or latest.get('stale')):
                     group["rank_check"] = False
+                    group["promote_check"] = False
                     return
+                promote = bool(group.get("promote_check"))
                 rank_check = bool(group.get("rank_check"))
                 group["rank_check"] = False
+                group["promote_check"] = False
                 inventory_reason = self.rotation_inventory_reason(latest)
                 if inventory_reason:
                     group["last_rank_check"] = now
                     group['reason'] = inventory_reason
                     return
+                # Publish what this leg sees so the card can show
+                # "#current -> #best" instead of sitting silently.
+                group["market_rank"] = (current_candidate or {}).get("rank")
+                group["best_rank"] = (top or {}).get("rank")
+                group["best_market"] = (top or {}).get("market")
                 if top is None:
                     group["last_rank_check"] = now
-                    group["reason"] = "Low fills: waiting for another eligible $/min market"
+                    blocked = next((r for r in ranked if r["market"] != current["market"]),
+                                   None)
+                    if blocked is not None:
+                        group["reason"] = ("Rotation: marché #%s indisponible, attente "
+                                           "d'un marché libre" % (blocked.get("rank") or "?"))
+                    elif group["market_rank"] == 1:
+                        group["reason"] = "Rotation: déjà sur le meilleur marché disponible"
+                    else:
+                        group["reason"] = "Low fills: waiting for another eligible $/min market"
                     return
-                if rank_check:
+                current_rank = (current_candidate or {}).get("rank")
+                top_rank = top.get("rank")
+                better = (current_rank is None or top_rank is None
+                          or int(top_rank) < int(current_rank))
+                if promote:
+                    group["last_rank_check"] = now
+                    if not better:
+                        # Never rotate to a lower-volume market: the current
+                        # one already is the best free market.
+                        group["reason"] = ("Rotation: déjà sur le meilleur marché "
+                                           "disponible (#%s)" % current_rank)
+                        return
+                    group["reason"] = ("Rotation: meilleur marché disponible "
+                                       "(#%s → #%s)" % (
+                                           current_rank if current_rank else "-",
+                                           top_rank if top_rank else "?"))
+                elif rank_check:
                     group["last_rank_check"] = now
                     if not decayed:
                         group["reason"] = ""
                         return
                     group["reason"] = "Rotation: meilleur volume disponible"
+                else:
+                    return
                 info = (getattr(self.owner, "procs", {}) or {}).get(current_id)
                 if info is None:
                     return
                 atomic_json(Path(info["stop_file"]).with_name("drain.json"), {
                     "requested_at": now, "reason": "low executed $/min",
                     "next_market": top["market"]})
-                group.update(state="draining",
-                             reason=("Rotation: meilleur volume disponible"
-                                     if rank_check else
-                                     "Rotation: draining current market"))
+                group.update(state="draining", reason=group["reason"])
                 previous = group.setdefault('market_results', {}).get(current['market'], {})
                 failures = (previous.get('zero_fill_attempts', 0)+1
                             if float(current.get('volume_usd', 0)) <= 0 else 0)

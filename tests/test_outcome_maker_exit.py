@@ -462,6 +462,22 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
             self.assertIn('vérifié à plat', row['cleanup_note'])
             sup._resume.assert_not_called()
 
+    def test_flat_terminal_session_with_unresolved_cloids_is_confirmed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(
+                folder,
+                {'session_id': 's1', 'exposure_started': True,
+                 'pending_cloids': ['0xabc']},
+                drain={'manual': True, 'reason': 'Manual stop: maker exit'},
+            )
+            sup.manager._verify_session_flat = Mock()
+            sup._auto_recover()
+            sup.manager._verify_session_flat.assert_called_once()
+            row = json.loads((Path(folder) / 'journal.json').read_text())
+            self.assertTrue(row['cleanup_confirmed'])
+            self.assertEqual(row['pending_cloids'], [])
+            sup._resume.assert_not_called()
+
     def test_manual_stop_resumes_only_the_exit_and_hard_shutdown_never_restarts(self):
         with tempfile.TemporaryDirectory() as folder:
             sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': True},
