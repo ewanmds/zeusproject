@@ -447,6 +447,22 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
         sup._resume = Mock(return_value={'session_id': 'new'})
         return sup
 
+    def multi_supervisor(self, folder, records):
+        root = Path(folder)
+        for record in records:
+            (root/f'{record["session_id"]}.json').write_text(json.dumps(record))
+        sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
+        sup.procs = {}
+        sup.manager = SimpleNamespace(lock=threading.RLock())
+        sup.root = root
+        sup._recovery = {}
+        sup._recovery_lock = threading.RLock()
+        sup._stuck_restarts = {}
+        sup.records = lambda: [(str(root/f'{r["session_id"]}.json'), dict(r))
+                               for r in records]
+        sup._resume = Mock(return_value={'session_id': 'new'})
+        return sup
+
     def test_crash_is_resumed_as_trading_without_a_button(self):
         with tempfile.TemporaryDirectory() as folder:
             sup = self.supervisor(folder, {'session_id': 's1', 'exposure_started': True})
@@ -628,6 +644,7 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
             verify.assert_called_once()
             row = json.loads((Path(folder) / 'journal.json').read_text())
             self.assertIsNot(row.get('cleanup_confirmed'), True)
+            self.assertIn('residual order', row.get('cleanup_error', ''))
             # The flat proof failed, so the normal exit-only recovery is still
             # allowed to try a passive close; the row is never marked flat.
             sup._resume.assert_called_once_with('s1', exit_only=True)
@@ -747,6 +764,97 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
                                  for call in verify.call_args_list))
             row = json.loads(parent_path.read_text())
             self.assertIsNot(row.get('cleanup_confirmed'), True)
+
+    def test_exit_only_child_without_a_stop_marker_is_archived_when_flat(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.multi_supervisor(folder, [{
+                'session_id': 'child', 'symbols': ['#101'], 'account_kind': 'outcome',
+                'exposure_started': True, 'cleanup_confirmed': False,
+                'started': time.time()-60, 'phase': 'failed',
+                'config': {'resume_exit': True}}])
+            verify = Mock()
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            verify.assert_called_once()
+            row = json.loads((Path(folder)/'child.json').read_text())
+            self.assertTrue(row['cleanup_confirmed'])
+            sup._resume.assert_not_called()
+
+    def test_dead_exit_only_child_is_resumed_as_exit_not_trading(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            sup = self.multi_supervisor(folder, [{
+                'session_id': 'child', 'symbols': ['#101'], 'account_kind': 'outcome',
+                'exposure_started': True, 'cleanup_confirmed': False,
+                'started': time.time()-60, 'phase': 'failed',
+                'stop_file': str(root/'stop'),
+                'config': {'resume_exit': True}}])
+            sup.manager._verify_session_flat = Mock(
+                side_effect=RuntimeError('residual order'))
+            sup._auto_recover()
+            sup._resume.assert_called_once_with('child', exit_only=True)
+
+    def test_unreadable_unstarted_stats_does_not_starve_other_archives(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            records = [
+                {'session_id': 'bad', 'symbols': ['#101'], 'account_kind': 'outcome',
+                 'exposure_started': False, 'cleanup_confirmed': False,
+                 'started': time.time()-60, 'stats_file': str(root/'missing.json')},
+                {'session_id': 'stop', 'symbols': ['#202'], 'account_kind': 'outcome',
+                 'exposure_started': True, 'cleanup_confirmed': False,
+                 'started': time.time()-60, 'stop_reason': 'Manual stop'},
+            ]
+            sup = self.multi_supervisor(folder, records)
+            verify = Mock()
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            verify.assert_called_once()
+            self.assertTrue(json.loads((root/'stop.json').read_text())['cleanup_confirmed'])
+            self.assertIsNot(json.loads((root/'bad.json').read_text()).get('cleanup_confirmed'), True)
+
+    def test_legacy_drain_without_a_stop_file_is_terminal(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            sup = self.multi_supervisor(folder, [{
+                'session_id': 'legacy', 'symbols': ['#101'], 'account_kind': 'outcome',
+                'exposure_started': True, 'cleanup_confirmed': False,
+                'started': time.time()-60, 'config': {}}])
+            drain = root/'runtime'/'legacy'/'drain.json'
+            drain.parent.mkdir(parents=True)
+            drain.write_text(json.dumps({'manual': True, 'reason': 'Manual stop: maker exit'}))
+            verify = Mock()
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            verify.assert_called_once()
+            self.assertTrue(json.loads((root/'legacy.json').read_text())['cleanup_confirmed'])
+
+    def test_maker_exit_falls_back_to_the_runtime_directory_without_a_stop_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            sup = self.multi_supervisor(folder, [])
+            sup._request_maker_exit({'session_id': 'legacy'}, 'Manual stop: maker exit')
+            drain = root/'runtime'/'legacy'/'drain.json'
+            self.assertTrue(drain.exists())
+            self.assertEqual(json.loads(drain.read_text())['reason'], 'Manual stop: maker exit')
+
+    def test_parent_is_not_archived_from_a_successor_with_pending_cloids(self):
+        with tempfile.TemporaryDirectory() as folder:
+            parent = {'session_id': 'parent', 'symbols': ['#101'], 'account': '0xabc',
+                      'account_kind': 'outcome', 'exposure_started': True,
+                      'cleanup_confirmed': False, 'started': 1.0, 'phase': 'failed',
+                      'resumed_session_id': 'child', 'config': {}}
+            child = {'session_id': 'child', 'symbols': ['#101'], 'account': '0xabc',
+                     'account_kind': 'outcome', 'exposure_started': True,
+                     'cleanup_confirmed': True, 'started': 2.0, 'phase': 'stopped',
+                     'pending_cloids': ['0xabc'], 'config': {}}
+            sup = self.multi_supervisor(folder, [parent, child])
+            verify = Mock()
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            verify.assert_not_called()
+            self.assertIsNot(
+                json.loads((Path(folder)/'parent.json').read_text()).get('cleanup_confirmed'), True)
 
     def test_flat_crash_without_stop_intent_is_resumed_not_archived(self):
         with tempfile.TemporaryDirectory() as folder:

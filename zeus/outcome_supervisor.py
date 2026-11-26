@@ -122,6 +122,9 @@ class OutcomeSupervisor:
         with self._recovery_lock:
             with self.manager.lock:
                 procs = dict(self.procs)
+            # Archive terminal sessions first: one malformed unstarted record
+            # must never starve flat confirmation for the whole tenant.
+            self._archive_flat_terminals(records, by_id, procs, now)
             # The safety gate sets exposure_started before journaling any
             # CLOID/submission. A session with no exposure, no CLOIDs and no
             # owned orders therefore never reached the exchange: archive it
@@ -129,35 +132,54 @@ class OutcomeSupervisor:
             for path, record in records:
                 if record.get("cleanup_confirmed") or record.get("exposure_started"):
                     continue
-                if now - float(record.get("started") or 0) < 30:
+                try:
+                    started = float(record.get("started") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if now - started < 30:
                     continue  # launch may still be between journal write and Popen
                 sid = record.get("session_id")
                 info = procs.get(sid)
                 if info is not None and info["proc"].poll() is None:
                     continue
                 successor = by_id.get(record.get("resumed_session_id"))
-                if successor is not None and not successor.get("cleanup_confirmed"):
+                if successor is not None and successor.get("cleanup_confirmed") is not True:
                     continue  # parent must not hide an unresolved child exposure
-                meta = read_json(path) if Path(path).exists() else record
+                try:
+                    meta = read_json(path) if Path(path).exists() else record
+                except (OSError, ValueError):
+                    continue
                 meta = meta if isinstance(meta, dict) else record
                 if (meta.get("exposure_started") or meta.get("cleanup_confirmed")
                         or any(meta.get(k) for k in ("pending_cloids", "cloids", "owned_oids"))):
                     continue
-                stats = read_json(meta["stats_file"]) if meta.get("stats_file") else {}
+                stats = {}
+                if meta.get("stats_file"):
+                    try:
+                        stats = read_json(meta["stats_file"])
+                    except (OSError, ValueError):
+                        continue  # unknown is not flat, but do not abort others
                 if isinstance(stats, dict) and (
                         finite(stats.get("fills", 0)) > 0
                         or abs(finite(stats.get("position_usd", 0))) > 1e-9):
                     continue
-                if self._orphan_alive(meta) or self._worker_pid(meta):
+                try:
+                    if self._orphan_alive(meta) or self._worker_pid(meta):
+                        continue
+                except OSError:
                     continue
                 updated = {**meta, "cleanup_confirmed": True, "phase": "stopped",
                            "can_start": True, "cleanup_error": "", "error": "",
                            "cleanup_note": "Aucun ordre soumis; session archivée automatiquement"}
-                atomic_json(path, updated)
+                try:
+                    atomic_json(path, updated)
+                except (OSError, ValueError, TypeError) as exc:
+                    logging.getLogger(__name__).warning(
+                        "Outcome unstarted archive write failed %s: %s", sid, safe_error(exc))
+                    continue
                 record["cleanup_confirmed"] = True
                 logging.getLogger(__name__).warning(
                     "Outcome archived unstarted session %s", sid)
-            self._archive_flat_terminals(records, by_id, procs, now)
             groups = {}
             for path, record in records:
                 if not record.get("symbols"):
@@ -237,7 +259,8 @@ class OutcomeSupervisor:
                 risk_exit = reason_l.startswith(("session stop loss", "session take profit",
                                                  "inventory stop"))
                 rotation = reason_l.startswith("low executed")
-                if manual_taker or manual or risk_exit:
+                resume_exit = bool((meta.get("config") or {}).get("resume_exit"))
+                if resume_exit or manual_taker or manual or risk_exit:
                     exit_only = True
                 elif rotation:
                     # A rotation drain must not end the logical session after a
@@ -339,58 +362,92 @@ class OutcomeSupervisor:
             info = procs.get(sid)
             if info is not None and info["proc"].poll() is None:
                 continue
-            meta = read_json(path) if Path(path).exists() else {}
+            try:
+                meta = read_json(path) if Path(path).exists() else {}
+            except (OSError, ValueError):
+                continue
             # The journal can lag the in-memory record (the supervisor adds
             # stop/rotation fields before or after publishing it), so keep both.
             meta = ({**record, **meta}
                     if isinstance(meta, dict) and meta else record)
             if meta.get("cleanup_confirmed"):
                 continue
-            if now - float(meta.get("started") or 0) < 30:
+            try:
+                started = float(meta.get("started") or 0)
+            except (TypeError, ValueError):
+                continue
+            if now - started < 30:
                 continue  # launch may still be between journal write and Popen
             stop_path = Path(meta["stop_file"]) if meta.get("stop_file") else None
             # drain.json lives next to the session's stop file, not next to the
             # journal (journals are flat files in the tenant directory).
-            drain_path = (stop_path.with_name("drain.json") if stop_path is not None
-                          else Path(path).with_name("drain.json"))
+            if stop_path is not None:
+                drain_path = stop_path.with_name("drain.json")
+            elif self.root is not None and sid:
+                drain_path = self.root / "runtime" / sid / "drain.json"
+            else:
+                drain_path = Path(path).with_name("drain.json")
             terminal_intent = bool(
                 meta.get("exit_requested") or meta.get("stop_reason")
                 or meta.get("manual_stop_requested")
+                or bool((meta.get("config") or {}).get("resume_exit"))
                 or meta.get("cleanup_error") or meta.get("phase") == "stopped"
                 or (stop_path is not None and stop_path.exists())
                 or drain_path.exists())
             successor = by_id.get(meta.get("resumed_session_id"))
-            if successor is not None and not successor.get("cleanup_confirmed"):
+            if successor is not None and successor.get("cleanup_confirmed") is not True:
                 continue  # the child owns this lineage until it is archived
             lineage_confirmed = bool(
                 successor is not None
+                and successor.get("cleanup_confirmed") is True
+                and not successor.get("pending_cloids")
+                and meta.get("account") and meta.get("symbols")
                 and successor.get("account") == meta.get("account")
                 and successor.get("symbols") == meta.get("symbols"))
             if not lineage_confirmed and not terminal_intent:
                 # An interrupted trader with no stop/exit intent is auto-resumed
                 # by the loop below; archiving it here would silently stop it.
                 continue
-            if self._orphan_alive(meta) or self._worker_pid(meta):
+            try:
+                if self._orphan_alive(meta) or self._worker_pid(meta):
+                    continue
+            except OSError:
                 continue
             state = self._recovery.get(sid) or {}
             if not lineage_confirmed:
-                if now - float(state.get("flat_check_at", 0) or 0) < 60:
+                try:
+                    last_check = float(state.get("flat_check_at", 0) or 0)
+                except (TypeError, ValueError):
+                    last_check = 0.0
+                if now - last_check < 60:
                     continue
                 try:
                     verify(meta)
                 except Exception as exc:
+                    detail = safe_error(exc)
                     self._recovery[sid] = {**state, "flat_check_at": now,
-                                           "error": safe_error(exc)}
+                                           "error": detail}
+                    # Surface the real blocker on the session card. This never
+                    # confirms the stop; it only records why it is still open.
+                    try:
+                        atomic_json(path, {**meta, "cleanup_error": detail,
+                                           "can_start": False, "ts": time.time()})
+                    except (OSError, ValueError, TypeError):
+                        pass
                     continue
             note = ("Successeur vérifié à plat; session parente archivée"
                     if lineage_confirmed else
                     "Compte vérifié à plat; session archivée automatiquement")
-            atomic_json(path, {
-                **meta, "cleanup_confirmed": True, "phase": "stopped",
-                "can_start": True, "cleanup_error": "", "error": "",
-                "pending_cloids": [],
-                "cleanup_note": note,
-            })
+            try:
+                atomic_json(path, {
+                    **meta, "cleanup_confirmed": True, "phase": "stopped",
+                    "can_start": True, "cleanup_error": "", "error": "",
+                    "pending_cloids": [],
+                    "cleanup_note": note,
+                })
+            except (OSError, ValueError, TypeError) as exc:
+                self._recovery[sid] = {**state, "error": safe_error(exc)}
+                continue
             record["cleanup_confirmed"] = True
             self._recovery.pop(sid, None)
             logging.getLogger(__name__).warning(
@@ -721,10 +778,16 @@ class OutcomeSupervisor:
         self._prune(kept)
         return result
 
-    @staticmethod
-    def _drain_path(info):
+    def _drain_path(self, info):
         stop_file = info.get("stop_file")
-        return Path(stop_file).with_name("drain.json") if stop_file else None
+        if stop_file:
+            return Path(stop_file).with_name("drain.json")
+        session_id = info.get("session_id")
+        if self.root is not None and session_id:
+            # Legacy/partial journal without a stop_file: the current runtime
+            # layout still lets us address the durable exit intent.
+            return self.root / "runtime" / session_id / "drain.json"
+        return None
 
     def _orphan_alive(self, record):
         """A confirmed journal is not proof that an untracked worker is gone."""
