@@ -3,7 +3,7 @@ import { RunView } from "./views/RunView";
 import { LandingView } from "./views/LandingView";
 
 import { lazy, Suspense, useEffect, useState, useRef } from "react";
-import { api, usd, short, clock } from "./data";
+import { api, usd, short } from "./data";
 import { useWorkspace } from "./useWorkspace";
 import { signAgentApproval } from "./authorization";
 import { Icon, Modal, Pending } from "./ui";
@@ -11,7 +11,7 @@ import { FeedbackButton } from "./components/FeedbackButton";
 import type { Draft, View, Session, Agent, Operation, Snapshot } from "./types";
 import { resolveStopSnapshot } from "./presentation/stop";
 import { activeSessionCount, sessionVisible } from "./presentation/session";
-import { launchPayload } from "./presentation/launch";
+import { launchPayload, formBlockReason } from "./presentation/launch";
 import { useI18n } from "./i18n";
 import { NavDock } from "./components/layout";
 import { Kbd } from "./components/fields";
@@ -64,9 +64,7 @@ export default function App() {
   const [selected, setSelected] = useState<Session | null>(null);
   const [pendingStops, setPendingStops] = useState<Record<string, number>>({});
   const stopRequests = useRef(new Set<string>());
-  const [riskAccepted, setRiskAccepted] = useState(false);
   const [scrolled, setScrolled] = useState(false);
-  const previewToken = useRef(0);
   const [filter, setFilter] = useState("active"),
     [period, setPeriod] = useState(7),
     [now, setNow] = useState(Date.now());
@@ -87,9 +85,6 @@ export default function App() {
   // any client/server skew would otherwise mark a healthy stream as delayed
   // forever. A stalled stream already stops refreshing `received`.
   const stale = !!owner && (!w.received || now - w.received > 6000);
-  useEffect(() => {
-    setRiskAccepted(false);
-  }, [review]);
   useEffect(() => {
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(tick);
@@ -248,7 +243,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", keyboard);
   }, []);
   const update = (key: keyof Draft, value: string | number | null) => {
-    previewToken.current += 1;
     setActionErrors((old) => ({ ...old, run: "" }));
     setDraft((old) => ({ ...old, [key]: value }));
     setReview(null);
@@ -323,7 +317,7 @@ export default function App() {
       setBusy("");
     }
   };
-  const preview = async () => {
+  const preview = () => {
     if (!owner) {
       setWalletModal(true);
       return;
@@ -332,30 +326,20 @@ export default function App() {
       navigate("account");
       return;
     }
-    if (draft.strategy === "outcome" && !draft.side) {
-      setActionErrors((old) => ({
-        ...old,
-        run: "Choisissez Yes ou No avant de lancer.",
-      }));
+    if (formBlockReason(draft, w.balance?.usdc_available ?? null)) {
+      setActionErrors((old) => ({ ...old, run: "Complétez les paramètres." }));
       return;
     }
-    const token = ++previewToken.current;
-    const payload = launchPayload(draft);
-    setBusy("preview");
     setActionErrors((old) => ({ ...old, run: "" }));
     setNotice("");
-    try {
-      const result = await api("/sessions/preview", payload);
-      if (previewToken.current === token) setReview(result);
-    } catch (e: any) {
-      if (previewToken.current === token)
-        setActionErrors((old) => ({ ...old, run: e.message }));
-    } finally {
-      setBusy("");
-    }
+    setReview({
+      config: launchPayload(draft),
+      account: owner,
+      usdc_available: w.balance?.usdc_available ?? null,
+    });
   };
   const launch = async () => {
-    if (!review || !owner || busy || !riskAccepted) return;
+    if (!review || !owner || busy) return;
     setBusy("launch");
     const key = crypto.randomUUID();
     try {
@@ -505,19 +489,6 @@ export default function App() {
     ? sessions.find((s) => s.id === selected.id) || selected
     : null;
   const reviewOutcome = review?.config.strategy === "outcome";
-  const reviewFeeBps = reviewOutcome
-    ? scanner?.candidates?.[0]?.maker_close_fee_bps
-    : null;
-  const reviewFeeUsd =
-    Number.isFinite(reviewFeeBps) && Number.isFinite(review?.config.order_usd)
-      ? (review.config.order_usd * Number(reviewFeeBps)) / 10000
-      : null;
-  const reviewMaxLoss = reviewOutcome
-    ? Math.min(
-        review?.config.position_cap ?? 0,
-        review?.usdc_available ?? 0,
-      ) + (reviewFeeUsd ?? 0)
-    : null;
   const reviewSide =
     review?.config.side === "yes"
       ? "Yes"
@@ -753,7 +724,7 @@ export default function App() {
         review &&
         review.account?.toLowerCase() === owner.toLowerCase() && (
           <Modal
-            title="Vérifiez votre session."
+            title="Confirmer le lancement."
             onClose={() => {
               if (busy === "launch") {
                 setNotice(
@@ -779,142 +750,42 @@ export default function App() {
                       ?.name
                   }
                 </h3>
-                <span>Hyperliquid Mainnet · Ordres réels</span>
+                <span>Ordres réels · Hyperliquid</span>
               </div>
             </div>
             <dl className="summary-list">
               <div>
-                <dt>Compte</dt>
-                <dd>{short(review.account)}</dd>
-              </div>
-              <div>
-                <dt>Montant par ordre</dt>
+                <dt>Montant</dt>
                 <dd>{usd(review.config.order_usd)}</dd>
-              </div>
-              <div>
-                <dt>Plafond de position</dt>
-                <dd>
-                  {review.config.strategy === "outcome"
-                    ? usd(review.config.position_cap)
-                    : "Limites du moteur"}
-                </dd>
               </div>
               <div>
                 <dt>Marché</dt>
                 <dd>
-                  {review.config.strategy === "outcome"
-                    ? "Scanner Auto · " + reviewSide
+                  {reviewOutcome
+                    ? "Sélection Auto · " + reviewSide
                     : review.config.market}
                 </dd>
               </div>
+              {reviewOutcome && (
+                <div>
+                  <dt>Plafond</dt>
+                  <dd>{usd(review.config.position_cap)}</dd>
+                </div>
+              )}
               <div>
-                <dt>Solde spot disponible</dt>
+                <dt>Solde</dt>
                 <dd>{usd(review.usdc_available)}</dd>
               </div>
-              {review.config.strategy === "outcome" && (
-                <>
-                  <div>
-                    <dt>Arrêt des achats</dt>
-                    <dd>
-                      {review.config.duration_sec
-                        ? clock(review.config.duration_sec)
-                        : review.config.target_volume_usd
-                          ? usd(review.config.target_volume_usd) + " de volume"
-                          : "Manuel"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Seuil de perte réalisée</dt>
-                    <dd>{usd(review.config.stop_loss_usd)}</dd>
-                  </div>
-                </>
-              )}
             </dl>
-            <dl className="summary-list review-facts">
-              <div>
-                <dt>Frais maker estimés</dt>
-                <dd>
-                  {review.config.strategy === "outcome" ? (
-                    reviewFeeBps != null && reviewFeeUsd != null ? (
-                      <>
-                        {Number(reviewFeeBps).toFixed(2)} bps ·{" "}
-                        {usd(reviewFeeUsd)} par ordre de clôture.
-                        <small>
-                          Ouverture Outcome gratuite · aucun rebate Outcome.
-                        </small>
-                      </>
-                    ) : (
-                      <>
-                        Estimation indisponible ; les frais restent déduits du
-                        PnL.
-                      </>
-                    )
-                  ) : (
-                    <>
-                      Frais maker non estimés avant exécution ; aucun rebate
-                      n’est supposé.
-                    </>
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Perte maximale théorique</dt>
-                <dd>
-                  {reviewOutcome && reviewMaxLoss != null
-                    ? usd(reviewMaxLoss)
-                    : "Non estimable — limites du moteur."}
-                </dd>
-              </div>
-            </dl>
-            <section className="review-guards">
-              <h3>Garde-fous actifs</h3>
-              <ul>
-                <li>Post-only : aucun ordre taker à l’entrée.</li>
-                <li>Montant minimum : 10,50 $.</li>
-                <li>Solde spot vérifié avant chaque ordre.</li>
-                {reviewOutcome && (
-                  <>
-                    <li>Un ordre ne dépasse pas le plafond de position.</li>
-                    <li>
-                      Spread maximal : {review.config.spread_bps} bps · arrêt à{" "}
-                      {usd(review.config.stop_loss_usd)} de perte réalisée.
-                    </li>
-                    <li>Rotation à plat, sans vente forcée.</li>
-                  </>
-                )}
-              </ul>
-            </section>
-            <section className="review-stop">
-              <h3>Comment arrêter</h3>
-              <p>
-                Onglet Sessions → Arrêter. Les ordres de la session sont
-                annulés et son inventaire attribué est clôturé au marché.
-              </p>
-            </section>
-            <label className="risk-ack">
-              <input
-                type="checkbox"
-                checked={riskAccepted}
-                onChange={(event) => setRiskAccepted(event.target.checked)}
-              />
-              <span>
-                Je comprends que cette session passe des ordres réels sur
-                Hyperliquid Mainnet et que je peux perdre le montant engagé.
-              </span>
-            </label>
             {actionErrors.run && <InlineAlert>{actionErrors.run}</InlineAlert>}
-            <p className="hint">
-              Les quantités Outcome sont arrondies à des tokens entiers. Le
-              montant réel peut légèrement dépasser la taille demandée.
-            </p>
             <FeedbackButton
               className="button primary full"
               onClick={launch}
-              disabled={!!busy || !riskAccepted}
+              disabled={!!busy}
               loading={busy === "launch"}
-              loadingLabel="Lancement en cours"
+              loadingLabel="Lancement"
             >
-              Confirmer et lancer
+              Lancer
               <Icon name="run" size={17} />
             </FeedbackButton>
           </Modal>

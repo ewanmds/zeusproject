@@ -1,6 +1,6 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Icon } from "../ui";
-import { HaloInput, HaloField, RichPopover } from "../components/fields";
+import { HaloInput, HaloField } from "../components/fields";
 import { ResponsiveOptions } from "../components/Dialog";
 import { SessionStepper } from "../components/layout";
 import { DataTable } from "../components/DataTable";
@@ -15,7 +15,6 @@ import {
   amountError,
   amountWarning,
   capError,
-  capGauge,
   formBlockReason,
   orderMax,
   quickAmounts,
@@ -27,6 +26,21 @@ const MarketSelect = lazy(() =>
     default: m.MarketSelect,
   })),
 );
+
+function scannerStatus(market: any) {
+  if (market.auto_eligible) return "Prêt";
+  const reason = String(market.eligibility_reason ?? "");
+  if (reason.startsWith("Déjà en session")) return "Occupé";
+  if (reason.startsWith("Arrêt non confirmé")) return "Arrêt non confirmé";
+  if (reason.startsWith("Scan en attente") || reason.startsWith("Souscriptions"))
+    return "En attente";
+  if (reason.startsWith("Profondeur")) return "Profondeur";
+  if (reason.startsWith("Spread")) return "Spread";
+  if (reason.startsWith("Flux dans un seul sens")) return "Flux faible";
+  if (reason.startsWith("Dernier trade")) return "Trade ancien";
+  return reason || "Indisponible";
+}
+
 export function RunView({
   w,
   draft,
@@ -41,16 +55,15 @@ export function RunView({
   ready,
   preview,
   busy,
-  setShowHelp,
   actionError,
 }: RunProps) {
   const available = w.balance?.usdc_available ?? null;
   const amountIssue = amountError(draft, available);
   const warning = amountWarning(draft, available);
   const capIssue = capError(draft);
-  const capInfo = capGauge(draft);
   const block = formBlockReason(draft, available);
   const quick = quickAmounts(draft, available);
+  const [scannerOpen, setScannerOpen] = useState(false);
   return (
     <>
       <div className="page-heading">
@@ -69,7 +82,7 @@ export function RunView({
         >
           <div className="section-heading">
             <span className="step">01</span>
-            <h2>Choisissez votre stratégie</h2>
+            <h2>Stratégie</h2>
           </div>
           <div className="strategy-grid">
             {strategies.map((s) => (
@@ -109,7 +122,7 @@ export function RunView({
           </div>
           <div className="section-heading with-line">
             <span className="step">02</span>
-            <h2>Configurez la session</h2>
+            <h2>Paramètres</h2>
           </div>
           <div className="amount-section">
             <label htmlFor="order">Montant par ordre</label>
@@ -172,53 +185,21 @@ export function RunView({
                 {warning}
               </p>
             )}
-            {draft.strategy === "outcome" && (
-              <div className="cap-block">
-                <div className="cap-head">
-                  <span>Plafond de position</span>
-                  <strong>{usd(draft.position_cap)}</strong>
-                </div>
-                <progress
-                  max={100}
-                  value={capInfo.percent}
-                  aria-label="Montant par ordre par rapport au plafond de position"
-                  aria-valuetext={capInfo.text}
-                />
-                <span className="field-hint">{capInfo.text}</span>
-              </div>
-            )}
           </div>
           {draft.strategy === "outcome" ? (
-            <div className="inline-fields">
-              <div>
-                <span className="field-label">Côté Outcome</span>
-                <SegmentedControl
-                  label="Côté Outcome"
-                  value={draft.side ?? ""}
-                  describedBy={
-                    draft.side === null ? "outcome-side-help" : undefined
-                  }
-                  options={[
-                    { value: "yes", label: "Yes" },
-                    { value: "no", label: "No" },
-                  ]}
-                  onValueChange={(side) =>
-                    update("side", side as "yes" | "no")
-                  }
-                />
-                {draft.side === null && (
-                  <p className="field-hint" id="outcome-side-help">
-                    Choisissez Yes ou No avant de lancer.
-                  </p>
-                )}
-              </div>
-              <div className="selection-note">
-                <Icon name="auto" />
-                <div>
-                  <strong>Marché automatique</strong>
-                  <span>Flux et carnet observés en direct</span>
-                </div>
-              </div>
+            <div className="field">
+              <span className="field-label">Côté Outcome</span>
+              <SegmentedControl
+                label="Côté Outcome"
+                value={draft.side ?? ""}
+                options={[
+                  { value: "yes", label: "Yes" },
+                  { value: "no", label: "No" },
+                ]}
+                onValueChange={(side) =>
+                  update("side", side as "yes" | "no")
+                }
+              />
             </div>
           ) : (
             <div className="field">
@@ -273,7 +254,7 @@ export function RunView({
                   <HaloField
                     label="Plafond de position · USD"
                     error={capIssue || undefined}
-                    description="Le plafond limite l’exposition cumulée de la session ; un ordre ne peut pas le dépasser."
+                    description="Exposition maximale."
                   >
                     <HaloInput
                       type="number"
@@ -378,135 +359,117 @@ export function RunView({
                       }
                     />
                   </HaloField>
-                  {draft.duration_sec || draft.target_volume_usd ? (
-                    <p className="hint">
-                      À l’objectif, les nouveaux achats cessent. La sortie reste
-                      en cours jusqu’à son exécution en maker.
-                    </p>
-                  ) : null}
                 </div>
               )}
-              <div className="small-info">
-                <Icon name="shield" size={15} />
-                <span>
-                  Les paramètres sont figés au lancement de la session.
-                </span>
-              </div>
             </div>
           </ResponsiveOptions>
           {draft.strategy === "outcome" && owner && (
-            <div className="scanner">
-              <div className="scanner-head">
+            <section className={"scanner" + (scannerOpen ? " open" : "")}>
+              <button
+                type="button"
+                className="scanner-head"
+                aria-expanded={scannerOpen}
+                aria-controls="scanner-panel"
+                onClick={() => setScannerOpen((open) => !open)}
+              >
                 <span>
                   <i className={scanner?.ready ? "green-dot" : "gold-dot"} />
-                  Scanner de marchés
+                  Scanner
                 </span>
-                <span className="mono">
-                  {scanner?.observed_markets?.length != null
-                    ? scanner.observed_markets.length + " observés · " + scanner.observed_markets.filter((m: any) => m.auto_eligible).length + " admissibles"
-                    : scanner?.ready
-                    ? scanner.candidates.length + " admissibles"
-                    : scanner?.warming_up
-                      ? "Observation…"
-                      : "En attente de flux"}
+                <span className="scanner-head-right">
+                  <span className="mono">
+                    {scanner?.observed_markets?.length != null
+                      ? scanner.observed_markets.length +
+                        " marchés · " +
+                        scanner.observed_markets.filter((m: any) => m.auto_eligible).length +
+                        " prêts"
+                      : scanner?.ready
+                        ? scanner.candidates.length + " prêts"
+                        : scanner?.warming_up
+                          ? "Observation…"
+                          : "En attente"}
+                  </span>
+                  <Icon name="chevron" size={16} />
                 </span>
-              </div>
-              {!scanner?.ready && scanner?.reason && (
-                <InlineAlert tone="warning">{scanner.reason}</InlineAlert>
+              </button>
+              {scannerOpen && (
+                <div id="scanner-panel" className="scanner-body">
+                  {!scanner?.ready && scanner?.reason && (
+                    <InlineAlert tone="warning">{scanner.reason}</InlineAlert>
+                  )}
+                  <p className="scanner-freshness" aria-live="off">
+                    {scanner?.observation_error || scanner?.observation_connected === false
+                      ? "Flux retardé · dernières valeurs"
+                      : scanner?.observed_at
+                        ? `Actualisé à ${new Date(scanner.observed_at * 1000).toLocaleTimeString("fr-FR")}`
+                        : "Connexion…"}
+                  </p>
+                  {!!(scanner?.observed_markets ?? scanner?.candidates)?.length && (
+                    <DataTable<any>
+                      caption="Marchés observés"
+                      rows={(scanner.observed_markets ?? scanner.candidates)}
+                      defaultSort={{ id: "rank", direction: "asc" }}
+                      animateChanges
+                      rowKey={(m) => m.market}
+                      columns={[
+                        {
+                          id: "rank",
+                          label: "#",
+                          render: (m) =>
+                            Number.isFinite(m.rank) ? (
+                              <span className="scanner-rank">#{m.rank}</span>
+                            ) : (
+                              "—"
+                            ),
+                          sort: (m) => m.rank ?? 9999,
+                        },
+                        {
+                          id: "name",
+                          label: "Marché",
+                          render: (m) => (
+                            <>
+                              <span>{m.name}</span>
+                              <small
+                                className={
+                                  m.auto_eligible
+                                    ? "scanner-row-status scanner-admitted"
+                                    : "scanner-row-status scanner-observed"
+                                }
+                                title={m.eligibility_reason ?? ""}
+                              >
+                                {scannerStatus(m)}
+                              </small>
+                            </>
+                          ),
+                          sort: (m) => m.name,
+                        },
+                        {
+                          id: "volume",
+                          label: "USD/min",
+                          render: (m) => <LiveAmount value={m.volume_usd_1m} />,
+                          sort: (m) => m.volume_usd_1m,
+                        },
+                        {
+                          id: "spread",
+                          label: "Spread",
+                          render: (m) =>
+                            Number.isFinite(m.spread_bps)
+                              ? m.spread_bps.toFixed(2) + " bps"
+                              : "—",
+                          sort: (m) => m.spread_bps,
+                        },
+                      ]}
+                    />
+                  )}
+                </div>
               )}
-              <p className="scanner-freshness" aria-live="off">
-                {scanner?.observation_error || scanner?.observation_connected === false
-                  ? "Flux retardé · dernières valeurs conservées"
-                  : scanner?.observed_at
-                    ? `Actualisé à ${new Date(scanner.observed_at * 1000).toLocaleTimeString("fr-FR")} · toutes les 2 s`
-                    : "Connexion aux observations…"}
-              </p>
-              {!!(scanner?.observed_markets ?? scanner?.candidates)?.length && (
-                <DataTable<any>
-                  caption="Tous les marchés observés · admissibilité Auto indiquée séparément"
-                  rows={(scanner.observed_markets ?? scanner.candidates).map((m: any) => ({
-                    ...m,
-                    net_touch_edge_bps: m.net_touch_edge_bps
-                      ?? scanner.candidates?.find((c: any) => c.market === m.market)?.net_touch_edge_bps
-                      ?? null,
-                  }))}
-                  defaultSort={{ id: "rank", direction: "asc" }}
-                  animateChanges
-                  rowKey={(m) => m.market}
-                  columns={[
-                    {
-                      id: "rank",
-                      label: "#",
-                      render: (m) =>
-                        Number.isFinite(m.rank) ? (
-                          <span className="scanner-rank">#{m.rank}</span>
-                        ) : (
-                          "—"
-                        ),
-                      sort: (m) => m.rank ?? 9999,
-                    },
-                    {
-                      id: "name",
-                      label: "Marché",
-                      render: (m) => <><span>{m.name}</span><small className={m.auto_eligible ? "scanner-row-status scanner-admitted" : "scanner-row-status scanner-observed"}>
-                        {m.eligibility_reason ?? "À vérifier"}
-                      </small></>,
-                      sort: (m) => m.name,
-                    },
-                    {
-                      id: "volume",
-                      label: "USD/min",
-                      render: (m) => <LiveAmount value={m.volume_usd_1m} />,
-                      sort: (m) => m.volume_usd_1m,
-                    },
-                    {
-                      id: "spread",
-                      label: "Spread",
-                      render: (m) =>
-                        Number.isFinite(m.spread_bps)
-                          ? m.spread_bps.toFixed(2) + " bps"
-                          : "—",
-                      sort: (m) => m.spread_bps,
-                    },
-                    {
-                      id: "net-edge",
-                      label: "Net estimé",
-                      render: (m) => Number.isFinite(m.net_touch_edge_bps)
-                        ? m.net_touch_edge_bps.toFixed(2) + " bps"
-                        : "—",
-                      sort: (m) => m.net_touch_edge_bps,
-                    },
-                    {
-                      id: "queue",
-                      label: "File estimée",
-                      render: (m) =>
-                        Number.isFinite(m.queue_proxy_sec)
-                          ? Math.round(m.queue_proxy_sec) + " s"
-                          : "—",
-                      sort: (m) => m.queue_proxy_sec,
-                    },
-                  ]}
-                />
-              )}
-              <RichPopover label="Comprendre le scanner">
-                Le débit est le volume observé en une minute. La file est une
-                estimation ; elle ne garantit pas l’exécution d’un ordre.
-                Le net estimé déduit les frais de clôture du spread ; il ne
-                prévoit pas les variations de prix après l’entrée.
-                Cette estimation ne bloque pas le lancement Auto.
-              </RichPopover>
-            </div>
+            </section>
           )}
         </section>
         <aside className="panel summary">
-          <div className="summary-top">
-            <span className="summary-icon">
-              <Icon name="shield" />
-            </span>
-          </div>
-          <h2>Résumé de l'ordre.</h2>
+          <h2>Résumé.</h2>
           <div className="available">
-            <span>Solde spot disponible</span>
+            <span>Solde disponible</span>
             <strong>
               {owner ? usd(w.balance?.usdc_available) : "—"}
               <small>USDC</small>
@@ -519,10 +482,6 @@ export function RunView({
             )}
           </div>
           <dl className="summary-list">
-            <div>
-              <dt>Stratégie</dt>
-              <dd>{strategies.find((s) => s.id === draft.strategy)?.name}</dd>
-            </div>
             <div>
               <dt>Montant par ordre</dt>
               <dd>{usd(draft.order_usd)}</dd>
@@ -541,83 +500,47 @@ export function RunView({
                 <dd>{sideLabel(draft.side)}</dd>
               </div>
             )}
-            <div>
-              <dt>Exécution</dt>
-              <dd>
-                <span className="maker-badge">Maker · Post-only</span>
-              </dd>
-            </div>
             {draft.strategy === "outcome" && (
               <div>
-                <dt>Plafond de position</dt>
+                <dt>Plafond</dt>
                 <dd>{usd(draft.position_cap)}</dd>
               </div>
             )}
-            <div>
-              <dt>Fin de session</dt>
-              <dd>
-                {draft.duration_sec
-                  ? `${Math.round(draft.duration_sec / 60)} min`
-                  : draft.target_volume_usd
-                    ? `${usd(draft.target_volume_usd)} de volume`
-                    : "Manuelle"}
-              </dd>
-            </div>
-            <div>
-              <dt>Seuil de perte</dt>
-              <dd>{usd(draft.stop_loss_usd)}</dd>
-            </div>
-            <div>
-              <dt>Compte Hyperliquid</dt>
-              <dd>
-                {w.identity?.account
-                  ? short(w.identity.account)
-                  : owner
-                    ? short(owner)
-                    : "Non connecté"}
-              </dd>
-            </div>
+            {(draft.duration_sec || draft.target_volume_usd) && (
+              <div>
+                <dt>Fin de session</dt>
+                <dd>
+                  {draft.duration_sec
+                    ? `${Math.round(draft.duration_sec / 60)} min`
+                    : `${usd(draft.target_volume_usd)} de volume`}
+                </dd>
+              </div>
+            )}
           </dl>
           <div className="summary-bottom">
             <SessionStepper connected={!!owner} ready={ready} />
-            <p className="stepper-note">
-              {!owner
-                ? "Connectez votre wallet pour continuer."
-                : !ready
-                  ? "Autorisez le trading pour continuer."
-                  : block === "amount"
-                    ? "Corrigez le montant par ordre."
-                    : block === "cap"
-                      ? "Le plafond doit couvrir au moins un ordre."
-                      : block === "side"
-                        ? "Choisissez Yes ou No pour continuer."
-                        : block === "market"
-                          ? "Sélectionnez un marché pour continuer."
-                          : "Prêt à vérifier."}
-            </p>
+            {(!owner || !ready) && (
+              <p className="stepper-note">
+                {!owner ? "Wallet requis." : "Autorisation requise."}
+              </p>
+            )}
             <FeedbackButton
               className="button primary launch-button summary-launch"
               onClick={preview}
-              loading={busy === "preview"}
-              loadingLabel="Vérification"
+              loading={busy === "launch"}
+              loadingLabel="Lancement"
               disabled={!!busy || (!!owner && ready && !!block)}
             >
               <>
                 {!owner
-                  ? "Connecter mon wallet"
+                  ? "Connecter"
                   : !ready
-                    ? "Continuer vers l'autorisation"
-                    : "Vérifier et lancer"}
+                    ? "Autoriser"
+                    : "Lancer"}
                 <Icon name="arrow" size={18} />
               </>
             </FeedbackButton>
             {actionError && <InlineAlert>{actionError}</InlineAlert>}
-            <p className="footnote">
-              <Icon name="shield" size={13} />
-              {owner
-                ? "Vous vérifiez les paramètres avant le lancement."
-                : "Vos fonds restent sur votre compte Hyperliquid."}
-            </p>
           </div>
         </aside>
       </div>
@@ -631,39 +554,20 @@ export function RunView({
               ? "Autorisation requise"
               : block
                 ? "Complétez les paramètres"
-                : "Prêt à vérifier"
+                : "Prêt"
         }
         label={
           !owner
-            ? "Connecter mon wallet"
+            ? "Connecter"
             : !ready
-              ? "Continuer vers l'autorisation"
-              : "Vérifier et lancer"
+              ? "Autoriser"
+              : "Lancer"
         }
-        loading={busy === "preview"}
-        loadingLabel="Vérification"
+        loading={busy === "launch"}
+        loadingLabel="Lancement"
         disabled={!!busy || (!!owner && ready && !!block)}
         onAction={preview}
       />
-      <div className="bottom-guide">
-        <span>
-          <Icon name="link" size={15} />
-          Votre wallet
-        </span>
-        <i />
-        <span>
-          <Icon name="shield" size={15} />
-          Votre compte
-        </span>
-        <i />
-        <span>
-          <Icon name="run" size={15} />
-          Vos sessions
-        </span>
-        <button onClick={() => setShowHelp(true)}>
-          Comment ça marche ?<Icon name="info" size={14} />
-        </button>
-      </div>
     </>
   );
 }

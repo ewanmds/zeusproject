@@ -625,16 +625,15 @@ class OutcomeFlowScanner:
             item.update(auto_eligible=bool(approved),
                         eligibility_reason=reason if connected else 'Flux déconnecté')
             observed.append(item)
-        # Rank is the exact Auto selection order: highest executing $/min first,
-        # then queue/flow tie-breakers. Admissible rows lead the table.
-        ranked = sorted((row for row in observed if row.get('auto_eligible')),
-                        key=lambda row: (row.get('rank') or 10**9,
-                                        -row['volume_usd_1m'], row['market']))
-        for index, row in enumerate(ranked, 1):
-            row['rank'] = index
+        # Admissible rows lead in exact Auto selection order; every other
+        # observed market follows by volume. Number all of them so the table
+        # never shows a dead "#—" column.
         observed.sort(key=lambda row: (
-            not row.get('auto_eligible'), row.get('rank') or 10**9,
+            not row.get('auto_eligible'),
+            row.get('rank') if row.get('auto_eligible') else 0,
             -row['volume_usd_1m'], row['market']))
+        for index, row in enumerate(observed, 1):
+            row['rank'] = index
         with self.lock:
             for row in observed[:24]:
                 self.book_watch[row['market']] = now

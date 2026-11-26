@@ -15,7 +15,7 @@ export interface RunProps {
   scanner: any;
   owner?: string;
   ready: boolean;
-  preview: () => Promise<void>;
+  preview: () => void;
   busy: string;
   setShowHelp: Setter<boolean>;
   actionError: string;

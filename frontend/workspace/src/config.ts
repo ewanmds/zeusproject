@@ -5,7 +5,7 @@ export const strategies = [
     icon: "auto",
     name: "Auto Outcome",
     label: "HIP-4",
-    description: "Le scanner choisit le marché admissible et suit le flux en direct.",
+    description: "Meilleur marché, en automatique.",
     detail: "Sélection automatique",
   },
   {
@@ -13,7 +13,7 @@ export const strategies = [
     icon: "book",
     name: "BBO",
     label: "HIP-3",
-    description: "Zeus cote au meilleur bid et au meilleur ask du carnet.",
+    description: "Au meilleur bid/ask.",
     detail: "Prix du carnet",
   },
   {
@@ -21,7 +21,7 @@ export const strategies = [
     icon: "target",
     name: "MID",
     label: "HIP-3",
-    description: "Zeus cote à la distance choisie du prix médian.",
+    description: "À distance du prix médian.",
     detail: "Distance réglable",
   },
 ] as const;

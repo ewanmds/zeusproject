@@ -68,7 +68,6 @@ def main():
                     account_gate={'hold':width==1440,'routes':[]}
                     lost_launch={'once':width==1440}
                     uncertain_stop={'once':width==1440}
-                    preview_gate={'hold':False,'route':None}
                     def route(call):
                         if call.request.url==origin+'/api/v2/account' and account_gate['hold']:
                             account_gate['routes'].append(call);return
@@ -76,12 +75,10 @@ def main():
                             lost_launch['once']=False;call.fetch();call.abort();return
                         if call.request.url.endswith('/stop') and uncertain_stop['once']:
                             uncertain_stop['once']=False;call.fulfill(status=503,json={'detail':'Arrêt non confirmé. Réessayez la vérification.'});return
-                        if call.request.url==origin+'/api/v2/sessions/preview' and preview_gate['hold']:
-                            preview_gate['route']=call;return
                         if call.request.url.startswith(origin+'/api/v2/markets'):
                             call.fulfill(json={'tokens':[{'key':'IO_SNDK','symbol':'io:SNDK'},{'key':'SP500','symbol':'xyz:SP500'}]});return
                         if call.request.url.startswith(origin+'/api/v2/scanner'):
-                            call.fulfill(json={'ready':True,'cost_policy':'informational','candidates':[{'market':'#101','name':'Test market','queue_proxy_sec':20,'spread_bps':.26,'volume_usd_1m':550,'net_touch_edge_bps':-7.42,'maker_close_fee_bps':7.68,'fees_covered':False}]});return
+                            call.fulfill(json={'ready':True,'cost_policy':'informational','candidates':[{'market':'#101','name':'Test market','queue_proxy_sec':20,'spread_bps':.26,'volume_usd_1m':550,'net_touch_edge_bps':-7.42,'maker_close_fee_bps':7.68,'fees_covered':False}],'observed_markets':[{'market':'#101','name':'Test market','queue_proxy_sec':20,'spread_bps':.26,'volume_usd_1m':550,'rank':1,'auto_eligible':True,'eligibility_reason':'Admissible'}]});return
                         if not call.request.url.startswith(origin):call.abort();return
                         call.continue_()
                     page.route('**/*',route)
@@ -138,8 +135,7 @@ def main():
                     expect(page.get_by_role('heading',name='Vos sessions.')).to_be_visible();record(page)
                     page.get_by_role('link',name='Lancer',exact=True).click()
                     # Real SIWE cookie, CSRF and encrypted agent preparation/approval.
-                    page.get_by_role('button',name='Vérifier et lancer',exact=True).count()
-                    page.get_by_role('button',name="Continuer vers l'autorisation",exact=True).click()
+                    page.get_by_role('button',name='Autoriser',exact=True).click()
                     expect(page.get_by_role('heading',name='Votre compte.')).to_be_visible()
                     if width==1440:
                         expect(page.locator('[data-layro="preetsuthar17/skeleton"]')).to_be_visible();record(page)
@@ -167,8 +163,9 @@ def main():
                     expect(market).to_contain_text('io:SNDK')
                     page.get_by_role('textbox',name='Rechercher un marché',exact=True).fill('')
                     page.locator('.strategy-card').filter(has_text='Auto Outcome').click()
-                    expect(page.get_by_role('columnheader',name='Net estimé',exact=True)).to_be_visible()
-                    expect(page.get_by_role('cell',name='-7.42 bps',exact=True)).to_be_visible()
+                    page.locator('.scanner-head').click()
+                    expect(page.get_by_role('columnheader',name='USD/min',exact=True)).to_be_visible()
+                    expect(page.locator('.scanner-rank').first).to_be_visible()
                     page.get_by_text('Options de session',exact=True).click()
                     page.get_by_role('button',name='Durée',exact=True).click()
                     page.get_by_label('Durée · minutes').fill('15')
@@ -178,33 +175,20 @@ def main():
                         page.get_by_role('button',name='Terminer les réglages',exact=True).click()
                     amount_input=page.get_by_role('spinbutton',name='Montant par ordre',exact=True)
                     amount_input.fill('200')
-                    expect(page.get_by_role('button',name='Vérifier et lancer',exact=True)).to_be_disabled()
+                    expect(page.get_by_role('button',name='Lancer',exact=True)).to_be_disabled()
                     expect(page.get_by_text('Montant supérieur au solde spot disponible',exact=False)).to_be_visible()
                     amount_input.fill('90')
                     expect(page.get_by_text('plus de 80 %',exact=False)).to_be_visible()
                     amount_input.fill('25')
-                    preview_button=page.get_by_role('button',name='Vérifier et lancer',exact=True)
-                    before_width=preview_button.bounding_box()['width']
-                    preview_gate['hold']=True
-                    with page.expect_request(lambda request:request.url==origin+'/api/v2/sessions/preview'):
-                        preview_button.click()
-                    loading=page.get_by_role('button',name='Vérification',exact=True)
-                    expect(loading).to_have_attribute('aria-busy','true')
-                    expect(loading).to_be_disabled()
-                    if width == 1440:
-                        assert abs(loading.bounding_box()['width']-before_width)<1
-                    assert preview_gate['route'] is not None
-                    record(page)
-                    preview_gate['hold']=False;preview_gate['route'].fulfill(status=503,json={'detail':'Vérification de test indisponible.'})
-                    expect(page.get_by_role('alert')).to_contain_text('Vérification de test indisponible.');record(page)
-                    page.get_by_role('button',name='Vérifier et lancer',exact=True).click()
-                    expect(page.get_by_role('dialog')).to_be_visible()
-                    expect(page.get_by_role('dialog')).to_contain_text('00:15:00')
-                    expect(page.get_by_role('dialog')).to_contain_text('$8.00')
-                    capture(page, f'review-{width}.png')
+                    launch_button=page.get_by_role('button',name='Lancer',exact=True)
+                    expect(launch_button).to_be_enabled()
+                    launch_button.click()
                     dialog=page.get_by_role('dialog')
-                    dialog.get_by_role('checkbox').check()
-                    dialog.get_by_role('button',name='Confirmer et lancer',exact=True).click()
+                    expect(dialog).to_be_visible()
+                    expect(dialog).to_contain_text('$25.00')
+                    expect(dialog).to_contain_text('Sélection Auto')
+                    capture(page, f'review-{width}.png')
+                    dialog.get_by_role('button',name='Lancer',exact=True).click()
                     if width==1440:
                         expect(page.get_by_text('Résultat en attente. Vérifiez la session avant de réessayer.',exact=True)).to_be_visible()
                         page.get_by_role('link',name='Sessions',exact=False).click()
@@ -279,6 +263,9 @@ def main():
                 # Stop is now one click; this unused confirmation component is
                 # retained in the library but intentionally absent from the flow.
                 expected.discard('preetsuthar17/alert-dialog')
+                # Direct confirmation has no separate preview-loading state;
+                # the ArcLoader remains available for Suspense fallbacks.
+                expected.discard('turbostarter/fade-arc')
                 missing=expected-seen
                 (folder/'layro-coverage.json').write_text(json.dumps({'expected':len(expected),'observed':len(expected&seen),'missing':sorted(missing),'sources':sorted(seen)},indent=2),encoding='utf-8')
                 assert not missing,sorted(missing)

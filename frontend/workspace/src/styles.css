@@ -765,13 +765,40 @@ small {
   margin-top: 25px;
 }
 .scanner-head {
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
-  font-size: 10px;
-  color: var(--muted);
   gap: 10px;
+  min-height: 44px;
+  padding: 11px 14px;
+  margin: 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: left;
+  background: rgba(148, 163, 184, 0.035);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.scanner-head:hover {
+  border-color: rgba(148, 163, 184, 0.22);
+}
+.scanner-head-right {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.scanner-head-right svg {
+  color: var(--subtle);
+  transition: transform 0.18s ease;
+}
+.scanner.open .scanner-head-right svg {
+  transform: rotate(180deg);
+}
+.scanner-body {
+  padding-top: 12px;
 }
 .scanner-head > span:first-child {
   display: flex;

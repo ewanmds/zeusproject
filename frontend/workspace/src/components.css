@@ -548,7 +548,12 @@
 }
 .scanner .zeus-data-table th:first-child,
 .scanner .zeus-data-table td:first-child {
-  width: 40%;
+  width: 44px;
+  white-space: nowrap;
+}
+.scanner .zeus-data-table th:nth-child(2),
+.scanner .zeus-data-table td:nth-child(2) {
+  width: 42%;
   white-space: normal;
 }
 .scanner .zeus-data-table td:not(:first-child) {
