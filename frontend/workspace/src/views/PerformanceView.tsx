@@ -7,9 +7,9 @@ import { TradeJournalTable } from "../components/TradeJournalTable";
 import { RichPopover } from "../components/fields";
 import { usd } from "../data";
 import { strategies } from "../config";
-import { aggregate } from "../presentation/session";
 import {
   filterByVenue,
+  sumAvailable,
   venueOf,
   type Venue,
 } from "../presentation/performance";
@@ -39,9 +39,9 @@ export function PerformanceView({
 }: PerformanceProps) {
   const [venue, setVenue] = useState<Venue>("all");
   const filtered = useMemo(() => filterByVenue(history, venue), [history, venue]);
-  const volume = aggregate(filtered, "volume_usd");
-  const net = aggregate(filtered, "net_pnl");
-  const fees = aggregate(filtered, "fees");
+  const volume = sumAvailable(filtered, "volume_usd");
+  const net = sumAvailable(filtered, "net_pnl");
+  const fees = sumAvailable(filtered, "fees");
   const summary = strategies
     .filter(
       (strategy) =>
@@ -54,7 +54,7 @@ export function PerformanceView({
     }))
     .filter((row) => row.rows.length > 0);
   const journalRows = filtered.map((session) => {
-    const pnl = session.net_pnl ?? 0;
+    const pnl = session.net_pnl ?? session.known_net_pnl ?? 0;
     const status = session.running
       ? ("open" as const)
       : pnl > 0
@@ -72,8 +72,8 @@ export function PerformanceView({
           : session.config.outcome_side === "no"
             ? "No"
             : session.strategy.toUpperCase(),
-      size: session.volume_usd,
-      net_pnl: session.net_pnl,
+      size: session.volume_usd ?? session.known_volume_usd,
+      net_pnl: session.net_pnl ?? session.known_net_pnl,
       duration_sec: session.duration_sec,
       status,
     };
@@ -118,13 +118,13 @@ export function PerformanceView({
                   label: "Net réalisé",
                   value: usd(net),
                   icon: "target",
-                  negative: net != null && net < 0,
+                  negative: net < 0,
                 },
                 { label: "Frais", value: usd(fees), icon: "wallet" },
                 {
                   label: "Coût / 1M",
                   value: usd(
-                    volume && net != null ? (-net / volume) * 1e6 : null,
+                    volume ? (-net / volume) * 1e6 : null,
                   ),
                   icon: "info",
                   help: (
@@ -168,7 +168,7 @@ export function PerformanceView({
                       label: "Volume",
                       render: (row) =>
                         row.rows.length
-                          ? usd(aggregate(row.rows, "volume_usd"))
+                          ? usd(sumAvailable(row.rows, "volume_usd"))
                           : "—",
                     },
                     {
@@ -176,16 +176,14 @@ export function PerformanceView({
                       label: "Net réalisé",
                       render: (row) =>
                         row.rows.length
-                          ? usd(aggregate(row.rows, "net_pnl"))
+                          ? usd(sumAvailable(row.rows, "net_pnl"))
                           : "—",
                     },
                     {
                       id: "fills",
                       label: "Fills",
                       render: (row) =>
-                        row.rows.length
-                          ? (aggregate(row.rows, "fills") ?? "—")
-                          : "—",
+                        row.rows.length ? sumAvailable(row.rows, "fills") : "—",
                     },
                   ]}
                 />
@@ -214,8 +212,10 @@ export function PerformanceView({
                   {
                     id: "volume",
                     label: "Volume",
-                    render: (session) => usd(session.volume_usd),
-                    sort: (session) => session.volume_usd,
+                    render: (session) =>
+                      usd(session.volume_usd ?? session.known_volume_usd),
+                    sort: (session) =>
+                      session.volume_usd ?? session.known_volume_usd ?? null,
                   },
                   {
                     id: "fills",

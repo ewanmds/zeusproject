@@ -15,9 +15,12 @@ import {
 import type { Session } from "../../types";
 import { strategies } from "../../config";
 import { usd } from "../../data";
-import { aggregate } from "../../presentation/session";
-import { volumeByPeriod, type Venue } from "../../presentation/performance";
-import { Empty, InlineAlert } from "../feedback";
+import {
+  sumAvailable,
+  volumeByPeriod,
+  type Venue,
+} from "../../presentation/performance";
+import { Empty } from "../feedback";
 
 const venueColors = {
   hip4: "#8b5cf6",
@@ -47,16 +50,14 @@ export default function PerformanceCharts({
   venue: Venue;
 }) {
   const volume = volumeByPeriod(history, period);
-  const complete = aggregate(history, "volume_usd") != null;
   const breakdown = strategies
     .map((strategy) => ({
       id: strategy.id,
       name: strategy.name,
-      value:
-        aggregate(
-          history.filter((session) => session.strategy === strategy.id),
-          "volume_usd",
-        ) ?? 0,
+      value: sumAvailable(
+        history.filter((session) => session.strategy === strategy.id),
+        "volume_usd",
+      ),
     }))
     .filter((row) => row.value > 0);
   const total = breakdown.reduce((sum, row) => sum + row.value, 0);
@@ -88,7 +89,7 @@ export default function PerformanceCharts({
             )}
           </div>
         </div>
-        {!history.length ? (
+        {history.length === 0 ? (
           <Empty
             icon="chart"
             title="Aucune session sur cette période."
@@ -160,12 +161,6 @@ export default function PerformanceCharts({
             </ResponsiveContainer>
           </div>
         )}
-        {volume.incomplete && (
-          <InlineAlert tone="warning">
-            Certaines valeurs sont indisponibles ; les données manquantes ne
-            sont pas représentées par zéro.
-          </InlineAlert>
-        )}
       </section>
 
       <section
@@ -173,12 +168,7 @@ export default function PerformanceCharts({
         data-layro="legions-developer/recharts-pie-chart"
       >
         <h2>Volume par stratégie</h2>
-        {!complete ? (
-          <Empty
-            title="Données incomplètes."
-            text="La répartition sera disponible après vérification."
-          />
-        ) : total <= 0 ? (
+        {total <= 0 ? (
           <Empty
             icon="chart"
             title="Aucun volume exécuté."

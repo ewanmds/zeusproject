@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "../types";
-import { filterByVenue, venueOf, volumeByPeriod } from "./performance";
+import {
+  filterByVenue,
+  sumAvailable,
+  venueOf,
+  volumeByPeriod,
+} from "./performance";
 
 function session(overrides: Partial<Session> = {}): Session {
   return {
@@ -89,21 +94,48 @@ describe("volume by period", () => {
     expect(hourly.points[1].hip3).toBe(0);
   });
 
-  it("does not turn an incomplete venue volume into zero", () => {
+  it("sums available values without hiding the known rows", () => {
+    expect(
+      sumAvailable(
+        [
+          session({ volume_usd: 100 }),
+          session({ volume_usd: null }),
+          session({ volume_usd: 25 }),
+        ],
+        "volume_usd",
+      ),
+    ).toBe(125);
+    expect(sumAvailable([], "volume_usd")).toBe(0);
+    expect(
+      sumAvailable(
+        [session({ volume_usd: null, known_volume_usd: 40 })],
+        "volume_usd",
+      ),
+    ).toBe(40);
+  });
+
+  it("uses known group totals when a parent row is incomplete", () => {
+    const result = volumeByPeriod(
+      [session({ volume_usd: null, known_volume_usd: 300 })],
+      7,
+    );
+    expect(result.points[0].hip4).toBe(300);
+    expect(result.points[0].total).toBe(300);
+  });
+
+  it("does not let a missing venue volume hide the other family", () => {
     const rows = [
       session({ id: "a", volume_usd: 100 }),
       session({ id: "b", strategy: "bbo", kind: "grid", volume_usd: null }),
     ];
     const result = volumeByPeriod(rows, 7);
-    expect(result.incomplete).toBe(true);
     expect(result.points[0].hip4).toBe(100);
-    expect(result.points[0].hip3).toBeNull();
-    expect(result.points[0].total).toBeNull();
+    expect(result.points[0].hip3).toBe(0);
+    expect(result.points[0].total).toBe(100);
   });
 
   it("returns no points without sessions", () => {
     const result = volumeByPeriod([], 7);
     expect(result.points).toEqual([]);
-    expect(result.incomplete).toBe(false);
   });
 });

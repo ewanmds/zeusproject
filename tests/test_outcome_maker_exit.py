@@ -870,22 +870,24 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
 
 class WorkspaceProjectionTests(unittest.TestCase):
     def test_archived_group_never_hides_an_unconfirmed_leg(self):
-        def record(sid, confirmed, market, name, started, error=''):
+        def record(sid, confirmed, market, name, started, error='', volume=0, complete=True):
             return ({'session_id': sid, 'symbols': [market], 'config': {'auto_group_id': 'group'},
                      'cleanup_confirmed': confirmed, 'started': started,
-                     'market_name': name, 'cleanup_error': error})
+                     'market_name': name, 'cleanup_error': error,
+                     'volume_usd': volume, 'accounting_complete': complete})
         # The confirmed latest leg must not hide the older blocked market or
         # its cleanup error behind the group's newest name.
-        rows = {'a': record('a', True, '#909', 'Latest', 2.0),
-                'b': record('b', False, '#202', 'Blocked', 1.0, 'Residual order')}
+        rows = {'a': record('a', True, '#909', 'Latest', 2.0, volume=11),
+                'b': record('b', False, '#202', 'Blocked', 1.0, 'Residual order',
+                            volume=7, complete=False)}
         def entry(path, rec, info=None):
             return {'session_id': rec['session_id'], 'market': rec['symbols'][0],
                     'market_name': rec['market_name'], 'config': rec['config'],
                     'started': rec['started'], 'phase': 'stopped' if rec['cleanup_confirmed'] else 'failed',
                     'running': False, 'cleanup_confirmed': rec['cleanup_confirmed'],
                     'cleanup_error': rec.get('cleanup_error', ''),
-                    'stale': False, 'accounting_complete': True,
-                    'volume_usd': 1, 'net_pnl': 0, 'fees': 0, 'fills': 1,
+                    'stale': False, 'accounting_complete': rec.get('accounting_complete', True),
+                    'volume_usd': rec.get('volume_usd', 0), 'net_pnl': 0, 'fees': 0, 'fills': 1,
                     'position_usd': 0, 'duration_sec': 1}
         manager = SimpleNamespace(
             outcome=SimpleNamespace(records=lambda: [('a.json', rows['a']), ('b.json', rows['b'])],
@@ -906,6 +908,8 @@ class WorkspaceProjectionTests(unittest.TestCase):
         self.assertEqual(grouped['market'], '#202')
         self.assertEqual(grouped['name'], 'Blocked')
         self.assertIn('Residual order', grouped['reason'])
+        self.assertIsNone(grouped['volume_usd'])
+        self.assertEqual(grouped['known_volume_usd'], 18)
 
     def test_session_exposes_exit_intent_and_reason(self):
         row = {'session_id': 's1', 'market': '#101', 'market_name': 'Test',

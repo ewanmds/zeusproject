@@ -1,6 +1,25 @@
 import type { Session } from "../types";
 
 export type Venue = "all" | "hip3" | "hip4";
+export type NumericField = "volume_usd" | "net_pnl" | "fees" | "fills";
+
+function finite(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/** Sum what is available; a missing field never hides the other rows. */
+export function sumAvailable(rows: Session[], field: NumericField) {
+  const knownField = {
+    volume_usd: "known_volume_usd",
+    net_pnl: "known_net_pnl",
+    fees: "known_fees",
+    fills: "known_fills",
+  } as const;
+  return rows.reduce((total, session) => {
+    const value = session[knownField[field]] ?? session[field];
+    return total + (finite(value) ? value : 0);
+  }, 0);
+}
 
 export function venueOf(session: Pick<Session, "strategy">): Exclude<Venue, "all"> {
   return session.strategy === "outcome" ? "hip4" : "hip3";
@@ -16,9 +35,9 @@ export interface VolumeBucket {
   key: string;
   label: string;
   at: number;
-  hip4: number | null;
-  hip3: number | null;
-  total: number | null;
+  hip4: number;
+  hip3: number;
+  total: number;
   sessions: number;
 }
 
@@ -33,21 +52,9 @@ function bucketKey(date: Date, hourly: boolean) {
 }
 
 function venueVolume(rows: Session[], venue: Exclude<Venue, "all">) {
-  const selected = rows.filter((session) => venueOf(session) === venue);
-  if (!selected.length) return 0;
-  if (
-    !selected.every(
-      (session) =>
-        session.accounting_complete &&
-        session.volume_usd != null &&
-        Number.isFinite(session.volume_usd),
-    )
-  ) {
-    return null;
-  }
-  return selected.reduce(
-    (total, session) => total + (session.volume_usd as number),
-    0,
+  return sumAvailable(
+    rows.filter((session) => venueOf(session) === venue),
+    "volume_usd",
   );
 }
 
@@ -86,7 +93,7 @@ export function volumeByPeriod(sessions: Session[], periodDays: number) {
         at: start.getTime(),
         hip4,
         hip3,
-        total: hip4 != null && hip3 != null ? hip4 + hip3 : null,
+        total: hip4 + hip3,
         sessions: rows.length,
       };
     })
@@ -94,11 +101,5 @@ export function volumeByPeriod(sessions: Session[], periodDays: number) {
   return {
     points,
     granularity: hourly ? ("hour" as const) : ("day" as const),
-    incomplete: sessions.some(
-      (session) =>
-        !session.accounting_complete ||
-        session.volume_usd == null ||
-        !Number.isFinite(session.volume_usd),
-    ),
   };
 }

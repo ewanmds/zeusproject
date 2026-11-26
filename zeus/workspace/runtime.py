@@ -54,6 +54,10 @@ def visible_session(row, kind):
         'volume_usd': row.get('volume_usd') if complete else None,
         'net_pnl': row.get('net_pnl') if complete else None, 'fees': row.get('fees') if complete else None,
         'fills': row.get('fills') if complete else None, 'cost_per_1m': row.get('cost_per_1m') if complete else None,
+        'known_volume_usd': row.get('known_volume_usd', row.get('volume_usd')),
+        'known_net_pnl': row.get('known_net_pnl', row.get('net_pnl')),
+        'known_fees': row.get('known_fees', row.get('fees')),
+        'known_fills': row.get('known_fills', row.get('fills')),
         'position_usd': row.get('position_usd'), 'stale': bool(row.get('stale')),
         'accounting_complete': bool(complete), 'config': config, 'quotes': row.get('quotes', []),
         'state': row.get('execution_state') or row.get('action') or phase,
@@ -199,6 +203,12 @@ class Runtimes:
                 complete = all(b.get('accounting_complete') and not b.get('stale') for b in members)
                 for field in ('volume_usd', 'net_pnl', 'fees', 'fills'):
                     row[field] = sum(b.get(field) or 0 for b in members) if complete else None
+                    known = [b.get(field) for b in members
+                             if isinstance(b.get(field), (int, float))
+                             and math.isfinite(b.get(field))]
+                    # The Performance page needs the volume that is already
+                    # known even when one rotation leg is still incomplete.
+                    row[f'known_{field}'] = sum(known) if known else None
                 row['accounting_complete'] = complete
                 # Never hide an unconfirmed leg behind a newer confirmed one.
                 row['running'] = any(b.get('running') for b in members)
