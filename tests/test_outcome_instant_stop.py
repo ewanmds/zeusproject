@@ -303,6 +303,19 @@ class StopSupervisorTests(unittest.TestCase):
             self.assertIn('offline recovery failure', read_json(journal)['cleanup_error'])
             self.assertFalse(read_json(journal)['cleanup_confirmed'])
 
+    def test_flat_proof_skips_the_funds_lock_without_pending_client_ids(self):
+        from zeus.server import BotManager
+        manager = BotManager.__new__(BotManager)
+        manager.account_context = SimpleNamespace(account='wallet')
+        record = dict(session_id='s1', account_kind='outcome', account='wallet',
+                      symbols=['#101'], pending_cloids=[],
+                      funds_root=str(Path('offline-funds')))
+        with patch('hyperliquid.info.Info', return_value=Mock()), \
+             patch('zeus.server.account_snapshot', return_value=[('#101', 0.0, [])]), \
+             patch('zeus.process_control.OutcomeFunds') as funds:
+            manager._verify_session_flat(record)
+        funds.assert_not_called()
+
     def test_resume_keeps_manual_authority_and_never_restarts_quoting(self):
         from zeus.server import BotManager, WorldcupStartRequest
         from zeus.workspace.accounts import AccountContext

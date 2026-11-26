@@ -431,7 +431,9 @@ class BotManager:
                 raise RuntimeError("Residual orders/position; manual reconciliation required")
             if abs(float(position) - qty) > 1e-6 or notional >= 10.0:
                 raise RuntimeError("Residual orders/position; manual reconciliation required")
-        for cloid in record.get("pending_cloids", []):
+        pending = record.get("pending_cloids", [])
+        pending = pending if isinstance(pending, list) else []
+        for cloid in pending:
             try:
                 _, status = confirmed_client_order(info, account, cloid, symbols)
             except RuntimeError as exc:
@@ -442,9 +444,9 @@ class BotManager:
                 raise
             if status == "open":
                 raise RuntimeError("Placement still open; stop not confirmed")
-        if record.get("funds_root"):
+        if pending and record.get("funds_root"):
             from zeus.process_control import OutcomeFunds
-            OutcomeFunds(record["funds_root"], account, record["session_id"]).resolve(record.get("pending_cloids", []))
+            OutcomeFunds(record["funds_root"], account, record["session_id"]).resolve(pending)
 
     def _reserve_session(self, key, symbols, kind, ignore_session_id=None, ignore_session_ids=()):
         # A start decision must never use the dashboard's cached scan.
