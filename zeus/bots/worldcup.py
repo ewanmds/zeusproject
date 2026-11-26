@@ -1726,9 +1726,12 @@ class HyperliquidSpreadBot:
                 if not str(coin).startswith("+"):
                     continue
                 qty = finite(balance["total"])
-                if 0 < qty < UNSELLABLE_TOKENS_WITHOUT_MARK:
+                entry = finite(balance.get("entryNtl") or 0)
+                # Fewer than 10 tokens is unsellable at the $1 outcome cap;
+                # a sub-$10 entry value is dust even when the lot is larger.
+                if 0 < qty < UNSELLABLE_TOKENS_WITHOUT_MARK or (0 < entry < 10.0):
                     dust_coins.add(str(coin))
-                    dust_usd_by_coin[str(coin)] = finite(balance.get("entryNtl") or 0)
+                    dust_usd_by_coin[str(coin)] = entry
             self.dust_coins = dust_coins
             self.dust_usd_by_coin = dust_usd_by_coin
             self.dust_positions = len(dust_coins)

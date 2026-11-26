@@ -97,11 +97,12 @@ class DustAndPartialBidTests(unittest.TestCase):
             {"coin": "+101", "total": "5", "hold": "0", "entryNtl": "3"},
             {"coin": "+102", "total": "9", "hold": "0", "entryNtl": "4"},
             {"coin": "+103", "total": "10", "hold": "0", "entryNtl": "9"},
+            {"coin": "+104", "total": "57", "hold": "0", "entryNtl": "35"},
         ]}
         self.assertTrue(bot._apply_account_snapshot(spot, [], source="rest"))
-        self.assertEqual(bot.dust_positions, 2)
-        self.assertEqual(bot.dust_coins, {'+101', '+102'})
-        self.assertAlmostEqual(bot.dust_usd, 7.0)
+        self.assertEqual(bot.dust_positions, 3)
+        self.assertEqual(bot.dust_coins, {'+101', '+102', '+103'})
+        self.assertAlmostEqual(bot.dust_usd, 16.0)
 
 
 class RotationInventoryDustTests(unittest.TestCase):
