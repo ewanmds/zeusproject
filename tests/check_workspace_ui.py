@@ -250,7 +250,7 @@ def main():
                         app.state.runtimes.invalidate(a.address.lower())
                         page.wait_for_timeout(500)
                     page.get_by_role('link',name='Performances',exact=True).click()
-                    expect(page.get_by_role('heading',name='Vos résultats, en continu.')).to_be_visible()
+                    expect(page.get_by_role('heading',name='Une vue claire.')).to_be_visible()
                     expect(page.locator('[data-layro="legions-developer/recharts-bar-chart"]')).to_be_visible()
                     expect(page.locator('[data-layro="legions-developer/recharts-pie-chart"] svg')).to_be_visible()
                     record(page)
