@@ -85,12 +85,15 @@ class QueuePriorityTests(unittest.TestCase):
             bot.place_bilateral(st)
         raw.bulk_cancel.assert_called_once_with([{'coin': '#101', 'oid': 123}])
         self.assertIsNone(st.ask_oid)
-        self.assertTrue(st.reconcile_required)
+        # A successful cancel is authoritative: no long REST reconcile gate is
+        # needed, only the short pending window while WS balances catch up.
+        self.assertFalse(st.reconcile_required)
+        self.assertGreater(st.pending_until, now)
         self.assertEqual(st.last_cancel['price'], .69879)
         self.assertEqual(st.last_cancel['target_price'], .69878)
         bot.place_bilateral(st)
         self.assertEqual(raw.bulk_cancel.call_count, 1)
-        raw.order.assert_not_called()  # requires fresh account confirmation
+        raw.order.assert_not_called()  # pending window blocks the resubmission
 
     def test_old_plan_cannot_cancel_when_latest_book_already_matches_quote(self):
         bot, st, raw, now = self.fixture()

@@ -482,6 +482,8 @@ class HyperliquidSpreadBot:
         self.ws_orders_at = 0.0
         self.ws_account_ready = False
         self.ws_started_at = 0.0
+        self.ws_account_pending = False
+        self.terminal_oids = {}
         self._quote_cancel_local = threading.local()
         self.safety = SafetyLatch(self._halt, cfg.safety_file, is_running=lambda: self.running
                                  and not (cfg.stop_file and os.path.exists(cfg.stop_file)) and supervisor_alive(),
@@ -909,6 +911,8 @@ class HyperliquidSpreadBot:
         open_ids = {int(order["oid"]) for _, _, orders in rows for order in orders}
         if any(int(req["oid"]) in open_ids for req in requests):
             raise RuntimeError("Cancellation rejected: order still open")
+        for req in requests:
+            self._mark_terminal(req["oid"])
         if not self.sync_account(force=True):
             raise RuntimeError("Cancellation reconciliation: account synchronization unconfirmed")
         with self.lock:
@@ -1205,6 +1209,7 @@ class HyperliquidSpreadBot:
             self.ws_spot_at = 0.0
             self.ws_orders_at = 0.0
             self.ws_account_ready = False
+            self.ws_account_pending = False
             self.ws_started_at = time.time()
         self.ws_info = Info(self.cfg.base_url, skip_ws=False, perp_dexs=perp_dexs, timeout=10,
                             **getattr(self, "_sdk_metadata", {}))
@@ -1464,6 +1469,9 @@ class HyperliquidSpreadBot:
             spot, orders = self.ws_spot_state, self.ws_open_orders
         if spot is None or orders is None:
             return
+        if time.time() < getattr(self, "account_settle_until", 0.0):
+            self.ws_account_pending = True
+            return
         try:
             self._apply_account_snapshot(spot, orders, source="ws")
         except Exception:
@@ -1471,6 +1479,15 @@ class HyperliquidSpreadBot:
                 for state in self.states.values():
                     state.last_action = "ws account snapshot invalid"
                 self.ws_account_ready = False
+
+    def apply_pending_ws_account(self) -> None:
+        """Apply the latest snapshot once the local fill/order settling ends."""
+        if not getattr(self, "ws_account_pending", False):
+            return
+        if time.time() < getattr(self, "account_settle_until", 0.0):
+            return
+        self.ws_account_pending = False
+        self._apply_ws_account()
 
     def account_ready(self, max_age: float = 10.0) -> bool:
         now = time.time()
@@ -1497,6 +1514,7 @@ class HyperliquidSpreadBot:
                         if not coin_matches(st.spec.symbol, coin):
                             continue
                         if any(marker in status for marker in terminal):
+                            self._mark_terminal(oid)
                             if "fill" in status or "reject" in status:
                                 st.reconcile_required = True
                                 changed = True
@@ -1515,6 +1533,8 @@ class HyperliquidSpreadBot:
                                 st.last_error = status
                                 rejection_error = f"Order rejected: {status}"
                         elif status in {"open", "resting"}:
+                            if oid in getattr(self, "terminal_oids", {}):
+                                continue  # a stale frame cannot resurrect it
                             side = str(order.get("side", "")).upper()
                             if side not in {'A', 'B'}:
                                 continue
@@ -1631,6 +1651,34 @@ class HyperliquidSpreadBot:
         self.account_revision = getattr(self, "account_revision", 0) + 1
         self.account_settle_until = time.time() + 1.0
 
+    def _mark_terminal(self, oid) -> None:
+        """Remember an order the exchange proved dead (fill/cancel/reject).
+
+        A lagging websocket snapshot can still contain that oid. Keeping it in
+        this short-lived set prevents the bot from resurrecting the order and
+        then opening/cancelling the same price again.
+        """
+        try:
+            oid = int(oid)
+        except (TypeError, ValueError):
+            return
+        term = getattr(self, "terminal_oids", None)
+        if term is None:
+            term = self.terminal_oids = {}
+        if oid > 0:
+            term[oid] = time.time()
+
+    def _clear_terminal(self, oid) -> None:
+        term = getattr(self, "terminal_oids", None)
+        if term:
+            term.pop(int(oid), None)
+
+    def _trim_terminal(self) -> None:
+        term = getattr(self, "terminal_oids", None) or {}
+        cutoff = time.time() - 120
+        self.terminal_oids = {oid: at for oid, at in term.items()
+                              if at >= cutoff}
+
     def _apply_account_snapshot(self, spot_state, orders, *, revision=None,
                                 source="rest", sync_started=None) -> bool:
         if source == "ws" and time.time() < getattr(self, "account_settle_until", 0.0):
@@ -1679,34 +1727,88 @@ class HyperliquidSpreadBot:
                     elif entry_notionals.get(state.spec.balance_coin, 0) > 0:
                         state.avg_entry_px = entry_notionals[state.spec.balance_coin] / state.position
                         state.entry_basis_source = 'exchange'
-                state.bid_oid = None
-                state.ask_oid = None
-                state.quoted_bid = 0.0
-                state.quoted_ask = 0.0
-                state.bid_quantity = state.ask_quantity = 0.0
-                state.reconcile_required = False
-            self.safety.account_known = True
-            for order in orders or []:
-                coin = order.get("coin")
-                oid = int(order.get("oid", 0) or 0)
-                side = str(order.get("side", "")).upper()
-                for state in self.states.values():
-                    if coin_matches(state.spec.symbol, coin):
-                        if side == "B":
-                            state.bid_oid = oid
-                            state.quoted_bid = safe_float(order.get("limitPx"))
-                            state.bid_quantity = safe_float(order.get("sz"))
-                            old_oid, old_ts = previous[(state.spec.symbol, "bid")]
-                            state.bid_order_ts = old_ts if old_oid == oid else time.time()
-                        else:
-                            state.ask_oid = oid
-                            state.quoted_ask = safe_float(order.get("limitPx"))
-                            state.ask_quantity = safe_float(order.get("sz"))
-                            old_oid, old_ts = previous[(state.spec.symbol, "ask")]
-                            state.ask_order_ts = old_ts if old_oid == oid else time.time()
+            terminal = getattr(self, "terminal_oids", {})
             if source == "ws":
+                # Merge the full snapshot. A local oid acknowledged after the
+                # snapshot was generated must not be cleared by a lagging
+                # openOrders frame; that caused an open/cancel loop at the
+                # same price. Only terminal events or a strict REST proof
+                # clear a local oid.
+                by_side = {}
+                for order in orders or []:
+                    oid = int(order.get("oid", 0) or 0)
+                    if oid in terminal:
+                        continue
+                    side = str(order.get("side", "")).upper()
+                    if side not in {"A", "B"}:
+                        continue
+                    for state in self.states.values():
+                        if coin_matches(state.spec.symbol, order.get("coin")):
+                            by_side.setdefault((state.spec.symbol, side), []).append(order)
+                for state in self.states.values():
+                    unconfirmed = False
+                    for side, prefix in (("B", "bid"), ("A", "ask")):
+                        oid = getattr(state, prefix + "_oid")
+                        if oid in terminal:
+                            setattr(state, prefix + "_oid", None)
+                            setattr(state, prefix + "_quantity", 0.0)
+                            continue
+                        item = by_side.get((state.spec.symbol, side))
+                        if item:
+                            item = next((candidate for candidate in item
+                                         if int(candidate.get("oid", 0) or 0) == oid), item[0])
+                        if not item:
+                            # Keep a possibly-new local order. The one-second
+                            # settle window above already filters frames sent
+                            # before the local acknowledgement.
+                            unconfirmed = unconfirmed or bool(oid)
+                            continue
+                        item_oid = int(item.get("oid", 0) or 0)
+                        if oid and item_oid != oid:
+                            unconfirmed = True
+                            continue  # a newer local ack wins until REST proof
+                        setattr(state, prefix + "_oid", item_oid)
+                        setattr(state, "quoted_" + prefix, safe_float(item.get("limitPx")))
+                        setattr(state, prefix + "_quantity", safe_float(item.get("sz")))
+                        old_oid, old_ts = previous[(state.spec.symbol, prefix)]
+                        setattr(state, prefix + "_order_ts",
+                                old_ts if old_oid == item_oid else time.time())
+                    if state.reconcile_required and not unconfirmed:
+                        state.reconcile_required = False
+                self.safety.account_known = True
+                self._trim_terminal()
                 self.account_revision = getattr(self, "account_revision", 0) + 1
                 self.ws_account_ready = True
+            else:
+                for state in self.states.values():
+                    state.bid_oid = None
+                    state.ask_oid = None
+                    state.quoted_bid = 0.0
+                    state.quoted_ask = 0.0
+                    state.bid_quantity = state.ask_quantity = 0.0
+                    state.reconcile_required = False
+                self.safety.account_known = True
+                for order in orders or []:
+                    coin = order.get("coin")
+                    oid = int(order.get("oid", 0) or 0)
+                    if oid in terminal:
+                        continue
+                    side = str(order.get("side", "")).upper()
+                    for state in self.states.values():
+                        if coin_matches(state.spec.symbol, coin):
+                            if side == "B":
+                                state.bid_oid = oid
+                                state.quoted_bid = safe_float(order.get("limitPx"))
+                                state.bid_quantity = safe_float(order.get("sz"))
+                                old_oid, old_ts = previous[(state.spec.symbol, "bid")]
+                                state.bid_order_ts = old_ts if old_oid == oid else time.time()
+                            else:
+                                state.ask_oid = oid
+                                state.quoted_ask = safe_float(order.get("limitPx"))
+                                state.ask_quantity = safe_float(order.get("sz"))
+                                old_oid, old_ts = previous[(state.spec.symbol, "ask")]
+                                state.ask_order_ts = old_ts if old_oid == oid else time.time()
+                self._trim_terminal()
         self.account_synced_at = time.time()
         if sync_started is not None:
             self.account_sync_ms = (time.perf_counter()-sync_started)*1000
@@ -2067,6 +2169,7 @@ class HyperliquidSpreadBot:
             statuses = result.get("response", {}).get("data", {}).get("statuses", []) if isinstance(result, dict) and result.get("status") == "ok" else []
             with self.lock:
                 if statuses == ["success"]:
+                    self._mark_terminal(oid)
                     st.last_cancel = dict(at=time.time(), side=side, oid=int(oid), price=quoted,
                                           quantity=quantity, reason=reason, target_price=target_px)
                     st.pending_reprices.pop(side, None)
@@ -2079,7 +2182,9 @@ class HyperliquidSpreadBot:
                     if buy:
                         delay = self.cfg.maker_requote_delay_sec if fast_requote else self.cfg.maker_opening_rest_sec
                         st.opening_rearm_until = time.time()+delay
-                st.reconcile_required = True
+                else:
+                    # Ambiguous cancel: keep the strict REST proof gate.
+                    st.reconcile_required = True
                 self._bump_account()
                 st.last_action = f"{side} cancel: {reason}"
         except SubmissionSkipped as exc:
@@ -2295,6 +2400,7 @@ class HyperliquidSpreadBot:
             for index, req in enumerate(reqs):
                 if index < len(statuses) and statuses[index] == "success":
                     cancelled.setdefault(req["coin"], set()).add(int(req["oid"]))
+                    self._mark_terminal(req["oid"])
                 else:
                     with self.lock:
                         self.states[req["coin"]].reconcile_required = True
@@ -2461,6 +2567,7 @@ class HyperliquidSpreadBot:
         for req, status in zip(reqs, statuses):
             if isinstance(status, dict) and "resting" in status:
                 oid = int(status["resting"]["oid"])
+                self._clear_terminal(oid)  # exchange proves it is live
                 if req["is_buy"]:
                     st.bid_oid = oid
                     st.quoted_bid = req["limit_px"]
@@ -2475,6 +2582,7 @@ class HyperliquidSpreadBot:
             elif isinstance(status, dict) and "filled" in status:
                 st.reconcile_required = True
                 filled = status["filled"]
+                self._mark_terminal(filled.get("oid"))
                 filled_sz = safe_float(filled.get("totalSz"), safe_float(req.get("sz")))
                 avg_px = safe_float(filled.get("avgPx"), safe_float(req.get("limit_px")))
                 side = f"{'BUY' if req['is_buy'] else 'SELL'} {(st.spec.outcome_side or self.cfg.outcome_side).upper()}"
@@ -2608,6 +2716,7 @@ class HyperliquidSpreadBot:
                         self.sync_account(force=needs_sync)
                         last_sync = loop_now
                     self.restart_ws_if_needed()
+                    self.apply_pending_ws_account()
                     self.refresh_rest_bbos()
                     if not self.running:
                         break

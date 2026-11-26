@@ -30,6 +30,8 @@ class WsAccountTests(unittest.TestCase):
         bot.ws_spot_at = 0.0
         bot.ws_orders_at = 0.0
         bot.ws_account_ready = False
+        bot.ws_account_pending = False
+        bot.terminal_oids = {}
         bot.safety = SimpleNamespace(account_known=False)
         bot.available_usdc = 0.0
         return bot
@@ -78,6 +80,97 @@ class WsAccountTests(unittest.TestCase):
         self.assertTrue(bot.account_ready(max_age=10))
         with patch('zeus.bots.worldcup.time.time', return_value=time.time() + 20):
             self.assertFalse(bot.account_ready(max_age=10))
+
+    def test_lagging_snapshot_keeps_newer_local_ack(self):
+        bot = self.bot()
+        bot.on_spot_state(SPOT)
+        bot.on_open_orders({"data": {"orders": []}})
+        state = bot.states['#101']
+        with bot.lock:
+            state.bid_oid = 99
+            state.quoted_bid = .40
+            state.bid_quantity = 10
+            state.bid_order_ts = time.time()
+            state.reconcile_required = True
+        # A frame generated before the local acknowledgement must not clear
+        # the order; that was the open/cancel loop at the same price.
+        bot.on_open_orders({"data": {"orders": []}})
+        self.assertEqual(state.bid_oid, 99)
+        self.assertAlmostEqual(state.quoted_bid, .40)
+        self.assertTrue(state.reconcile_required)
+
+    def test_terminal_order_is_not_resurrected_by_a_stale_frame(self):
+        bot = self.bot()
+        bot.on_spot_state(SPOT)
+        bot.on_open_orders(ORDERS)
+        state = bot.states['#101']
+        with bot.lock:
+            state.ask_oid = None
+            state.ask_quantity = 0.0
+            state.reconcile_required = True
+        bot._mark_terminal(7)
+        bot.on_open_orders(ORDERS)  # still contains the dead oid
+        self.assertIsNone(state.ask_oid)
+        self.assertFalse(state.reconcile_required)
+
+    def test_confirmed_snapshot_clears_the_reconcile_gate(self):
+        bot = self.bot()
+        orders = {"data": {"orders": [
+            {"coin": "#101", "side": "B", "limitPx": "0.40", "sz": "10", "oid": 11}]}}
+        bot.on_spot_state(SPOT)
+        bot.on_open_orders(orders)
+        state = bot.states['#101']
+        with bot.lock:
+            state.reconcile_required = True
+        bot.on_open_orders(orders)
+        self.assertEqual(state.bid_oid, 11)
+        self.assertFalse(state.reconcile_required)
+
+    def test_filled_update_marks_terminal_and_blocks_resurrection(self):
+        bot = self.bot()
+        bot.on_spot_state(SPOT)
+        bot.on_open_orders(ORDERS)
+        state = bot.states['#101']
+        self.assertEqual(state.ask_oid, 7)
+        bot.on_order_updates({'data': [{
+            'status': 'filled',
+            'order': {'coin': '#101', 'side': 'A', 'oid': 7,
+                      'limitPx': '0.50', 'sz': '40'}}]})
+        self.assertIsNone(state.ask_oid)
+        self.assertIn(7, bot.terminal_oids)
+        bot.account_settle_until = 0.0  # settle window elapsed
+        bot.on_open_orders(ORDERS)  # delayed frame still lists the filled oid
+        self.assertIsNone(state.ask_oid)
+        self.assertFalse(state.reconcile_required)
+
+    def test_strict_rest_snapshot_still_clears_and_proves_account(self):
+        bot = self.bot()
+        state = bot.states['#101']
+        with bot.lock:
+            state.bid_oid = 123
+            state.reconcile_required = True
+        spot = {"balances": [{"coin": "USDC", "total": "100", "hold": "0"}]}
+        self.assertTrue(bot._apply_account_snapshot(spot, [], source="rest"))
+        self.assertIsNone(state.bid_oid)
+        self.assertFalse(state.reconcile_required)
+        self.assertTrue(bot.safety.account_known)
+
+    def test_pending_ws_snapshot_applies_after_the_settle_window(self):
+        bot = self.bot()
+        bot.on_spot_state(SPOT)
+        bot.on_open_orders(ORDERS)
+        state = bot.states['#101']
+        bot.account_settle_until = time.time() + 30
+        with bot.lock:
+            state.reconcile_required = True
+        bot.on_open_orders(ORDERS)
+        self.assertTrue(bot.ws_account_pending)
+        bot.apply_pending_ws_account()
+        self.assertTrue(bot.ws_account_pending)
+        bot.account_settle_until = 0.0
+        bot.apply_pending_ws_account()
+        self.assertFalse(bot.ws_account_pending)
+        self.assertFalse(state.reconcile_required)
 
 
 class InfoBackoffTests(unittest.TestCase):
