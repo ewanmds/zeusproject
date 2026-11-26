@@ -157,6 +157,7 @@ class OutcomeSupervisor:
                 record["cleanup_confirmed"] = True
                 logging.getLogger(__name__).warning(
                     "Outcome archived unstarted session %s", sid)
+            self._archive_flat_terminals(records, by_id, procs, now)
             groups = {}
             for path, record in records:
                 if not record.get("symbols"):
@@ -319,6 +320,68 @@ class OutcomeSupervisor:
         except Exception:
             pass
         return True
+
+    def _archive_flat_terminals(self, records, by_id, procs, now):
+        """Archive any dead terminal session the exchange proves flat.
+
+        A stop file or a manual/risk exit must never keep a market labelled
+        "Arrêt non confirmé" forever once there is no worker and the account
+        has no residual position or order. This is read-only verification: it
+        never resumes trading and never treats unknown data as flat.
+        """
+        verify = getattr(self.manager, "_verify_session_flat", None)
+        if verify is None:
+            return
+        for path, record in records:
+            sid = record.get("session_id")
+            if not sid or record.get("cleanup_confirmed"):
+                continue
+            info = procs.get(sid)
+            if info is not None and info["proc"].poll() is None:
+                continue
+            meta = read_json(path) if Path(path).exists() else {}
+            # The journal can lag the in-memory record (the supervisor adds
+            # stop/rotation fields before or after publishing it), so keep both.
+            meta = ({**record, **meta}
+                    if isinstance(meta, dict) and meta else record)
+            if meta.get("cleanup_confirmed"):
+                continue
+            if now - float(meta.get("started") or 0) < 30:
+                continue  # launch may still be between journal write and Popen
+            stop_path = Path(meta["stop_file"]) if meta.get("stop_file") else None
+            terminal_intent = bool(
+                meta.get("exit_requested") or meta.get("stop_reason")
+                or meta.get("cleanup_error") or meta.get("phase") == "stopped"
+                or (stop_path is not None and stop_path.exists())
+                or Path(path).with_name("drain.json").exists())
+            if not terminal_intent:
+                # An interrupted trader with no stop/exit intent is auto-resumed
+                # by the loop below; archiving it here would silently stop it.
+                continue
+            successor = by_id.get(meta.get("resumed_session_id"))
+            if successor is not None and not successor.get("cleanup_confirmed"):
+                continue  # the child owns this lineage until it is archived
+            if self._orphan_alive(meta) or self._worker_pid(meta):
+                continue
+            state = self._recovery.get(sid) or {}
+            if now - float(state.get("flat_check_at", 0) or 0) < 60:
+                continue
+            try:
+                verify(meta)
+            except Exception as exc:
+                self._recovery[sid] = {**state, "flat_check_at": now,
+                                       "error": safe_error(exc)}
+                continue
+            atomic_json(path, {
+                **meta, "cleanup_confirmed": True, "phase": "stopped",
+                "can_start": True, "cleanup_error": "", "error": "",
+                "pending_cloids": [],
+                "cleanup_note": "Compte vérifié à plat; session archivée automatiquement",
+            })
+            record["cleanup_confirmed"] = True
+            self._recovery.pop(sid, None)
+            logging.getLogger(__name__).warning(
+                "Outcome archived flat terminal session %s", sid)
 
     def start(self, request, *, rotation_group=None, seed=None):
         self.rotation.assert_admission(rotation_group)

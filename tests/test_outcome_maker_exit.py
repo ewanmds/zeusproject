@@ -601,6 +601,62 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
             row = json.loads((Path(folder) / 'journal.json').read_text())
             self.assertIsNot(row.get('cleanup_confirmed'), True)
 
+    def test_dead_stopped_session_is_archived_when_the_exchange_proves_flat(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {
+                'session_id': 's1', 'exposure_started': True,
+                'started': time.time()-60, 'stop_reason': 'Manual stop'})
+            verify = Mock()
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            verify.assert_called_once()
+            row = json.loads((Path(folder) / 'journal.json').read_text())
+            self.assertTrue(row['cleanup_confirmed'])
+            self.assertTrue(row['can_start'])
+            self.assertEqual(row['phase'], 'stopped')
+            self.assertIn('vérifié à plat', row['cleanup_note'])
+            sup._resume.assert_not_called()
+
+    def test_flat_check_failure_keeps_the_stopped_row_unconfirmed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {
+                'session_id': 's1', 'exposure_started': True,
+                'started': time.time()-60, 'stop_reason': 'Manual stop'})
+            verify = Mock(side_effect=RuntimeError('residual order'))
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            verify.assert_called_once()
+            row = json.loads((Path(folder) / 'journal.json').read_text())
+            self.assertIsNot(row.get('cleanup_confirmed'), True)
+            # The flat proof failed, so the normal exit-only recovery is still
+            # allowed to try a passive close; the row is never marked flat.
+            sup._resume.assert_called_once_with('s1', exit_only=True)
+
+    def test_plain_hard_stop_is_archived_when_the_exchange_proves_flat(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {
+                'session_id': 's1', 'exposure_started': True,
+                'started': time.time()-60}, stop=True)
+            verify = Mock()
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            verify.assert_called_once()
+            row = json.loads((Path(folder) / 'journal.json').read_text())
+            self.assertTrue(row['cleanup_confirmed'])
+            self.assertEqual(row['phase'], 'stopped')
+            sup._resume.assert_not_called()
+
+    def test_flat_crash_without_stop_intent_is_resumed_not_archived(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sup = self.supervisor(folder, {
+                'session_id': 's1', 'exposure_started': True,
+                'started': time.time()-60, 'phase': 'running'})
+            verify = Mock()
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            verify.assert_not_called()
+            sup._resume.assert_called_once_with('s1', exit_only=False)
+
 
 class WorkspaceProjectionTests(unittest.TestCase):
     def test_archived_group_never_hides_an_unconfirmed_leg(self):
