@@ -318,6 +318,8 @@ class BotConfig:
     inventory_drain_timeout_sec: float = 90.0
     inventory_exit_slippage_bps: float = 50.0
     account_reconcile_sec: float = 20.0
+    max_dust_positions: int = 6
+    max_dust_usd: float = 50.0
     safety_file: Optional[str] = None
     stop_file: Optional[str] = None
     funds_root: Optional[str] = None
@@ -494,6 +496,10 @@ class HyperliquidSpreadBot:
             from zeus.process_control import OutcomeFunds
             self.funds = OutcomeFunds(cfg.funds_root, cfg.account_address, self.safety.session_id)
         self.residual_dusts = {}
+        self.dust_positions = 0
+        self.dust_usd = 0.0
+        self.dust_coins = set()
+        self.dust_usd_by_coin = {}
         self.recovery_next = 0.0
         self.recovery_delay = 2.0
 
@@ -1714,6 +1720,19 @@ class HyperliquidSpreadBot:
                                                 getattr(s, f"{side}_order_ts"))
                         for s in self.states.values() for side in ("bid", "ask")}
             self.available_usdc = available.get("USDC", 0.0)
+            dust_coins = set()
+            dust_usd_by_coin = {}
+            for coin, balance in balances.items():
+                if not str(coin).startswith("+"):
+                    continue
+                qty = finite(balance["total"])
+                if 0 < qty < UNSELLABLE_TOKENS_WITHOUT_MARK:
+                    dust_coins.add(str(coin))
+                    dust_usd_by_coin[str(coin)] = finite(balance.get("entryNtl") or 0)
+            self.dust_coins = dust_coins
+            self.dust_usd_by_coin = dust_usd_by_coin
+            self.dust_positions = len(dust_coins)
+            self.dust_usd = sum(dust_usd_by_coin.values())
             for state in self.states.values():
                 if state.spec.balance_coin:
                     bal = balances.get(state.spec.balance_coin, {})
@@ -1907,6 +1926,28 @@ class HyperliquidSpreadBot:
         age, limit = self._book_age(st)
         return age <= limit
 
+    def dust_cap_reason(self, st: Optional[MarketState]) -> Optional[str]:
+        """Pause new markets when the account already carries too many <$10 balances."""
+        if not self.cfg.worldcup:
+            return None
+        coins = getattr(self, "dust_coins", set()) or set()
+        current = st.spec.balance_coin if st is not None else None
+        positions = int(getattr(self, "dust_positions", 0) or 0)
+        usd = float(getattr(self, "dust_usd", 0.0) or 0.0)
+        by_coin = getattr(self, "dust_usd_by_coin", {}) or {}
+        if current and current in coins:
+            # The current market may still be topped up to a sellable size.
+            positions -= 1
+            usd -= float(by_coin.get(current, 0.0) or 0.0)
+        positions = max(0, positions)
+        usd = max(0.0, usd)
+        limit = int(self.cfg.max_dust_positions)
+        if limit > 0 and positions >= limit:
+            return f"Trop de positions < $10 ({positions}); nouveaux achats en pause"
+        if self.cfg.max_dust_usd > 0 and usd >= self.cfg.max_dust_usd:
+            return f"Trop de poussière (${usd:.2f} < $10); nouveaux achats en pause"
+        return None
+
     def risk_block_reason(self, st: MarketState, closing_inventory: bool = False) -> Optional[str]:
         net_risk_pnl = self.stats.net_pnl + self.cfg.risk_pnl_carry
         # Outcome exits are passive sells; a session stop-loss must never
@@ -2002,6 +2043,9 @@ class HyperliquidSpreadBot:
 
         if pos_usd >= cap:
             return None, "inventory cap"
+        dust_reason = self.dust_cap_reason(st)
+        if dust_reason:
+            return None, dust_reason
         target_usd = max(self.cfg.order_usd, self.cfg.min_order_usd)
         max_buy_usd = max(0.0, min(target_usd, cap - max(0.0, pos_usd)))
         if max_buy_usd < self.cfg.min_order_usd:
@@ -2117,6 +2161,10 @@ class HyperliquidSpreadBot:
             requests_out[False] = {"coin": st.spec.symbol, "is_buy": False, "sz": float(sell_qty),
                 "limit_px": ask, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
         if draining or risk_exit:
+            return requests_out
+        dust_reason = self.dust_cap_reason(st)
+        if dust_reason:
+            st.last_action = dust_reason
             return requests_out
         reserved = self.funds.reserved_usdc() if getattr(self, "funds", None) else 0.0
         free = max(0, getattr(self, "available_usdc", 0)-reserved)
@@ -2903,6 +2951,9 @@ class HyperliquidSpreadBot:
         if not st.has_bbo or not self._book_fresh(st):
             return "Waiting for book", ""
         risk = self.risk_block_reason(st, closing_inventory=False)
+        dust_reason = self.dust_cap_reason(st)
+        if dust_reason and not st.ask_oid:
+            return "Dust cap", dust_reason
         if st.bid_oid and st.ask_oid:
             return "Bid + Ask", risk or ""
         if st.bid_oid:

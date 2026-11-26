@@ -64,6 +64,7 @@ export const stateText: Record<string, string> = {
   "Fees exceed spread": "En cours",
   "Fees unavailable": "En cours",
   "Risk paused": "En cours",
+  "Dust cap": "Nettoyage",
   "Inventory stop": "En cours",
   "Draining inventory": "Vente",
   "Exit pending": "Vente",

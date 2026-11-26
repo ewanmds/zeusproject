@@ -67,6 +67,42 @@ class DustAndPartialBidTests(unittest.TestCase):
         rows = bot._suppress_dust([('#101', 40.0, [])])
         self.assertEqual(rows, [('#101', 40.0, [])])
 
+    def test_dust_cap_pauses_new_markets_but_keeps_exits(self):
+        bot = make_bot(order_size_usd=70, max_position_usd=120)
+        bot.dust_positions = 7
+        bot.dust_coins = {'+101'}
+        bot.dust_usd = 21.0
+        bot.dust_usd_by_coin = {'+101': 3.0}
+        st = self.state(40)
+        plan = bot.bilateral_requests(st)
+        self.assertNotIn(True, plan)
+        self.assertIn(False, plan)
+        self.assertIn('positions', st.last_action)
+
+    def test_dust_cap_allows_topping_up_the_current_market(self):
+        bot = make_bot(order_size_usd=70, max_position_usd=120)
+        bot.dust_positions = 6
+        bot.dust_coins = {'+101'}
+        bot.dust_usd = 18.0
+        bot.dust_usd_by_coin = {'+101': 3.0}
+        plan = bot.bilateral_requests(self.state(5))
+        self.assertIn(True, plan)
+
+    def test_account_snapshot_counts_unsellable_outcome_balances(self):
+        bot = make_bot()
+        bot.states = {}
+        bot.safety = SimpleNamespace(account_known=False)
+        spot = {"balances": [
+            {"coin": "USDC", "total": "100", "hold": "0"},
+            {"coin": "+101", "total": "5", "hold": "0", "entryNtl": "3"},
+            {"coin": "+102", "total": "9", "hold": "0", "entryNtl": "4"},
+            {"coin": "+103", "total": "10", "hold": "0", "entryNtl": "9"},
+        ]}
+        self.assertTrue(bot._apply_account_snapshot(spot, [], source="rest"))
+        self.assertEqual(bot.dust_positions, 2)
+        self.assertEqual(bot.dust_coins, {'+101', '+102'})
+        self.assertAlmostEqual(bot.dust_usd, 7.0)
+
 
 class RotationInventoryDustTests(unittest.TestCase):
     def test_only_unsellable_dust_allows_rotation(self):

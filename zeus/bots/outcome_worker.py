@@ -36,6 +36,8 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         market_slippage_bps=5, market_cycle_cooldown_sec=0.12,
         account_sync_sec=2,
         account_reconcile_sec=max(10.0, float(public.get("account_reconcile_sec") or 20.0)),
+        max_dust_positions=int(public.get("max_dust_positions") or os.getenv("OUTCOME_MAX_DUST_POSITIONS", "6")),
+        max_dust_usd=float(public.get("max_dust_usd") or os.getenv("OUTCOME_MAX_DUST_USD", "50")),
         account_address=os.getenv("WALLET_ADDRESS_OUTCOME", "").strip(),
         private_key=os.getenv("PRIVATE_KEY_OUTCOME", "").strip(),
         scan_only=False, worldcup=True, countries=[], outcome_side=side,
