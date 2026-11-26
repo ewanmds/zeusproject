@@ -147,6 +147,7 @@ class QueuePriorityTests(unittest.TestCase):
     def test_stale_book_keeps_the_resting_exit_quote(self):
         bot, st, raw, now = self.fixture()
         st.last_book_ts = now-5
+        st.book_received_at = now-5
         bot.place_bilateral(st)
         raw.bulk_cancel.assert_not_called()
         self.assertEqual(st.ask_oid, 123)

@@ -42,7 +42,16 @@ import requests
 
 
 class RateLimited(Exception):
-    pass
+    retryable = True
+
+    def __init__(self, message="", retry_after=0.0):
+        super().__init__(message)
+        self.retry_after = float(retry_after or 0.0)
+
+
+_INFO_BACKOFF_LOCK = threading.Lock()
+_INFO_BACKOFF_UNTIL = 0.0
+_INFO_BACKOFF_SEC = 0.0
 
 try:
     from hyperliquid.exchange import Exchange
@@ -53,6 +62,42 @@ except Exception as exc:  # pragma: no cover - startup guard
         "Missing Hyperliquid SDK. Run: pip install hyperliquid-python-sdk eth-account\n"
         f"Import error: {exc}"
     )
+
+# The pinned SDK knows userEvents/userFills/orderUpdates but silently drops
+# spotState/openOrders frames because its identifier table lacks them. Teach
+# the existing connection these two channels; no second websocket is opened.
+try:
+    from hyperliquid import websocket_manager as _sdk_ws
+
+    _sdk_subscription_id = getattr(_sdk_ws, "subscription_to_identifier", None)
+    _sdk_message_id = getattr(_sdk_ws, "ws_msg_to_identifier", None)
+
+    if _sdk_subscription_id and _sdk_message_id:
+        def _subscription_identifier(subscription):
+            if isinstance(subscription, dict):
+                if subscription.get("type") == "spotState":
+                    return "spotState:" + str(subscription.get("user", "")).lower()
+                if subscription.get("type") == "openOrders":
+                    return "openOrders:%s:%s" % (
+                        subscription.get("dex", ""),
+                        str(subscription.get("user", "")).lower())
+            return _sdk_subscription_id(subscription)
+
+        def _message_identifier(message):
+            if isinstance(message, dict):
+                channel = message.get("channel")
+                data = message.get("data") or {}
+                if channel == "spotState" and isinstance(data, dict):
+                    return "spotState:" + str(data.get("user", "")).lower()
+                if channel == "openOrders" and isinstance(data, dict):
+                    return "openOrders:%s:%s" % (
+                        data.get("dex", ""), str(data.get("user", "")).lower())
+            return _sdk_message_id(message)
+
+        _sdk_ws.subscription_to_identifier = _subscription_identifier
+        _sdk_ws.ws_msg_to_identifier = _message_identifier
+except Exception:
+    pass
 
 try:
     from rich import box
@@ -272,6 +317,7 @@ class BotConfig:
     inventory_stop_bps: float = 200.0
     inventory_drain_timeout_sec: float = 90.0
     inventory_exit_slippage_bps: float = 50.0
+    account_reconcile_sec: float = 20.0
     safety_file: Optional[str] = None
     stop_file: Optional[str] = None
     funds_root: Optional[str] = None
@@ -304,6 +350,7 @@ class MarketState:
     mid: float = 0.0
     spread_bps: float = math.inf
     last_book_ts: float = 0.0
+    book_received_at: float = 0.0
     book_revision: int = 0
     bid_oid: Optional[int] = None
     ask_oid: Optional[int] = None
@@ -355,12 +402,14 @@ class MarketState:
             self.bid = self.ask = self.mid = 0.0
             self.spread_bps = math.inf
             self.last_book_ts = stamp
+            self.book_received_at = time.time()
             return False
         self.bid = bid
         self.ask = ask
         self.mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else 0.0
         self.spread_bps = ((ask - bid) / self.mid * 10_000.0) if self.mid > 0 else math.inf
         self.last_book_ts = stamp
+        self.book_received_at = time.time()
         return True
 
 
@@ -424,6 +473,15 @@ class HyperliquidSpreadBot:
         self.status = "init"
         self.stats = SessionStats()
         self.account_revision = 0
+        self.account_settle_until = 0.0
+        self.account_synced_at = 0.0
+        self.account_retry_at = 0.0
+        self.ws_spot_state = None
+        self.ws_open_orders = None
+        self.ws_spot_at = 0.0
+        self.ws_orders_at = 0.0
+        self.ws_account_ready = False
+        self.ws_started_at = 0.0
         self._quote_cancel_local = threading.local()
         self.safety = SafetyLatch(self._halt, cfg.safety_file, is_running=lambda: self.running
                                  and not (cfg.stop_file and os.path.exists(cfg.stop_file)) and supervisor_alive(),
@@ -437,7 +495,8 @@ class HyperliquidSpreadBot:
         self.recovery_next = 0.0
         self.recovery_delay = 2.0
 
-        perp_dexs = [cfg.perp_dex] if cfg.perp_dex and not cfg.worldcup else None
+        perp_dexs = ([cfg.perp_dex] if cfg.perp_dex and not cfg.worldcup
+                     else ([] if cfg.worldcup else None))
         self._sdk_metadata = self._load_sdk_metadata() if cfg.worldcup and cfg.live else {}
         self.info = self._startup_read("SDK metadata", lambda: Info(
             cfg.base_url, skip_ws=True, perp_dexs=perp_dexs, timeout=10, **self._sdk_metadata))
@@ -472,9 +531,11 @@ class HyperliquidSpreadBot:
         self.account_reader = None
         self.account_sync_ms = 0.0
         self.account_synced_at = 0.0
+        self.account_retry_at = 0.0
         self.last_fill_at = 0.0
         if cfg.worldcup:
-            self.account_reader = OutcomeAccountReads(cfg.base_url, cfg.account_address)
+            self.account_reader = OutcomeAccountReads(
+                cfg.base_url, cfg.account_address)
 
         try:
             signal.signal(signal.SIGINT, self.shutdown)
@@ -665,7 +726,7 @@ class HyperliquidSpreadBot:
         now = time.time() if now is None else now
         if now < st.inventory_stop_until:
             return None
-        if not st.has_bbo or now - st.last_book_ts > self.cfg.stale_sec:
+        if not st.has_bbo or not self._book_fresh(st):
             return None
         mark = st.mid if st.mid > 0 else st.bid
         notional = st.position * mark
@@ -773,7 +834,7 @@ class HyperliquidSpreadBot:
                 open_ids = {int(order["oid"]) for _, _, orders in rows for order in orders}
                 if not live_orders.issubset(open_ids):
                     raise RuntimeError("Order changed during verification; checking again later")
-                if not self.sync_account():
+                if not self.sync_account(force=True):
                     raise RuntimeError("Account synchronization not yet confirmed")
                 with self.lock:
                     if any(state.reconcile_required for state in self.states.values()):
@@ -848,7 +909,7 @@ class HyperliquidSpreadBot:
         open_ids = {int(order["oid"]) for _, _, orders in rows for order in orders}
         if any(int(req["oid"]) in open_ids for req in requests):
             raise RuntimeError("Cancellation rejected: order still open")
-        if not self.sync_account():
+        if not self.sync_account(force=True):
             raise RuntimeError("Cancellation reconciliation: account synchronization unconfirmed")
         with self.lock:
             if any(state.bid_oid in requested_ids or state.ask_oid in requested_ids
@@ -1135,8 +1196,16 @@ class HyperliquidSpreadBot:
         return table
 
     def start_ws(self) -> None:
-        perp_dexs = [self.cfg.perp_dex] if self.cfg.perp_dex and not self.cfg.worldcup else None
+        perp_dexs = ([self.cfg.perp_dex] if self.cfg.perp_dex and not self.cfg.worldcup
+                     else ([] if self.cfg.worldcup else None))
         self.status = "connecting ws"
+        with self.lock:
+            self.ws_spot_state = None
+            self.ws_open_orders = None
+            self.ws_spot_at = 0.0
+            self.ws_orders_at = 0.0
+            self.ws_account_ready = False
+            self.ws_started_at = time.time()
         self.ws_info = Info(self.cfg.base_url, skip_ws=False, perp_dexs=perp_dexs, timeout=10,
                             **getattr(self, "_sdk_metadata", {}))
         if self.cfg.worldcup and self.outcome_meta:
@@ -1148,6 +1217,12 @@ class HyperliquidSpreadBot:
             self.ws_info.subscribe({"type": "userEvents", "user": self.cfg.account_address}, self.on_user_events)
             self.ws_info.subscribe({"type": "userFills", "user": self.cfg.account_address}, self.on_user_fills)
             self.ws_info.subscribe({"type": "orderUpdates", "user": self.cfg.account_address}, self.on_order_updates)
+            # Full spot balances and all open orders. These are the account
+            # hot path; REST is only startup/recovery/periodic verification.
+            self.ws_info.subscribe({"type": "spotState", "user": self.cfg.account_address},
+                                   self.on_spot_state)
+            self.ws_info.subscribe({"type": "openOrders", "user": self.cfg.account_address, "dex": ""},
+                                   self.on_open_orders)
         self.status = "ws live"
 
     def _ws_transport_alive(self) -> bool:
@@ -1160,8 +1235,16 @@ class HyperliquidSpreadBot:
         now = time.time()
         transport_dead = self.ws_info is not None and not self._ws_transport_alive()
         if not transport_dead:
-            newest = max((st.last_book_ts for st in self.states.values()), default=0.0)
-            if newest <= 0 or now - newest <= self.cfg.stale_sec * 3:
+            # A quiet book or trade stream is normal. The periodic spotState /
+            # openOrders snapshots are the true websocket heartbeat.
+            if now - getattr(self, "ws_started_at", 0.0) < 15:
+                return
+            account_fresh = (self.ws_spot_at and now - self.ws_spot_at <= 30
+                             and self.ws_orders_at and now - self.ws_orders_at <= 30)
+            if account_fresh:
+                return
+            newest = max((st.book_received_at for st in self.states.values()), default=0.0)
+            if not self.cfg.account_address and newest and now - newest <= 60:
                 return
         if now - self.last_ws_restart_ts < 10:
             return
@@ -1246,18 +1329,12 @@ class HyperliquidSpreadBot:
         if not force and now - self.last_rest_sweep_ts < min_gap:
             return
         self.last_rest_sweep_ts = now
-        stale_after = min(self.cfg.stale_sec * 0.5, min_gap)
         with self.lock:
             candidates = []
             for symbol, st in self.states.items():
-                age = now - st.last_book_ts if st.last_book_ts > 0 else 999.0
+                age, limit = self._book_age(st)
                 rest_age = now - st.last_rest_book_ts if st.last_rest_book_ts > 0 else 999.0
-                should_refresh = (
-                    force
-                    or not st.has_bbo
-                    or age >= stale_after
-                    or rest_age >= max(self.cfg.stale_sec, min_gap * 4)
-                )
+                should_refresh = force or not st.has_bbo or age >= limit
                 if not should_refresh:
                     continue
                 priority = 0.0
@@ -1291,7 +1368,8 @@ class HyperliquidSpreadBot:
                 try:
                     bid, ask = future.result()
                 except RateLimited as exc:
-                    self.rest_backoff_until = time.time() + self.cfg.rest_429_backoff_sec
+                    self.rest_backoff_until = time.time() + max(
+                        5.0, float(getattr(exc, 'retry_after', 0) or 0))
                     with self.lock:
                         if symbol in self.states:
                             self.states[symbol].last_error = f"REST bbo: {exc}"
@@ -1354,6 +1432,51 @@ class HyperliquidSpreadBot:
             self._record_fills(payload.get("fills", []))
         except Exception:
             return
+
+    def on_spot_state(self, data: Dict[str, Any]) -> None:
+        try:
+            payload = data.get("data", data) if isinstance(data, dict) else {}
+            spot = payload.get("spotState", payload) if isinstance(payload, dict) else None
+            if not isinstance(spot, dict) or not isinstance(spot.get("balances"), list):
+                return
+            with self.lock:
+                self.ws_spot_state = spot
+                self.ws_spot_at = time.time()
+            self._apply_ws_account()
+        except Exception:
+            return
+
+    def on_open_orders(self, data: Dict[str, Any]) -> None:
+        try:
+            payload = data.get("data", data) if isinstance(data, dict) else {}
+            orders = payload.get("orders") if isinstance(payload, dict) else None
+            if not isinstance(orders, list):
+                return
+            with self.lock:
+                self.ws_open_orders = orders
+                self.ws_orders_at = time.time()
+            self._apply_ws_account()
+        except Exception:
+            return
+
+    def _apply_ws_account(self) -> None:
+        with self.lock:
+            spot, orders = self.ws_spot_state, self.ws_open_orders
+        if spot is None or orders is None:
+            return
+        try:
+            self._apply_account_snapshot(spot, orders, source="ws")
+        except Exception:
+            with self.lock:
+                for state in self.states.values():
+                    state.last_action = "ws account snapshot invalid"
+                self.ws_account_ready = False
+
+    def account_ready(self, max_age: float = 10.0) -> bool:
+        now = time.time()
+        return bool(getattr(self, "ws_account_ready", False)
+                    and now - getattr(self, "ws_spot_at", 0.0) <= max_age
+                    and now - getattr(self, "ws_orders_at", 0.0) <= max_age)
 
     def on_order_updates(self, data: Dict[str, Any]) -> None:
         try:
@@ -1419,7 +1542,7 @@ class HyperliquidSpreadBot:
                                 setattr(st, prefix+'_order_ts', stamp if 0 < stamp <= now+1 else now)
                             changed = True
                 if changed:
-                    self.account_revision = getattr(self, "account_revision", 0) + 1
+                    self._bump_account()
             if changed:
                 self.wake.set()
             if rejection_error:
@@ -1499,77 +1622,53 @@ class HyperliquidSpreadBot:
                 state.reconcile_required = True
                 changed = True
             if changed:
-                self.account_revision = getattr(self, "account_revision", 0) + 1
+                self._bump_account()
         if changed:
             self.wake.set()
 
     # -------------------------------------------------------------- sync/risk
-    def sync_account(self) -> bool:
-        if not self.cfg.account_address:
+    def _bump_account(self):
+        self.account_revision = getattr(self, "account_revision", 0) + 1
+        self.account_settle_until = time.time() + 1.0
+
+    def _apply_account_snapshot(self, spot_state, orders, *, revision=None,
+                                source="rest", sync_started=None) -> bool:
+        if source == "ws" and time.time() < getattr(self, "account_settle_until", 0.0):
+            # A fill/order event is newer than this snapshot; wait for the next
+            # WS pair (or the periodic REST proof) instead of moving the
+            # position backwards.
             return False
-        with self.lock:
-            revision = getattr(self, "account_revision", 0)
-        sync_started = time.perf_counter()
-        parallel_orders = None
-        parallel_read = False
-        balances = None
+        if not isinstance(spot_state, dict) or not isinstance(spot_state.get("balances"), list):
+            raise ValueError("Invalid spot account response")
+        if not isinstance(orders, list) or any(
+                not isinstance(order, dict) or not order.get("coin")
+                or int(order.get("oid", 0)) <= 0 or order.get("side") not in {"A", "B"}
+                or finite(order.get("limitPx")) <= 0 for order in orders):
+            raise ValueError("Invalid open orders response")
+        balances = {str(balance.get("coin")): balance
+                    for balance in spot_state.get("balances", [])}
+        available = {}
         entry_notionals = {}
-        if self.cfg.worldcup:
-            try:
-                reader = getattr(self, "account_reader", None)
-                if reader is not None:
-                    spot_state, parallel_orders = reader.snapshot()
-                    parallel_read = True
-                else:
-                    spot_state = self.info.spot_user_state(self.cfg.account_address)
-                if not isinstance(spot_state, dict) or not isinstance(spot_state.get("balances"), list):
-                    raise ValueError("Invalid spot account response")
-                balances = {
-                    str(balance.get("coin")): balance
-                    for balance in spot_state.get("balances", [])
-                }
-                available = {}
-                for coin, balance in balances.items():
-                    total, hold = finite(balance["total"]), finite(balance["hold"])
-                    if total < 0 or hold < 0 or hold > total + 1e-9:
-                        raise ValueError("Invalid spot balance or reservation")
-                    available[coin] = max(0.0, total - hold)
-                    if 'entryNtl' in balance:
-                        entry = finite(balance['entryNtl'])
-                        if entry < 0:
-                            raise ValueError('Invalid spot entry notional')
-                        entry_notionals[coin] = entry
-            except Exception as exc:
-                self._pause_execution(f"Account synchronization failed: {exc}")
-                return False
-        else:
-            try:
-                st = self.info.user_state(self.cfg.account_address, dex=self.cfg.perp_dex)
-                self._record_positions(st)
-            except Exception:
-                pass
-        try:
-            dex = "" if self.cfg.worldcup else self.cfg.perp_dex
-            orders = parallel_orders if parallel_read else self.info.open_orders(self.cfg.account_address, dex=dex)
-            if not isinstance(orders, list) or any(
-                    not isinstance(order, dict) or not order.get("coin")
-                    or int(order.get("oid", 0)) <= 0 or order.get("side") not in {"A", "B"}
-                    or finite(order.get("limitPx")) <= 0 for order in orders):
-                raise ValueError("Invalid open orders response")
-        except Exception as exc:
-            self._pause_execution(f"Order synchronization failed: {exc}")
-            return False
+        for coin, balance in balances.items():
+            total, hold = finite(balance["total"]), finite(balance["hold"])
+            if total < 0 or hold < 0 or hold > total + 1e-9:
+                raise ValueError("Invalid spot balance or reservation")
+            available[coin] = max(0.0, total - hold)
+            if 'entryNtl' in balance:
+                entry = finite(balance['entryNtl'])
+                if entry < 0:
+                    raise ValueError('Invalid spot entry notional')
+                entry_notionals[coin] = entry
         with self.lock:
-            if revision != getattr(self, "account_revision", 0):
-                return False  # A websocket update overtook this REST snapshot.
-            previous = {(s.spec.symbol, side): (getattr(s, f"{side}_oid"), getattr(s, f"{side}_order_ts"))
+            if revision is not None and revision != getattr(self, "account_revision", 0):
+                return False  # a websocket update overtook this REST snapshot
+            previous = {(s.spec.symbol, side): (getattr(s, f"{side}_oid"),
+                                                getattr(s, f"{side}_order_ts"))
                         for s in self.states.values() for side in ("bid", "ask")}
-            if balances is not None:
-                self.available_usdc = available.get("USDC", 0.0)
+            self.available_usdc = available.get("USDC", 0.0)
             for state in self.states.values():
-                if balances is not None and state.spec.balance_coin:
+                if state.spec.balance_coin:
                     bal = balances.get(state.spec.balance_coin, {})
-                    # Held tokens are still inventory, including our resting ask.
                     state.position = finite(bal["total"]) if bal else 0.0
                     state.available_position = available.get(state.spec.balance_coin, 0.0)
                     state.margin_used = 0.0
@@ -1605,9 +1704,106 @@ class HyperliquidSpreadBot:
                             state.ask_quantity = safe_float(order.get("sz"))
                             old_oid, old_ts = previous[(state.spec.symbol, "ask")]
                             state.ask_order_ts = old_ts if old_oid == oid else time.time()
+            if source == "ws":
+                self.account_revision = getattr(self, "account_revision", 0) + 1
+                self.ws_account_ready = True
+        self.account_synced_at = time.time()
+        if sync_started is not None:
+            self.account_sync_ms = (time.perf_counter()-sync_started)*1000
+        self.account_retry_at = 0.0
+        return True
+
+    def sync_account(self, force=False) -> bool:
+        if not self.cfg.account_address:
+            return False
+        if not force and time.time() < getattr(self, 'account_retry_at', 0.0):
+            return False
+        with self.lock:
+            revision = getattr(self, "account_revision", 0)
+        sync_started = time.perf_counter()
+        if not self.cfg.worldcup:
+            try:
+                self._record_positions(self.info.user_state(self.cfg.account_address, dex=self.cfg.perp_dex))
+                orders = self.info.open_orders(self.cfg.account_address, dex=self.cfg.perp_dex)
+                if not isinstance(orders, list) or any(
+                        not isinstance(order, dict) or not order.get("coin")
+                        or int(order.get("oid", 0)) <= 0 or order.get("side") not in {"A", "B"}
+                        or finite(order.get("limitPx")) <= 0 for order in orders):
+                    raise ValueError("Invalid open orders response")
+            except Exception as exc:
+                self.account_retry_at = time.time() + 2.0
+                self._pause_execution(f"Account synchronization failed: {exc}")
+                return False
+            with self.lock:
+                if revision != getattr(self, "account_revision", 0):
+                    return False
+                previous = {(s.spec.symbol, side): (getattr(s, f"{side}_oid"), getattr(s, f"{side}_order_ts"))
+                            for s in self.states.values() for side in ("bid", "ask")}
+                for state in self.states.values():
+                    state.bid_oid = None
+                    state.ask_oid = None
+                    state.quoted_bid = state.quoted_ask = 0.0
+                    state.bid_quantity = state.ask_quantity = 0.0
+                    state.reconcile_required = False
+                self.safety.account_known = True
+                for order in orders:
+                    coin = order.get("coin")
+                    oid = int(order.get("oid", 0) or 0)
+                    side = str(order.get("side", "")).upper()
+                    for state in self.states.values():
+                        if coin_matches(state.spec.symbol, coin):
+                            if side == "B":
+                                state.bid_oid = oid
+                                state.quoted_bid = safe_float(order.get("limitPx"))
+                                state.bid_quantity = safe_float(order.get("sz"))
+                                old_oid, old_ts = previous[(state.spec.symbol, "bid")]
+                                state.bid_order_ts = old_ts if old_oid == oid else time.time()
+                            else:
+                                state.ask_oid = oid
+                                state.quoted_ask = safe_float(order.get("limitPx"))
+                                state.ask_quantity = safe_float(order.get("sz"))
+                                old_oid, old_ts = previous[(state.spec.symbol, "ask")]
+                                state.ask_order_ts = old_ts if old_oid == oid else time.time()
             self.account_synced_at = time.time()
             self.account_sync_ms = (time.perf_counter()-sync_started)*1000
-        return True
+            self.account_retry_at = 0.0
+            return True
+        try:
+            reader = getattr(self, "account_reader", None)
+            if reader is not None:
+                spot_state, orders = reader.snapshot()
+            else:
+                spot_state = self.info.spot_user_state(self.cfg.account_address)
+                orders = self.info.open_orders(self.cfg.account_address, dex="")
+            return self._apply_account_snapshot(
+                spot_state, orders, revision=revision, source="rest",
+                sync_started=sync_started)
+        except RateLimited as exc:
+            reader = getattr(self, "account_reader", None)
+            delay = float(getattr(reader, "backoff_sec", 0) or 2.0)
+            self.account_retry_at = time.time() + max(2.0, delay)
+            with self.lock:
+                for state in self.states.values():
+                    state.last_action = "account rate limited; retrying"
+            return False
+        except Exception as exc:
+            self.account_retry_at = time.time() + 2.0
+            self._pause_execution(f"Account synchronization failed: {exc}")
+            return False
+
+    def _book_age(self, st: MarketState) -> Tuple[float, float]:
+        """(age, freshness limit): WS receipt for live books, price stamp otherwise."""
+        if st.book_source in ("ws", "l2") and st.book_received_at:
+            return max(0.0, time.time() - st.book_received_at), 60.0
+        stamp = st.last_book_ts or st.book_received_at
+        return (max(0.0, time.time() - stamp) if stamp else math.inf,
+                self.cfg.stale_sec)
+
+    def _book_fresh(self, st: MarketState) -> bool:
+        if not st.has_bbo:
+            return False
+        age, limit = self._book_age(st)
+        return age <= limit
 
     def risk_block_reason(self, st: MarketState, closing_inventory: bool = False) -> Optional[str]:
         net_risk_pnl = self.stats.net_pnl + self.cfg.risk_pnl_carry
@@ -1622,8 +1818,8 @@ class HyperliquidSpreadBot:
             return getattr(self, "exit_reason", "") or "Maker exit requested; new bids paused"
         if not st.has_bbo:
             return "waiting bbo"
-        if time.time() - st.last_book_ts > self.cfg.stale_sec:
-            return f"stale feed {fmt_age(st.last_book_ts)}"
+        if not self._book_fresh(st):
+            return f"stale feed {fmt_age(st.book_received_at or st.last_book_ts)}"
         if self.cfg.worldcup and not closing_inventory and time.time() < st.inventory_stop_until:
             return 'Inventory stop cooldown; new bids paused'
         if (self.cfg.auto_max_spread_bps is not None and not closing_inventory
@@ -1884,7 +2080,7 @@ class HyperliquidSpreadBot:
                         delay = self.cfg.maker_requote_delay_sec if fast_requote else self.cfg.maker_opening_rest_sec
                         st.opening_rearm_until = time.time()+delay
                 st.reconcile_required = True
-                self.account_revision += 1
+                self._bump_account()
                 st.last_action = f"{side} cancel: {reason}"
         except SubmissionSkipped as exc:
             st.cancel_retry_until = previous_retry
@@ -1969,7 +2165,7 @@ class HyperliquidSpreadBot:
                 return
             try:
                 with self.safety.lock, (self.funds.transaction() if getattr(self, "funds", None) else nullcontext()):
-                    if not self.sync_account():
+                    if not self.account_ready() and not self.sync_account(force=True):
                         return
                     with self.lock:
                         # Rebuild from fresh balances and open orders, retaining
@@ -2010,8 +2206,6 @@ class HyperliquidSpreadBot:
         if not self.rotation_requested() or not self.running or self.safety.phase != "running":
             return
         with self.safety.lock:
-            if not self.sync_account():
-                return
             with self.lock:
                 blocked = any(
                     s.reconcile_required or s.bid_oid
@@ -2031,7 +2225,8 @@ class HyperliquidSpreadBot:
 
     def _prepare_spot_request(self, st, previous):
         """Fresh funds and inventory, under the execution gate, before a new order."""
-        if not self.sync_account() or not self.running or self.safety.stopped.is_set():
+        if (not self.running or self.safety.stopped.is_set()
+                or (not self.account_ready() and not self.sync_account(force=True))):
             st.last_action = "await account reconciliation"
             return None
         if st.reconcile_required or st.bid_oid or st.ask_oid:
@@ -2104,7 +2299,7 @@ class HyperliquidSpreadBot:
                     with self.lock:
                         self.states[req["coin"]].reconcile_required = True
             with self.lock:
-                self.account_revision = getattr(self, "account_revision", 0) + 1
+                self._bump_account()
                 for symbol, oids in cancelled.items():
                     st = self.states.get(symbol)
                     if st is None:
@@ -2246,7 +2441,7 @@ class HyperliquidSpreadBot:
             st.pending_until = time.time() + 2.0
 
     def _parse_order_response(self, st: MarketState, reqs: List[Dict[str, Any]], res: Any) -> None:
-        self.account_revision = getattr(self, "account_revision", 0) + 1
+        self._bump_account()
         if not isinstance(res, dict):
             st.last_action = f"unknown response {str(res)[:80]}"
             st.reconcile_required = True
@@ -2406,9 +2601,12 @@ class HyperliquidSpreadBot:
                     self._try_recovery()
                 else:
                     needs_sync = any(st.reconcile_required and time.time() >= st.pending_until for st in self.states.values())
-                    if needs_sync or time.time() - last_sync > self.cfg.account_sync_sec:
-                        self.sync_account()
-                        last_sync = time.time()
+                    loop_now = time.time()
+                    if ((needs_sync and not self.account_ready())
+                            or loop_now - last_sync > self.cfg.account_reconcile_sec) \
+                            and loop_now >= getattr(self, 'account_retry_at', 0.0):
+                        self.sync_account(force=needs_sync)
+                        last_sync = loop_now
                     self.restart_ws_if_needed()
                     self.refresh_rest_bbos()
                     if not self.running:
@@ -2463,7 +2661,7 @@ class HyperliquidSpreadBot:
                     self.status = "resumed trading"
             elif any(position or orders for _, position, orders in initial):
                 raise RuntimeError("Existing position/orders on selected market; manual reconciliation required")
-            self.sync_account()
+            self.sync_account(force=True)
             if not self.running:
                 return
             self.start_ws()
@@ -2517,7 +2715,7 @@ class HyperliquidSpreadBot:
                        "ask_price": st.quoted_ask if st.ask_oid else None,
                        "ask_size": st.ask_quantity if st.ask_oid else 0,
                        "ask_age_sec": max(0, now-st.ask_order_ts) if st.ask_oid else None,
-                       "book_age_ms": max(0, now-st.last_book_ts)*1000 if st.last_book_ts else None,
+                       "book_age_ms": (lambda age: age*1000 if math.isfinite(age) else None)(self._book_age(st)[0]) if st.has_bbo else None,
                        "book_source": st.book_source,
                        "book_depth": ({
                            "bids": [{"px": px, "sz": sz} for px, sz in st.book_bids],
@@ -2593,7 +2791,7 @@ class HyperliquidSpreadBot:
             return "Inventory stop", st.last_action
         if self.safety.phase == "recovering" or st.reconcile_required:
             return "Reconciling", ""
-        if not st.has_bbo or time.time()-st.last_book_ts > self.cfg.stale_sec:
+        if not st.has_bbo or not self._book_fresh(st):
             return "Waiting for book", ""
         risk = self.risk_block_reason(st, closing_inventory=False)
         if st.bid_oid and st.ask_oid:
@@ -2844,35 +3042,77 @@ import threading
 
 import requests
 
-
 _local = threading.local()
 
 
 def read_info(base_url, payload, *, timeout=10):
+    global _INFO_BACKOFF_UNTIL, _INFO_BACKOFF_SEC
+    now = time.monotonic()
+    with _INFO_BACKOFF_LOCK:
+        if now < _INFO_BACKOFF_UNTIL:
+            raise RateLimited("429 backoff %.0fs" % (_INFO_BACKOFF_UNTIL-now))
     if not hasattr(_local, 'session'):
         _local.session = requests.Session()
-    response = _local.session.post(base_url+'/info', json=payload, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
+    try:
+        response = _local.session.post(base_url+'/info', json=payload, timeout=timeout)
+        if response.status_code == 429:
+            retry = response.headers.get('Retry-After', '')
+            try:
+                delay = max(1.0, float(retry))
+            except (TypeError, ValueError):
+                delay = min(60.0, max(1.0, _INFO_BACKOFF_SEC * 2))
+            with _INFO_BACKOFF_LOCK:
+                _INFO_BACKOFF_SEC = max(delay, _INFO_BACKOFF_SEC)
+                _INFO_BACKOFF_UNTIL = time.monotonic() + _INFO_BACKOFF_SEC
+            raise RateLimited("429 backoff %.0fs" % _INFO_BACKOFF_SEC,
+                              retry_after=_INFO_BACKOFF_SEC)
+        response.raise_for_status()
+        with _INFO_BACKOFF_LOCK:
+            _INFO_BACKOFF_SEC = 0.0
+            _INFO_BACKOFF_UNTIL = 0.0
+        return response.json()
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 429:
+            with _INFO_BACKOFF_LOCK:
+                _INFO_BACKOFF_SEC = min(60.0, max(1.0, _INFO_BACKOFF_SEC * 2))
+                _INFO_BACKOFF_UNTIL = time.monotonic() + _INFO_BACKOFF_SEC
+            raise RateLimited("429 backoff %.0fs" % _INFO_BACKOFF_SEC,
+                              retry_after=_INFO_BACKOFF_SEC) from exc
+        raise
 
 
 class OutcomeAccountReads:
+    """Parallel spot balances + open orders for strict reconciliation.
+
+    The account hot path is websocket-driven (spotState/openOrders). This
+    reader is only used at startup, every account_reconcile_sec, recovery and
+    cleanup, so it deliberately has no cache and never returns stale data.
+    """
+
     def __init__(self, base_url, account, *, read=read_info):
         self.base_url, self.account, self.read = base_url, account, read
         self.lock = threading.Lock()
         self.closed = False
+        self.backoff_sec = 0.0
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='outcome-account')
 
-    def snapshot(self):
+    def snapshot(self, **_kwargs):
         with self.lock:
             if self.closed:
                 raise RuntimeError('Outcome account reader closed')
-            futures = [self.pool.submit(self.read, self.base_url, {'type': kind, 'user': self.account})
-                       for kind in ('spotClearinghouseState', 'openOrders')]
-            # Drain both bounded reads even if one fails: no old request may
-            # leak into a later reconciliation or mutate execution state.
-            wait(futures)
+        futures = [self.pool.submit(self.read, self.base_url, {'type': kind, 'user': self.account})
+                   for kind in ('spotClearinghouseState', 'openOrders')]
+        wait(futures)
+        try:
             return tuple(future.result() for future in futures)
+        except RateLimited as exc:
+            self.backoff_sec = max(1.0, float(exc.retry_after or 0) or self.backoff_sec * 2)
+            raise
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 429:
+                self.backoff_sec = min(60.0, max(1.0, self.backoff_sec * 2))
+                raise RateLimited('account /info 429', retry_after=self.backoff_sec) from exc
+            raise
 
     def close(self):
         with self.lock:

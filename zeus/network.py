@@ -44,7 +44,8 @@ def retry_read(label, operation, *, attempts=4, sleep=time.sleep, cancelled=None
                 status = exc.response.status_code
             transient = (isinstance(exc, (requests.ConnectionError, requests.Timeout,
                                        requests.exceptions.ChunkedEncodingError, IncompleteRead))
-                         or status == 429 or isinstance(status, int) and status >= 500)
+                         or status == 429 or isinstance(status, int) and status >= 500
+                         or bool(getattr(exc, "retryable", False)))
             if not transient:
                 raise
             if attempt == attempts:
@@ -53,6 +54,7 @@ def retry_read(label, operation, *, attempts=4, sleep=time.sleep, cancelled=None
                     f"({type(exc).__name__}). Check your network connection and retry."
                 ) from exc
             delay = min(2 ** (attempt - 1), 8)
+            delay = max(delay, min(60.0, float(getattr(exc, "retry_after", 0) or 0)))
             print(f"Hyperliquid connection: {label}, retrying "
                   f"{attempt + 1}/{attempts} in {delay}s", flush=True)
             sleep(delay)
