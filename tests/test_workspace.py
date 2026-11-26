@@ -46,7 +46,7 @@ class FakeManager:
         self.outcome = SimpleNamespace(records=lambda: [], procs={}, rotation=SimpleNamespace(close=lambda: None),
                                        stop_now=self.stop_worldcup)
 
-    def get_worldcup_stats(self): return {'display_bots': self.rows}
+    def get_worldcup_stats(self): return {'bots': self.rows, 'display_bots': self.rows}
     def get_grid_stats(self): return {'bots': []}
     def _session_files(self, **kwargs): return []
     def start_worldcup(self, req):
@@ -183,10 +183,10 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_observed_list_marks_occupied_markets_without_launching(self):
         self.login(self.client, self.a)
+        manager = self.app.state.runtimes.manager(self.a.address.lower())
+        manager.rows.append(dict(market='#101', running=True, cleanup_confirmed=False))
         with patch('zeus.outcome_flow.scanner.observations', return_value={
             'observed_markets': [dict(market='#101', auto_eligible=True, eligibility_reason='Admissible')]
-        }), patch.object(self.app.state.runtimes, 'snapshot', return_value={
-            'sessions': [dict(market='#101', running=True, cleanup_confirmed=False)]
         }):
             response = self.client.get('/api/v2/scanner/observed?side=no&order_usd=110&spread_bps=10')
         self.assertEqual(response.status_code, 200, response.text)
@@ -196,16 +196,59 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_observed_list_distinguishes_a_stopped_unconfirmed_session(self):
         self.login(self.client, self.a)
+        manager = self.app.state.runtimes.manager(self.a.address.lower())
+        manager.rows.append(dict(market='#101', running=False, cleanup_confirmed=False))
         with patch('zeus.outcome_flow.scanner.observations', return_value={
             'observed_markets': [dict(market='#101', auto_eligible=True, eligibility_reason='Admissible')]
-        }), patch.object(self.app.state.runtimes, 'snapshot', return_value={
-            'sessions': [dict(market='#101', running=False, cleanup_confirmed=False)]
         }):
             response = self.client.get('/api/v2/scanner/observed?side=no&order_usd=110&spread_bps=10')
         self.assertEqual(response.status_code, 200, response.text)
         row = response.json()['observed_markets'][0]
         self.assertFalse(row['auto_eligible'])
         self.assertEqual(row['eligibility_reason'], 'Arrêt non confirmé sur ce marché')
+
+    def test_observed_blocks_only_the_market_with_the_unresolved_leg(self):
+        self.login(self.client, self.a)
+        manager = self.app.state.runtimes.manager(self.a.address.lower())
+        manager.rows.extend([
+            dict(market='#101', running=False, cleanup_confirmed=False, started=1,
+                 config={'auto_group_id': 'rotation'}),
+            dict(market='#202', running=False, cleanup_confirmed=True, started=2,
+                 config={'auto_group_id': 'rotation'}),
+        ])
+        with patch('zeus.outcome_flow.scanner.observations', return_value={
+            'observed_markets': [
+                dict(market='#101', auto_eligible=True, eligibility_reason='Admissible'),
+                dict(market='#202', auto_eligible=True, eligibility_reason='Admissible'),
+            ]}):
+            response = self.client.get('/api/v2/scanner/observed?side=no&order_usd=110&spread_bps=10')
+        self.assertEqual(response.status_code, 200, response.text)
+        rows = {row['market']: row for row in response.json()['observed_markets']}
+        self.assertFalse(rows['#101']['auto_eligible'])
+        self.assertEqual(rows['#101']['eligibility_reason'], 'Arrêt non confirmé sur ce marché')
+        self.assertTrue(rows['#202']['auto_eligible'])
+
+    def test_reserve_session_uses_the_latest_record_for_the_market(self):
+        from zeus.server import BotManager
+
+        def manager(records):
+            instance = BotManager.__new__(BotManager)
+            instance.state_dir = Path(self.temp.name)
+            instance._corrupt_journals = {}
+            instance._scan_session_files = lambda: (records, {})
+            return instance
+
+        old = {'session_id': 'old', 'key': 'outcome:#101', 'started': 1.0,
+               'cleanup_confirmed': False}
+        new = {'session_id': 'new', 'key': 'outcome:#101', 'started': 2.0,
+               'cleanup_confirmed': True}
+        path = manager([('old.json', old), ('new.json', new)])._reserve_session(
+            'outcome:#101', ['#101'], 'outcome')
+        self.assertTrue(path and Path(path).exists())
+        with self.assertRaisesRegex(RuntimeError, 'Previous session stop not confirmed'):
+            manager([('old.json', dict(old, cleanup_confirmed=True)),
+                     ('new.json', dict(new, cleanup_confirmed=False))])._reserve_session(
+                'outcome:#101', ['#101'], 'outcome')
 
     def test_workspace_metrics_count_running_sessions_only(self):
         self.login(self.client, self.a)

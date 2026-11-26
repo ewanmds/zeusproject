@@ -452,11 +452,17 @@ class BotManager:
         self._corrupt_journals = corrupt
         if corrupt:
             raise RuntimeError("Unreadable session journal; manual verification required")
+        ignored = set(ignore_session_ids) | ({ignore_session_id} if ignore_session_id else set())
+        latest = None
         for _, record in records:
-            if record.get("session_id") in set(ignore_session_ids) | ({ignore_session_id} if ignore_session_id else set()):
+            if record.get("session_id") in ignored:
                 continue  # an explicit resume replaces this exact session
-            if record.get("key") == key and not record.get("cleanup_confirmed"):
-                raise RuntimeError("Previous session stop not confirmed; reconcile before starting")
+            if record.get("key") != key:
+                continue
+            if latest is None or (record.get("started") or 0) >= (latest.get("started") or 0):
+                latest = record
+        if latest is not None and latest.get("cleanup_confirmed") is not True:
+            raise RuntimeError("Previous session stop not confirmed; reconcile before starting")
         if self.state_dir is None:
             return None
         path = self.state_dir / (uuid.uuid4().hex + ".json")

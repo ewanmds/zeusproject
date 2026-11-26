@@ -210,6 +210,71 @@ class OutcomeCostsTests(unittest.TestCase):
         st.last_book_ts = time.time()-10
         self.assertIn('stale', bot.risk_block_reason(st))
 
+    def test_newer_confirmed_session_unblocks_an_older_unconfirmed_leg(self):
+        from zeus.outcome_supervisor import OutcomeSupervisor
+        from zeus.server import WorldcupStartRequest
+        records = [
+            ('old.json', {'session_id': 'old', 'symbols': ['#101'], 'started': 1.0,
+                          'cleanup_confirmed': False, 'account_kind': 'outcome'}),
+            ('new.json', {'session_id': 'new', 'symbols': ['#101'], 'started': 2.0,
+                          'cleanup_confirmed': True, 'account_kind': 'outcome'}),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            supervisor = OutcomeSupervisor.__new__(OutcomeSupervisor)
+            supervisor.root, supervisor.procs = Path(folder), {}
+            context = SimpleNamespace(account='0x'+'1'*40, private_key='offline-test',
+                                      environment=Mock(return_value={}))
+            supervisor.manager = SimpleNamespace(
+                account_context=context, lock=threading.RLock(),
+                _reserve_session=Mock(return_value=None),
+                _session_status=Mock(return_value={'cleanup_confirmed': False}))
+            supervisor.rotation = SimpleNamespace(
+                assert_admission=Mock(), candidate_allowed=Mock(return_value=True),
+                lock=threading.RLock(), register=Mock())
+            supervisor.records = Mock(return_value=records)
+            request = WorldcupStartRequest(market='#101', selection_mode='manual',
+                                           exec_mode='maker', outcome_side='no',
+                                           order_size_usd=15, max_position_usd=200)
+            with patch('zeus.outcomes.resolve_market',
+                       return_value={'key': '#101', 'name': 'Test'}), \
+                 patch('zeus.outcome_supervisor.subprocess.Popen',
+                       return_value=SimpleNamespace(pid=123)) as spawn:
+                result = supervisor.start(request)
+            self.assertEqual(result['market'], '#101')
+            spawn.assert_called_once()
+
+    def test_latest_unconfirmed_session_still_blocks_the_market(self):
+        from zeus.outcome_supervisor import OutcomeSupervisor
+        from zeus.server import WorldcupStartRequest
+        records = [
+            ('old.json', {'session_id': 'old', 'symbols': ['#101'], 'started': 1.0,
+                          'cleanup_confirmed': True, 'account_kind': 'outcome'}),
+            ('new.json', {'session_id': 'new', 'symbols': ['#101'], 'started': 2.0,
+                          'cleanup_confirmed': False, 'account_kind': 'outcome'}),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            supervisor = OutcomeSupervisor.__new__(OutcomeSupervisor)
+            supervisor.root, supervisor.procs = Path(folder), {}
+            context = SimpleNamespace(account='0x'+'1'*40, private_key='offline-test',
+                                      environment=Mock(return_value={}))
+            supervisor.manager = SimpleNamespace(
+                account_context=context, lock=threading.RLock(),
+                _reserve_session=Mock(return_value=None),
+                _session_status=Mock(return_value={'cleanup_confirmed': False}))
+            supervisor.rotation = SimpleNamespace(
+                assert_admission=Mock(), candidate_allowed=Mock(return_value=True),
+                lock=threading.RLock(), register=Mock())
+            supervisor.records = Mock(return_value=records)
+            request = WorldcupStartRequest(market='#101', selection_mode='manual',
+                                           exec_mode='maker', outcome_side='no',
+                                           order_size_usd=15, max_position_usd=200)
+            with patch('zeus.outcomes.resolve_market',
+                       return_value={'key': '#101', 'name': 'Test'}), \
+                 patch('zeus.outcome_supervisor.subprocess.Popen') as spawn:
+                with self.assertRaisesRegex(RuntimeError, 'Arrêt non confirmé'):
+                    supervisor.start(request)
+            spawn.assert_not_called()
+
     def test_auto_launch_admits_negative_or_unknown_cost_without_real_process(self):
         from zeus.outcome_supervisor import OutcomeSupervisor
         from zeus.server import WorldcupStartRequest

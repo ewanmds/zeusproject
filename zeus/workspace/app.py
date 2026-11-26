@@ -323,8 +323,7 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
         except ValueError as exc:
             raise HTTPException(503, safe_error(exc))
         result = await asyncio.to_thread(scanner.snapshot, side, order_usd, spread_bps, account=who['wallet'])
-        state = await asyncio.to_thread(runtimes.snapshot, who['wallet'])
-        busy = {s['market'] for s in state['sessions'] if s['running'] or not s['cleanup_confirmed']}
+        busy = await asyncio.to_thread(runtimes.outcome_busy_markets, who['wallet'])
         result['candidates'] = [m for m in result.get('candidates', []) if m['market'] not in busy]
         result['ready'] = bool(result['candidates'])
         return result
@@ -336,10 +335,7 @@ def create_app(settings=None, *, accounts_factory=HyperliquidAccounts, manager_f
             raise HTTPException(422)
         from zeus.outcome_flow import scanner
         result = scanner.observations(side, order_usd, spread_bps, account=who['wallet'])
-        state = runtimes.snapshot(who['wallet'])
-        busy = {s['market']: ('Déjà en session' if s['running']
-                              else 'Arrêt non confirmé sur ce marché')
-                for s in state['sessions'] if s['running'] or not s['cleanup_confirmed']}
+        busy = runtimes.outcome_busy_markets(who['wallet'])
         for row in result['observed_markets']:
             if row['market'] in busy:
                 row.update(auto_eligible=False, eligibility_reason=busy[row['market']])

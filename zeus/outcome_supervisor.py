@@ -349,39 +349,63 @@ class OutcomeSupervisor:
             if now - float(meta.get("started") or 0) < 30:
                 continue  # launch may still be between journal write and Popen
             stop_path = Path(meta["stop_file"]) if meta.get("stop_file") else None
+            # drain.json lives next to the session's stop file, not next to the
+            # journal (journals are flat files in the tenant directory).
+            drain_path = (stop_path.with_name("drain.json") if stop_path is not None
+                          else Path(path).with_name("drain.json"))
             terminal_intent = bool(
                 meta.get("exit_requested") or meta.get("stop_reason")
+                or meta.get("manual_stop_requested")
                 or meta.get("cleanup_error") or meta.get("phase") == "stopped"
                 or (stop_path is not None and stop_path.exists())
-                or Path(path).with_name("drain.json").exists())
-            if not terminal_intent:
-                # An interrupted trader with no stop/exit intent is auto-resumed
-                # by the loop below; archiving it here would silently stop it.
-                continue
+                or drain_path.exists())
             successor = by_id.get(meta.get("resumed_session_id"))
             if successor is not None and not successor.get("cleanup_confirmed"):
                 continue  # the child owns this lineage until it is archived
+            lineage_confirmed = bool(
+                successor is not None
+                and successor.get("account") == meta.get("account")
+                and successor.get("symbols") == meta.get("symbols"))
+            if not lineage_confirmed and not terminal_intent:
+                # An interrupted trader with no stop/exit intent is auto-resumed
+                # by the loop below; archiving it here would silently stop it.
+                continue
             if self._orphan_alive(meta) or self._worker_pid(meta):
                 continue
             state = self._recovery.get(sid) or {}
-            if now - float(state.get("flat_check_at", 0) or 0) < 60:
-                continue
-            try:
-                verify(meta)
-            except Exception as exc:
-                self._recovery[sid] = {**state, "flat_check_at": now,
-                                       "error": safe_error(exc)}
-                continue
+            if not lineage_confirmed:
+                if now - float(state.get("flat_check_at", 0) or 0) < 60:
+                    continue
+                try:
+                    verify(meta)
+                except Exception as exc:
+                    self._recovery[sid] = {**state, "flat_check_at": now,
+                                           "error": safe_error(exc)}
+                    continue
+            note = ("Successeur vérifié à plat; session parente archivée"
+                    if lineage_confirmed else
+                    "Compte vérifié à plat; session archivée automatiquement")
             atomic_json(path, {
                 **meta, "cleanup_confirmed": True, "phase": "stopped",
                 "can_start": True, "cleanup_error": "", "error": "",
                 "pending_cloids": [],
-                "cleanup_note": "Compte vérifié à plat; session archivée automatiquement",
+                "cleanup_note": note,
             })
             record["cleanup_confirmed"] = True
             self._recovery.pop(sid, None)
             logging.getLogger(__name__).warning(
                 "Outcome archived flat terminal session %s", sid)
+
+    @staticmethod
+    def _latest_market_record(records, market):
+        """Newest journal for a market; older legs are superseded by it."""
+        latest = None
+        for _, record in records:
+            if market not in (record.get("symbols") or []):
+                continue
+            if latest is None or (record.get("started") or 0) >= (latest.get("started") or 0):
+                latest = record
+        return latest
 
     def start(self, request, *, rotation_group=None, seed=None):
         self.rotation.assert_admission(rotation_group)
@@ -461,17 +485,19 @@ class OutcomeSupervisor:
                 if ancestors.issubset(replaced):
                     break
                 replaced.update(ancestors)
+            latest = self._latest_market_record(records, market)
             for info in self.procs.values():
                 if info["market"] == market:
                     if info["proc"].poll() is None:
                         raise RuntimeError("A bot is already running on this Outcome market")
-                    if info['session_id'] not in replaced and not self.manager._session_status(info["safety_file"]).get("cleanup_confirmed"):
+                    if info['session_id'] in replaced:
+                        continue
+                    if (latest is None
+                            and not self.manager._session_status(info["safety_file"]).get("cleanup_confirmed")):
                         raise RuntimeError("Previous Outcome stop not confirmed on this market")
-            for _, record in records:
-                if record.get("session_id") in replaced:
-                    continue  # the explicit resume replaces this interrupted session
-                if market in record.get("symbols", []) and not record.get("cleanup_confirmed"):
-                    raise RuntimeError("Arrêt non confirmé sur ce marché : vérifiez l'ancienne session dans Terminées avant de relancer")
+            if (latest is not None and latest.get("session_id") not in replaced
+                    and latest.get("cleanup_confirmed") is not True):
+                raise RuntimeError("Arrêt non confirmé sur ce marché : vérifiez l'ancienne session dans Terminées avant de relancer")
             session_id = uuid.uuid4().hex
             if rotation_group or public.get("selection_mode") == "auto":
                 public["auto_group_id"] = rotation_group or public.get("auto_group_id") or session_id

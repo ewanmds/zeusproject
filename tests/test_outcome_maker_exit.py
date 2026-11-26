@@ -646,6 +646,108 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
             self.assertEqual(row['phase'], 'stopped')
             sup._resume.assert_not_called()
 
+    def test_drain_file_next_to_the_session_stop_file_is_terminal_intent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            journals, runtime = root/'journals', root/'runtime'
+            journals.mkdir(); runtime.mkdir()
+            record = {'session_id': 's1', 'symbols': ['#101'], 'account_kind': 'outcome',
+                      'exposure_started': True, 'cleanup_confirmed': False,
+                      'started': time.time()-60, 'stop_file': str(runtime/'stop'),
+                      'config': {}}
+            journal = journals/'j.json'
+            journal.write_text(json.dumps(record))
+            # The supervisor writes drain.json next to the session stop file,
+            # which is not the directory holding the journal.
+            (runtime/'drain.json').write_text(json.dumps({
+                'requested_at': time.time(), 'reason': 'Manual stop: maker exit',
+                'session_finished': True, 'manual': True}))
+            sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
+            sup.procs = {}
+            sup.manager = SimpleNamespace(lock=threading.RLock())
+            sup.root = root
+            sup._recovery = {}
+            sup._recovery_lock = threading.RLock()
+            sup._stuck_restarts = {}
+            sup.records = lambda: [(str(journal), dict(record))]
+            sup._resume = Mock(return_value={'session_id': 'new'})
+            verify = Mock()
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            verify.assert_called_once()
+            row = json.loads(journal.read_text())
+            self.assertTrue(row['cleanup_confirmed'])
+            self.assertEqual(row['phase'], 'stopped')
+            sup._resume.assert_not_called()
+
+    def test_parent_is_resolved_by_its_confirmed_successor_without_a_stop_marker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            parent_path, child_path = root/'parent.json', root/'child.json'
+            parent = {'session_id': 'parent', 'symbols': ['#101'], 'account': '0xabc',
+                      'account_kind': 'outcome', 'exposure_started': True,
+                      'cleanup_confirmed': False, 'started': 1.0, 'phase': 'failed',
+                      'resumed_session_id': 'child', 'config': {}}
+            child = {'session_id': 'child', 'symbols': ['#101'], 'account': '0xabc',
+                     'account_kind': 'outcome', 'exposure_started': True,
+                     'cleanup_confirmed': True, 'started': 2.0, 'phase': 'stopped', 'config': {}}
+            parent_path.write_text(json.dumps(parent))
+            child_path.write_text(json.dumps(child))
+            sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
+            sup.procs = {}
+            sup.manager = SimpleNamespace(lock=threading.RLock())
+            sup.root = root
+            sup._recovery = {}
+            sup._recovery_lock = threading.RLock()
+            sup._stuck_restarts = {}
+            sup.records = lambda: [(str(parent_path), dict(parent)),
+                                   (str(child_path), dict(child))]
+            sup._resume = Mock(return_value={'session_id': 'new'})
+            verify = Mock()
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            # The successor inherited the lineage and was independently proved
+            # flat; the parent needs no second stop marker or REST check.
+            verify.assert_not_called()
+            row = json.loads(parent_path.read_text())
+            self.assertTrue(row['cleanup_confirmed'])
+            self.assertIn('Successeur', row['cleanup_note'])
+            sup._resume.assert_not_called()
+
+    def test_parent_waits_for_an_unconfirmed_successor(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            parent_path, child_path = root/'parent.json', root/'child.json'
+            parent = {'session_id': 'parent', 'symbols': ['#101'], 'account': '0xabc',
+                      'account_kind': 'outcome', 'exposure_started': True,
+                      'cleanup_confirmed': False, 'started': 1.0, 'phase': 'failed',
+                      'resumed_session_id': 'child', 'config': {}}
+            child = {'session_id': 'child', 'symbols': ['#101'], 'account': '0xabc',
+                     'account_kind': 'outcome', 'exposure_started': True,
+                     'cleanup_confirmed': False, 'started': 2.0, 'phase': 'failed',
+                     'stop_file': str(root/'child-stop'), 'config': {}}
+            (root/'child-stop').write_text('')
+            parent_path.write_text(json.dumps(parent))
+            child_path.write_text(json.dumps(child))
+            sup = OutcomeSupervisor.__new__(OutcomeSupervisor)
+            sup.procs = {}
+            sup.manager = SimpleNamespace(lock=threading.RLock())
+            sup.root = root
+            sup._recovery = {}
+            sup._recovery_lock = threading.RLock()
+            sup._stuck_restarts = {}
+            sup.records = lambda: [(str(parent_path), dict(parent)),
+                                   (str(child_path), dict(child))]
+            sup._resume = Mock(return_value={'session_id': 'new'})
+            verify = Mock()
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            # The child may be verified on its own, but the parent must wait.
+            self.assertFalse(any(call.args[0].get('session_id') == 'parent'
+                                 for call in verify.call_args_list))
+            row = json.loads(parent_path.read_text())
+            self.assertIsNot(row.get('cleanup_confirmed'), True)
+
     def test_flat_crash_without_stop_intent_is_resumed_not_archived(self):
         with tempfile.TemporaryDirectory() as folder:
             sup = self.supervisor(folder, {
@@ -660,15 +762,20 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
 
 class WorkspaceProjectionTests(unittest.TestCase):
     def test_archived_group_never_hides_an_unconfirmed_leg(self):
-        def record(sid, confirmed):
-            return ({'session_id': sid, 'symbols': ['#101'], 'config': {'auto_group_id': 'group'},
-                     'cleanup_confirmed': confirmed, 'started': 1.0 if sid == 'a' else 2.0})
-        rows = {'a': record('a', True), 'b': record('b', False)}
+        def record(sid, confirmed, market, name, started, error=''):
+            return ({'session_id': sid, 'symbols': [market], 'config': {'auto_group_id': 'group'},
+                     'cleanup_confirmed': confirmed, 'started': started,
+                     'market_name': name, 'cleanup_error': error})
+        # The confirmed latest leg must not hide the older blocked market or
+        # its cleanup error behind the group's newest name.
+        rows = {'a': record('a', True, '#909', 'Latest', 2.0),
+                'b': record('b', False, '#202', 'Blocked', 1.0, 'Residual order')}
         def entry(path, rec, info=None):
-            return {'session_id': rec['session_id'], 'market': '#101',
-                    'market_name': 'Test', 'config': rec['config'],
+            return {'session_id': rec['session_id'], 'market': rec['symbols'][0],
+                    'market_name': rec['market_name'], 'config': rec['config'],
                     'started': rec['started'], 'phase': 'stopped' if rec['cleanup_confirmed'] else 'failed',
                     'running': False, 'cleanup_confirmed': rec['cleanup_confirmed'],
+                    'cleanup_error': rec.get('cleanup_error', ''),
                     'stale': False, 'accounting_complete': True,
                     'volume_usd': 1, 'net_pnl': 0, 'fees': 0, 'fills': 1,
                     'position_usd': 0, 'duration_sec': 1}
@@ -688,6 +795,9 @@ class WorkspaceProjectionTests(unittest.TestCase):
         self.assertFalse(grouped['cleanup_confirmed'])
         self.assertFalse(grouped['running'])
         self.assertEqual(grouped['phase'], 'failed')
+        self.assertEqual(grouped['market'], '#202')
+        self.assertEqual(grouped['name'], 'Blocked')
+        self.assertIn('Residual order', grouped['reason'])
 
     def test_session_exposes_exit_intent_and_reason(self):
         row = {'session_id': 's1', 'market': '#101', 'market_name': 'Test',

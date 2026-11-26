@@ -206,6 +206,17 @@ class Runtimes:
                 row['phase'] = ('draining' if any(b.get('phase') == 'draining' for b in members)
                                 else 'failed' if any(not b.get('cleanup_confirmed') for b in members)
                                 else row.get('phase'))
+                # Point the group card at the leg that actually blocks it, so
+                # the market and cleanup error shown to the user are the ones
+                # that still need reconciliation.
+                unresolved = [b for b in members if b.get('cleanup_confirmed') is not True]
+                if unresolved:
+                    blocker = max(unresolved, key=lambda b: b.get('started', 0))
+                    row['market'] = blocker.get('market') or row.get('market')
+                    row['market_name'] = blocker.get('market_name') or row.get('market_name')
+                    for field in ('error', 'cleanup_error', 'recovery_error',
+                                  'blocked_reason', 'stop_reason'):
+                        row[field] = blocker.get(field) or row.get(field)
                 row['exit_requested'] = any(b.get('exit_requested') or b.get('phase') == 'draining'
                                             for b in members)
                 row['cost_per_1m'] = -row['net_pnl']*1e6/row['volume_usd'] if complete and row['volume_usd'] else None
@@ -345,6 +356,25 @@ class Runtimes:
             self.invalidate(owner)
             snapshot = self.snapshot(owner)
             return {**snapshot, 'resumed_session_id': result.get('session_id')}
+
+    def outcome_busy_markets(self, owner):
+        """Markets that cannot be launched now, mapped to the UI reason.
+
+        Use the supervisor's latest record per market rather than the grouped
+        workspace sessions: an unresolved old rotation leg must block its own
+        market, never the latest market of its group.
+        """
+        stats = self.manager(owner).get_worldcup_stats() or {}
+        busy = {}
+        for bot in stats.get('bots') or []:
+            market = bot.get('market') or bot.get('symbol')
+            if not market:
+                continue
+            if bot.get('running'):
+                busy[market] = 'Déjà en session'
+            elif bot.get('cleanup_confirmed') is not True:
+                busy[market] = 'Arrêt non confirmé sur ce marché'
+        return busy
 
     def reconcile(self, owner):
         with self.tenant_lock(owner):
