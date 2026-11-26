@@ -47,8 +47,9 @@ class OutcomeRotation:
                          started=now, state="observing",
                          samples=deque([(now, 0.0)], maxlen=2000), reason="", retry_at=0.0,
                          current_selection=selection, fills_seen=0,
-                         last_leg_fill_at=now,
-                         promote_check=False, last_rank_check=0.0,
+                         last_leg_fill_at=now, promote_check=False,
+                         inventory_blocked_since=0.0,
+                         last_rank_check=0.0,
                          market_rank=selection.get("rank"))
             group["members"].add(session["session_id"])
             if self.thread is None or not self.thread.is_alive():
@@ -97,20 +98,48 @@ class OutcomeRotation:
         if (current.get('position_known') is not True or isinstance(position, bool)
                 or not isinstance(position, (int, float)) or not math.isfinite(position)):
             return "Rotation: vérification de l'inventaire"
+        qty = current.get('position_qty')
+        unsellable = current.get('unsellable_qty')
+        known_qty = (isinstance(qty, (int, float)) and not isinstance(qty, bool)
+                     and math.isfinite(qty) and qty >= 0)
+        if known_qty and qty > 1e-9:
+            if (isinstance(unsellable, (int, float)) and not isinstance(unsellable, bool)
+                    and math.isfinite(unsellable) and qty - unsellable <= 1e-9):
+                return ''  # only a provably unsellable residual: rotation may proceed
+            if current.get('book_price_known') is False:
+                return "Rotation: vérification du prix"
+            if abs(position) < 1e-9:
+                return "Rotation: vérification du prix"
         if abs(position) > 1e-9:
+            if known_qty and qty > 1e-9 and abs(position) < 10.0:
+                return ''  # venue minimum: this residual cannot be sold
             return "Rotation différée: vente de l'inventaire en cours"
         return ''
+
+    @staticmethod
+    def _inventory_message(group, reason, now):
+        since = float(group.get("inventory_blocked_since") or 0)
+        if not since:
+            since = group["inventory_blocked_since"] = now
+        minutes = int(max(0, now-since) // 60)
+        return reason + ((" depuis %d min" % minutes) if minutes >= 5 else '')
 
     def describe(self, session_id):
         with self.lock:
             for group in self.groups.values():
                 if session_id in group["members"]:
+                    now = time.time()
+                    last_fill = float(group.get("last_leg_fill_at") or 0)
+                    blocked = float(group.get("inventory_blocked_since") or 0)
                     return {"auto_group_id": group["id"], "auto_rotations": group["rotations"],
                             "auto_rotation_state": group["state"], "auto_rotation_reason": group["reason"],
                             "auto_fill_usd_per_min": group.get("fill_rate", 0),
                             "auto_market_rank": group.get("market_rank"),
                             "auto_best_rank": group.get("best_rank"),
                             "auto_best_market": group.get("best_market"),
+                            "auto_last_leg_fill_at": last_fill or None,
+                            "auto_no_fill_sec": max(0, now-last_fill) if last_fill else None,
+                            "auto_inventory_blocked_sec": max(0, now-blocked) if blocked else 0,
                             "auto_evaluate_after_sec": group.get("evaluate_after_sec"),
                             "auto_evaluate_in_sec": max(0, group.get("evaluate_at", time.time())-time.time())}
         return {}
@@ -370,7 +399,19 @@ class OutcomeRotation:
                     group.update(state="blocked",
                                  reason="Rotation blocked: interruption, arrêt non confirmé")
                     return
-            elif current.get("stale") or current.get("phase") != "running":
+            elif current.get("stale"):
+                group["reason"] = "Session muette: reprise en cours"
+                return
+            elif current.get("phase") == "recovering":
+                detail = safe_error(current.get("recovery_error") or "")
+                group["reason"] = ("Récupération exchange en cours"
+                                   + (": " + detail if detail else ""))
+                group["last_rank_check"] = now
+                return
+            elif current.get("phase") != "running":
+                group["reason"] = ("Rotation: session en démarrage"
+                                   if current.get("phase") == "connecting"
+                                   else "Rotation: session en cours d'arrêt")
                 return
             if state not in ("observing", "draining"):
                 return
@@ -433,8 +474,9 @@ class OutcomeRotation:
                 group["promote_check"] = promote
                 inventory_reason = self.rotation_inventory_reason(current)
                 if inventory_reason:
-                    group["reason"] = inventory_reason
+                    group["reason"] = self._inventory_message(group, inventory_reason, now)
                     return
+                group["inventory_blocked_since"] = 0.0
 
         context = getattr(getattr(self.owner, 'manager', None), 'account_context', None)
         account = context.account if context else os.getenv('WALLET_ADDRESS_OUTCOME', '').strip()
@@ -482,8 +524,9 @@ class OutcomeRotation:
                 inventory_reason = self.rotation_inventory_reason(latest)
                 if inventory_reason:
                     group["last_rank_check"] = now
-                    group['reason'] = inventory_reason
+                    group['reason'] = self._inventory_message(group, inventory_reason, now)
                     return
+                group["inventory_blocked_since"] = 0.0
                 # Publish what this leg sees so the card can show
                 # "#current -> #best" instead of sitting silently.
                 group["market_rank"] = (current_candidate or {}).get("rank")

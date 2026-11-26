@@ -57,7 +57,7 @@ export const stateText: Record<string, string> = {
   "Bid working": "Bid",
   "Ask working": "Ask",
   "Bid + Ask": "Bid + Ask",
-  Reconciling: "En cours",
+  Reconciling: "Vérification",
   "Waiting for book": "En cours",
   "Waiting to quote": "En cours",
   "Spread too wide": "En cours",

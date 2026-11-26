@@ -195,8 +195,14 @@ class OutcomeCostsTests(unittest.TestCase):
         bot.available_usdc = 0
         self.assertNotIn(True, bot.bilateral_requests(st))
         bot.available_usdc = 100
-        bot.cfg.max_position_usd = st.position_usd+14
+        bot.cfg.max_position_usd = st.position_usd + 6
         self.assertNotIn(True, bot.bilateral_requests(st))
+        bot.cfg.max_position_usd = st.position_usd + 14
+        plan = bot.bilateral_requests(st)
+        self.assertIn(True, plan)
+        value = plan[True]['sz'] * plan[True]['limit_px']
+        self.assertGreaterEqual(value, 10.0)
+        self.assertLessEqual(value, 14.0 + 1e-9)
         bot.cfg.max_position_usd = 200
         st.update_bbo(.38, .39)
         self.assertNotIn(True, bot.bilateral_requests(st))

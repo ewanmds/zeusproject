@@ -81,6 +81,15 @@ export interface Session {
   rank?: number | null;
   best_rank?: number | null;
   best_market?: string | null;
+  rotation_state?: string;
+  recovery_error?: string;
+  recovery_since?: number;
+  no_fill_sec?: number | null;
+  inventory_blocked_sec?: number;
+  position_qty?: number | null;
+  unsellable_qty?: number | null;
+  dust_usd?: number | null;
+  available_usdc?: number | null;
   config: Partial<Draft> & {
     order_size_usd?: number;
     outcome_side?: string;

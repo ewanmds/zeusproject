@@ -25,11 +25,12 @@ class SessionTargetsTests(unittest.TestCase):
         bot.cfg=build_config({'market':'#101','order_size_usd':25,'max_position_usd':200,'exec_mode':'maker',
             'selection_mode':'auto','two_sided':True,'session_expires_at':time.time()-1},None)
         bot.stats=SessionStats();bot.available_usdc=100;bot.funds=None
-        st=MarketState(MarketSpec('#101',0,balance_coin='+101'),position=10,available_position=10)
+        st=MarketState(MarketSpec('#101',0,balance_coin='+101'),position=25,available_position=25)
         st.update_bbo(.4,.40001)
         plan=bot.bilateral_requests(st)
         self.assertNotIn(True,plan);self.assertIn(False,plan)
         self.assertEqual(plan[False]['order_type'],{'limit':{'tif':'Alo'}})
+        self.assertGreaterEqual(plan[False]['sz']*plan[False]['limit_px'],10)
         self.assertLess(plan[False]['sz']*plan[False]['limit_px'],25) # Final residual exit, no new minimum order.
 
     def test_target_finishes_without_scanner_or_replacement(self):

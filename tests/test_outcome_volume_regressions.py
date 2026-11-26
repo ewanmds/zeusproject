@@ -303,7 +303,12 @@ class PartialMakerVolumeTests(unittest.TestCase):
         self.assertEqual(plan[False]['sz'], 40)
         self.assertEqual(plan[False]['limit_px'], st.ask)
         self.assertEqual(plan[False]['order_type']['limit']['tif'], 'Alo')
-        self.assertNotIn(True, plan)  # $31.86 is not permission to resize a $70 buy
+        # $31.86 free is enough for a valid partial bid down to the $10 venue
+        # minimum. Refusing to resize the $70 order starved all bids and volume.
+        self.assertIn(True, plan)
+        self.assertGreaterEqual(plan[True]['sz'] * plan[True]['limit_px'], 10.0)
+        self.assertLessEqual(plan[True]['sz'] * plan[True]['limit_px'], 31.86)
+        self.assertEqual(plan[True]['order_type']['limit']['tif'], 'Alo')
         self.assertEqual(bot.cfg.order_usd, 70)
         self.assertEqual(bot.cfg.max_position_usd, 120)
 

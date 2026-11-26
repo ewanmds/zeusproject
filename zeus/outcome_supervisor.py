@@ -65,6 +65,9 @@ class OutcomeSupervisor:
         # Crash recovery is owned by the backend: no UI button is required.
         self._recovery = {}
         self._recovery_lock = threading.Lock()
+        # Live workers which stopped heartbeating are restarted through the
+        # crash path. Keep one attempt per session per minute.
+        self._stuck_restarts = {}
         self._closed = threading.Event()
         self._recovery_thread = threading.Thread(
             target=self._recovery_loop, name="outcome-auto-recover", daemon=True)
@@ -169,6 +172,32 @@ class OutcomeSupervisor:
                     continue
                 info = procs.get(sid)
                 if info is not None and info["proc"].poll() is None:
+                    # A live process can still be stalled: its exchange recovery
+                    # may keep failing, or its trading loop may stop heartbeating
+                    # while the monitor keeps the stats timestamp fresh. Restart
+                    # it through the normal crash/recovery path instead of
+                    # leaving a silent zombie for hours.
+                    stop_path = Path(record["stop_file"]) if record.get("stop_file") else None
+                    stopping = bool(stop_path and stop_path.exists()) or record.get("phase") == "draining"
+                    if not stopping:
+                        stuck_since = (float(record.get("recovery_since") or 0)
+                                       if record.get("phase") == "recovering" else 0.0)
+                        loop_at = stats_ts = 0.0
+                        try:
+                            stats = read_json(record.get("stats_file")) if record.get("stats_file") else {}
+                            if isinstance(stats, dict):
+                                loop_at = float(stats.get("loop_at") or 0)
+                                stats_ts = float(stats.get("ts") or 0)
+                        except (OSError, ValueError, TypeError):
+                            pass
+                        started = float(record.get("started") or 0)
+                        stalled = ((stuck_since and now - stuck_since >= 300)
+                                   or (loop_at and stats_ts and now - loop_at >= 120
+                                       and now - stats_ts < 10)
+                                   or (not loop_at and stats_ts and started
+                                       and now - started >= 300 and now - stats_ts < 10))
+                        if stalled and self._restart_stuck(sid, record, info, now):
+                            continue
                     continue
                 if record.get("resumed_session_id") in by_id:
                     continue
@@ -273,6 +302,23 @@ class OutcomeSupervisor:
                     }
                     logging.getLogger(__name__).warning(
                         "Outcome auto-recovery %s failed (%s): %s", sid, failures, detail)
+
+    def _restart_stuck(self, sid, record, info, now):
+        """Kill a live but stalled worker; the next recovery tick resumes it."""
+        key = ((record.get("config") or {}).get("auto_group_id") or sid)
+        previous = float(self._stuck_restarts.get(key) or 0)
+        if previous and now - previous < 60:
+            return False
+        self._stuck_restarts[key] = now
+        logging.getLogger(__name__).warning(
+            "Outcome worker %s stalled (phase=%s); restarting through recovery",
+            sid, record.get("phase"))
+        proc = info.get("proc")
+        try:
+            proc.kill() if previous else proc.terminate()
+        except Exception:
+            pass
+        return True
 
     def start(self, request, *, rotation_group=None, seed=None):
         self.rotation.assert_admission(rotation_group)

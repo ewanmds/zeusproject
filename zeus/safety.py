@@ -240,6 +240,7 @@ class SafetyLatch:
                     position_known=self.account_known or self.cleanup_confirmed, session_id=self.session_id,
                     quoting_enabled=not self.stopped.is_set() and self.phase == "running" and not draining,
                     recovery_error=self.recovery_error,
+                    recovery_since=float(self.metadata.get("recovery_since") or 0),
                     passive_only=self.passive_only, manual_stop_requested=self.manual_stop_requested,
                     manual_taker_close_requested=self.manual_taker_close_requested,
                     strict_maker_spot=self.strict_maker_spot,
@@ -377,6 +378,7 @@ class SafetyLatch:
             self.phase = "recovering"
             self.recovery_error = self.recovery_error or safe_error(error)
             self.metadata["last_recovery_error"] = safe_error(error)
+            self.metadata.setdefault("recovery_since", time.time())
             self.pending_cloids.update(pending_cloids)
             self.recovery_revision += 1
             self.publish()
@@ -388,6 +390,7 @@ class SafetyLatch:
                 return False
             self.phase = "running"
             self.recovery_error = ""
+            self.metadata.pop("recovery_since", None)
             return self.publish()
 
     @contextmanager

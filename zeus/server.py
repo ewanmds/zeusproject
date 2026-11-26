@@ -414,8 +414,23 @@ class BotManager:
         # proves there is no order or position left to worry about.
         rows = account_snapshot(info, account, symbols, spot=kind == "outcome",
                                 balances={s: "+" + s.lstrip("#") for s in symbols})
-        if any(position or orders for _, position, orders in rows):
-            raise RuntimeError("Residual orders/position; manual reconciliation required")
+        recorded = record.get("residual_dust") if isinstance(record.get("residual_dust"), dict) else {}
+        for symbol, position, orders in rows:
+            if orders:
+                raise RuntimeError("Residual orders/position; manual reconciliation required")
+            if not position:
+                continue
+            # A provably unsellable residual is journaled by the worker. Only
+            # this exact, bounded (< $10 venue minimum) residual may be treated
+            # as flat; everything else still requires manual reconciliation.
+            entry = recorded.get(symbol)
+            try:
+                qty = float(entry["qty"])
+                notional = float(entry["notional"])
+            except (KeyError, TypeError, ValueError):
+                raise RuntimeError("Residual orders/position; manual reconciliation required")
+            if abs(float(position) - qty) > 1e-6 or notional >= 10.0:
+                raise RuntimeError("Residual orders/position; manual reconciliation required")
         for cloid in record.get("pending_cloids", []):
             try:
                 _, status = confirmed_client_order(info, account, cloid, symbols)

@@ -38,6 +38,10 @@ export function sessionStatus(
       tone: "offline",
       label: session.phase === "error" ? "Erreur" : phaseLabel,
     };
+  // A live worker can be stuck in exchange reconciliation while its monitor
+  // keeps the stats fresh. Do not label that as a healthy "En cours".
+  if (session.running && (session.phase === "recovering" || session.state === "Reconciling"))
+    return { tone: "degraded", label: "Vérification" };
   const makerExit =
     session.phase === "draining" || session.exit_requested === true;
   if (makerExit && session.running)

@@ -41,6 +41,11 @@ describe("session status evidence", () => {
         label: "Données retardées",
       });
   });
+  it("surfaces a live exchange recovery instead of pretending it trades", () => {
+    expect(
+      sessionStatus({ ...active, phase: "recovering", state: "Reconciling" }, false),
+    ).toEqual({ tone: "degraded", label: "Vérification" });
+  });
   it("does not label an unconfirmed stop as stopped", () => {
     expect(
       sessionStatus({ ...active, running: false, phase: "stopped" }, false),

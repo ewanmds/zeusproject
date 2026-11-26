@@ -174,7 +174,7 @@ class OutcomeQuoteTests(unittest.TestCase):
     def test_negative_pnl_does_not_create_a_crossing_exit(self):
         bot = make_bot()
         st = MarketState(MarketSpec('#101', 0, balance_coin='+101'),
-                         position=10, available_position=10)
+                         position=40, available_position=40)
         st.update_bbo(.30, .31)
         bot.stats.gross_closed_pnl = -40
         bot.rotation_requested = lambda: True
@@ -405,6 +405,25 @@ class SupervisorStopTests(unittest.TestCase):
             self.assertEqual(json.loads(journal.read_text())['resumed_session_id'], 'new')
 
 
+class RecoveryHeartbeatTests(unittest.TestCase):
+    def test_pause_publishes_recovery_since_and_resume_clears_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            journal = Path(folder) / 'journal.json'
+            gate = SafetyLatch(lambda: None, str(journal), strict_maker_spot=True)
+            gate.phase = 'running'
+            gate.pause(RuntimeError('Invalid open orders response'))
+            snapshot = gate.snapshot()
+            self.assertEqual(snapshot['phase'], 'recovering')
+            self.assertGreater(snapshot['recovery_since'], 0)
+            row = json.loads(journal.read_text())
+            self.assertEqual(row['phase'], 'recovering')
+            self.assertGreater(row['recovery_since'], 0)
+            self.assertIn('Invalid open orders', row['recovery_error'])
+            self.assertTrue(gate.resume(gate.recovery_revision))
+            self.assertEqual(gate.phase, 'running')
+            self.assertNotIn('recovery_since', gate.metadata)
+
+
 class SupervisorAutoRecoveryTests(unittest.TestCase):
     def supervisor(self, folder, record, drain=None, stop=False):
         journal = Path(folder) / 'journal.json'
@@ -420,6 +439,7 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
         sup.root = Path(folder)
         sup._recovery = {}
         sup._recovery_lock = threading.RLock()
+        sup._stuck_restarts = {}
         rec = dict(record, stop_file=str(stop_file), symbols=['#101'],
                    account_kind='outcome', cleanup_confirmed=False)
         rec.setdefault('started', 1.0)
@@ -447,6 +467,53 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
                                   drain={'reason': 'low executed $/min'})
             sup._auto_recover()
             sup._resume.assert_called_once_with('s1', exit_only=False)
+
+    def test_live_worker_with_a_stale_loop_is_restarted(self):
+        with tempfile.TemporaryDirectory() as folder:
+            now = time.time()
+            stats = Path(folder) / 'stats.json'
+            stats.write_text(json.dumps({'ts': now-1, 'loop_at': now-200}))
+            sup = self.supervisor(folder, {
+                'session_id': 's1', 'exposure_started': True, 'phase': 'running',
+                'started': now-600, 'stats_file': str(stats)})
+            proc = Mock()
+            proc.poll.return_value = None
+            sup.procs = {'s1': {'proc': proc, 'market': '#101'}}
+            sup._auto_recover()
+            proc.terminate.assert_called_once()
+            sup._resume.assert_not_called()
+
+    def test_live_worker_with_a_fresh_loop_is_not_restarted(self):
+        with tempfile.TemporaryDirectory() as folder:
+            now = time.time()
+            stats = Path(folder) / 'stats.json'
+            stats.write_text(json.dumps({'ts': now-0.1, 'loop_at': now-1}))
+            sup = self.supervisor(folder, {
+                'session_id': 's1', 'exposure_started': True, 'phase': 'running',
+                'started': now-600, 'stats_file': str(stats)})
+            proc = Mock()
+            proc.poll.return_value = None
+            sup.procs = {'s1': {'proc': proc, 'market': '#101'}}
+            sup._auto_recover()
+            proc.terminate.assert_not_called()
+            sup._resume.assert_not_called()
+
+    def test_live_worker_stuck_recovering_is_restarted(self):
+        with tempfile.TemporaryDirectory() as folder:
+            now = time.time()
+            stats = Path(folder) / 'stats.json'
+            stats.write_text(json.dumps({'ts': now-1, 'loop_at': now-1}))
+            sup = self.supervisor(folder, {
+                'session_id': 's1', 'exposure_started': True, 'phase': 'recovering',
+                'started': now-900, 'stats_file': str(stats),
+                'recovery_since': now-400,
+                'last_recovery_error': 'Invalid open orders response'})
+            proc = Mock()
+            proc.poll.return_value = None
+            sup.procs = {'s1': {'proc': proc, 'market': '#101'}}
+            sup._auto_recover()
+            proc.terminate.assert_called_once()
+            sup._resume.assert_not_called()
 
     def test_flat_terminal_session_is_confirmed_without_resume(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -184,6 +184,12 @@ def round_size(size: float, sz_decimals: int) -> float:
     return math.floor(size * factor) / factor
 
 
+# The venue rejects any order whose notional is below $10. Outcome tokens are
+# whole-token (sz_decimals=0), so a small residual can be impossible to sell.
+EXCHANGE_MIN_ORDER_USD = 10.0
+UNSELLABLE_TOKENS_WITHOUT_MARK = 10  # 10 * 0.99999 < $10
+
+
 def round_px_wire(px: float) -> float:
     """Keep floats acceptable to hyperliquid.utils.signing.float_to_wire."""
     return float(f"{px:.8f}")
@@ -413,6 +419,7 @@ class HyperliquidSpreadBot:
         self.last_global_action_ts = 0.0
         self.last_ws_restart_ts = 0.0
         self.last_rest_sweep_ts = 0.0
+        self.loop_at = 0.0
         self.rest_backoff_until = 0.0
         self.status = "init"
         self.stats = SessionStats()
@@ -426,6 +433,7 @@ class HyperliquidSpreadBot:
         if cfg.funds_root:
             from zeus.process_control import OutcomeFunds
             self.funds = OutcomeFunds(cfg.funds_root, cfg.account_address, self.safety.session_id)
+        self.residual_dusts = {}
         self.recovery_next = 0.0
         self.recovery_delay = 2.0
 
@@ -806,6 +814,7 @@ class HyperliquidSpreadBot:
         rows = account_snapshot(self.info, self.cfg.account_address, list(self.states),
                                 spot=self.cfg.worldcup,
                                 balances={s.spec.symbol: s.spec.balance_coin for s in self.states.values()})
+        rows = self._suppress_dust(rows)
         if unresolved:
             open_cloids = {str(order.get("cloid", "")).lower()
                            for _, _, orders in rows for order in orders if order.get("cloid")}
@@ -1734,6 +1743,47 @@ class HyperliquidSpreadBot:
                     or self.cfg.stop_file and os.path.exists(self.cfg.stop_file)
                     or self.cfg.rotation_file and os.path.exists(self.cfg.rotation_file))
 
+    def residual_dust(self, st: MarketState) -> Optional[Dict[str, float]]:
+        """Provably unsellable residual, or None when flat/sellable/unknown."""
+        raw = max(0.0, float(st.position))
+        if raw <= 1e-9:
+            return None
+        qty = round_size(raw, st.spec.sz_decimals)
+        if qty <= 0:
+            qty = raw  # fractional remainder below one lot: unsellable
+        mark = st.bid if st.bid > 0 else st.mid
+        if mark > 0:
+            notional = qty * mark
+            if notional >= EXCHANGE_MIN_ORDER_USD:
+                return None
+        elif qty > UNSELLABLE_TOKENS_WITHOUT_MARK:
+            return None  # unknown price, possibly sellable: stay strict
+        else:
+            # Without a price, a whole lot can still be worth less than $10.
+            notional = qty * 0.99999
+        return {"qty": float(qty), "mark": round(float(mark), 8),
+                "notional": round(float(notional), 6),
+                "cost_usd": round(float(qty) * float(st.avg_entry_px or 0.0), 6)}
+
+    def _suppress_dust(self, rows):
+        """Treat only provably unsellable residuals as flat, and journal them."""
+        clean, residual = [], {}
+        for symbol, position, orders in rows:
+            st = self.states.get(symbol)
+            dust = self.residual_dust(st) if st is not None else None
+            if dust is not None and abs(float(position) - dust["qty"]) <= 1e-6:
+                residual[symbol] = {**dust, "at": time.time()}
+                clean.append((symbol, 0.0, orders))
+            else:
+                clean.append((symbol, position, orders))
+        if residual:
+            self.residual_dusts = residual
+            metadata = getattr(self.safety, "metadata", None)
+            if isinstance(metadata, dict):
+                metadata["residual_dust"] = residual
+                self.safety.publish()
+        return clean
+
     def bilateral_requests(self, st: MarketState) -> Dict[bool, Dict[str, Any]]:
         """One funded bid and one inventory-backed ask. Existing holds count once."""
         requests_out = {}
@@ -1749,6 +1799,11 @@ class HyperliquidSpreadBot:
         sell_qty = available if draining else min(
             available,
             max(1, math.ceil(10.0 / ask), math.floor(self.cfg.order_usd / ask)))
+        # A new sell below the venue minimum is rejected. Keep an already
+        # accepted partial ask (it can fill in a larger sweep), but never send
+        # a fresh impossible order: that only creates a reject/recover loop.
+        if sell_qty and sell_qty * ask < EXCHANGE_MIN_ORDER_USD:
+            sell_qty = 0
         risk_exit = self.risk_block_reason(st, closing_inventory=False)
         full_size = self.cfg.full_size_quotes
         partial_ask = (full_size and st.ask_oid and 0 < st.ask_quantity*st.quoted_ask < 10.0
@@ -1757,8 +1812,7 @@ class HyperliquidSpreadBot:
         if partial_ask:
             requests_out[False] = {"coin": st.spec.symbol, "is_buy": False, "sz": float(st.ask_quantity),
                 "limit_px": st.quoted_ask, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
-        elif sell_qty >= 1 and (not full_size or draining or risk_exit
-                                or sell_qty*ask >= 10.0):
+        elif sell_qty >= 1 and sell_qty * ask >= EXCHANGE_MIN_ORDER_USD:
             # The configured opening size is not the exchange's sell minimum.
             # Sell executable partial inventory instead of waiting for 90% of
             # another full order. Existing sub-minimum resting asks keep queue.
@@ -1783,10 +1837,13 @@ class HyperliquidSpreadBot:
             return requests_out
         # floor avoids ceil(min) > floor(order): otherwise no bid is ever sent
         # on a small-priced Outcome token.
-        minimum = max(1, math.floor(self.cfg.min_order_usd / bid))
-        target = max(minimum, math.floor(self.cfg.order_usd / bid))
+        venue_minimum = max(1, math.ceil(EXCHANGE_MIN_ORDER_USD / bid))
+        target = max(1, math.floor(self.cfg.order_usd / bid))
         buy_qty = min(target, math.floor(min(free, remaining)/bid))
-        if buy_qty >= minimum:
+        # A partial bid down to the venue minimum is valid and keeps volume
+        # alive when free USDC or the remaining cap is below one full order.
+        # Requiring the full configured size here starved every later bid.
+        if buy_qty >= venue_minimum and buy_qty * bid >= EXCHANGE_MIN_ORDER_USD:
             requests_out[True] = {"coin": st.spec.symbol, "is_buy": True, "sz": float(buy_qty),
                 "limit_px": bid, "order_type": {"limit": {"tif": "Alo"}}, "reduce_only": False}
         return requests_out
@@ -1925,6 +1982,9 @@ class HyperliquidSpreadBot:
                         req = self.bilateral_requests(st).get(buy)
                         if req is None or buy and self.rotation_requested():
                             return
+                        if float(req["sz"]) * float(req["limit_px"]) < EXCHANGE_MIN_ORDER_USD:
+                            st.last_action = "skip sub-minimum order"
+                            return
                         # Reserve this side before releasing the state lock.
                         st.pending_until = time.time()+.35
                         st.pending_side = side
@@ -1953,14 +2013,20 @@ class HyperliquidSpreadBot:
             if not self.sync_account():
                 return
             with self.lock:
-                if any(s.position > 0 or s.bid_oid or s.ask_oid or s.reconcile_required for s in self.states.values()):
+                blocked = any(
+                    s.reconcile_required or s.bid_oid
+                    or (s.ask_oid and self.residual_dust(s) is None)
+                    or (s.position > 1e-9 and self.residual_dust(s) is None)
+                    for s in self.states.values())
+                if blocked:
                     return
             # Independent exchange confirmation after cancellations. Shutdown
             # sees a flat account, so rotation requires no taker liquidation.
+            # A provably unsellable residual is suppressed and journaled.
             rows = self._cleanup_snapshot()
-            if any(position or orders for _, position, orders in rows):
+            if any(position for _, position, _ in rows):
                 return
-            self.status = "rotation: flat, stop verified"
+            self.status = "rotation: flat or unsellable dust, stop verified"
             self.request_stop()
 
     def _prepare_spot_request(self, st, previous):
@@ -2138,7 +2204,8 @@ class HyperliquidSpreadBot:
             return
 
         order_value = float(req["sz"]) * float(req["limit_px"])
-        min_live_value = self.cfg.min_order_usd if req["is_buy"] else 0.0
+        min_live_value = max(EXCHANGE_MIN_ORDER_USD,
+                             self.cfg.min_order_usd if req["is_buy"] else 0.0)
         if order_value < min_live_value:
             st.last_action = f"skip low value ${order_value:.2f}<${min_live_value:.2f}"
             return
@@ -2326,6 +2393,7 @@ class HyperliquidSpreadBot:
         last_sync = 0.0
         while self.running:
             try:
+                self.loop_at = time.time()
                 if self.cfg.worldcup and not self.safety.stopped.is_set():
                     session_loss = self.stats.net_pnl + self.cfg.risk_pnl_carry <= -abs(self.cfg.stop_loss_usd)
                     session_profit = self.cfg.take_profit_usd > 0 and self.stats.net_pnl >= self.cfg.take_profit_usd
@@ -2433,6 +2501,11 @@ class HyperliquidSpreadBot:
                 spread = state.spread_bps
                 if spread is not None and math.isfinite(spread) and spread > 0:
                     spreads.append(spread)
+            dust = {st.spec.symbol: self.residual_dust(st) for st in self.states.values()}
+            total_qty = sum(max(0.0, st.position) for st in self.states.values())
+            unsellable_qty = sum((item or {}).get("qty", 0.0) for item in dust.values())
+            dust_usd = sum((item or {}).get("notional", 0.0) for item in dust.values())
+            book_price_known = all(st.has_bbo for st in self.states.values())
 
             avg_mid = sum(mid_prices) / len(mid_prices) if mid_prices else 0.0
             avg_spread = sum(spreads) / len(spreads) if spreads else 0.0
@@ -2483,6 +2556,7 @@ class HyperliquidSpreadBot:
                 "rejected": stats.rejected,
                 "forced_exits": stats.forced_exits,
                 "last_fill_at": getattr(self, "last_fill_at", 0),
+                "loop_at": getattr(self, "loop_at", 0.0),
                 "account_sync_ms": getattr(self, "account_sync_ms", 0),
                 "account_age_ms": max(0, now-self.account_synced_at)*1000 if getattr(self, "account_synced_at", 0) else None,
                 "duration_sec": stats.elapsed_min * 60,
@@ -2494,6 +2568,11 @@ class HyperliquidSpreadBot:
                 "mid_price": avg_mid,
                 "spread_bps": avg_spread,
                 "position_usd": total_position_usd,
+                "position_qty": total_qty,
+                "unsellable_qty": unsellable_qty,
+                "dust_usd": dust_usd,
+                "book_price_known": book_price_known,
+                "available_usdc": float(getattr(self, "available_usdc", 0.0) or 0.0),
                 "active_markets": len(mid_prices),
             }
         finally:

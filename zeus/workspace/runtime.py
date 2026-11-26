@@ -39,7 +39,7 @@ def visible_session(row, kind):
               'max_position_usd', 'outcome_side', 'strategy', 'offset_bps', 'auto_max_spread_bps',
               'session_duration_sec', 'target_volume_usd', 'session_expires_at', 'session_stop_loss_usd') if k in cfg}
     reason = (row.get('error') or row.get('cleanup_error') or row.get('blocked_reason')
-              or row.get('auto_rotation_reason') or row.get('stop_reason') or '')
+              or row.get('recovery_error') or row.get('auto_rotation_reason') or row.get('stop_reason') or '')
     reason = safe_error(reason) if reason else ''
     if reason.startswith('Placement still unconfirmed'):
         reason = 'Placement non confirmé : vérification du CLOID en cours'
@@ -63,7 +63,16 @@ def visible_session(row, kind):
         'rotations': row.get('auto_rotations', 0),
         'rank': row.get('auto_market_rank'),
         'best_rank': row.get('auto_best_rank'),
-        'best_market': row.get('auto_best_market')}
+        'best_market': row.get('auto_best_market'),
+        'rotation_state': row.get('auto_rotation_state') or '',
+        'recovery_error': safe_error(row.get('recovery_error') or ''),
+        'recovery_since': row.get('recovery_since') or 0,
+        'no_fill_sec': row.get('auto_no_fill_sec'),
+        'inventory_blocked_sec': row.get('auto_inventory_blocked_sec') or 0,
+        'position_qty': row.get('position_qty'),
+        'unsellable_qty': row.get('unsellable_qty'),
+        'dust_usd': row.get('dust_usd'),
+        'available_usdc': row.get('available_usdc')}
 
 
 class Runtimes:
