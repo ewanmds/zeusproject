@@ -229,13 +229,37 @@ def main():
                     manager.rows[0].update(volume_usd=100,fills=4);app.state.runtimes.invalidate(a.address.lower())
                     expect(page.get_by_role('dialog')).to_contain_text('$100.00')
                     page.keyboard.press('Escape');expect(page.get_by_role('dialog')).not_to_be_visible()
+                    if width==1440:
+                        manager.rows.extend([
+                            dict(manager.rows[0], session_id='perf-win-1', running=False,
+                                 cleanup_confirmed=True, phase='stopped',
+                                 started=time.time()-2*86400, volume_usd=250, net_pnl=12.5,
+                                 fees=0.4, fills=9, duration_sec=5400,
+                                 market_name='Everton', market='#111'),
+                            dict(manager.rows[0], session_id='perf-loss-1', running=False,
+                                 cleanup_confirmed=True, phase='stopped',
+                                 started=time.time()-86400, volume_usd=120, net_pnl=-4.2,
+                                 fees=0.2, fills=6, duration_sec=2700,
+                                 market_name='Manchester City', market='#222'),
+                            dict(manager.rows[0], session_id='perf-win-2', running=False,
+                                 cleanup_confirmed=True, phase='stopped',
+                                 started=time.time()-3*3600, volume_usd=80, net_pnl=3.1,
+                                 fees=0.1, fills=4, duration_sec=1800,
+                                 market_name='Crystal Palace', market='#333'),
+                        ])
+                        app.state.runtimes.invalidate(a.address.lower())
+                        page.wait_for_timeout(500)
                     page.get_by_role('link',name='Performances',exact=True).click()
-                    expect(page.get_by_role('heading',name='Une vue claire.')).to_be_visible()
+                    expect(page.get_by_role('heading',name='Vos résultats, en continu.')).to_be_visible()
                     expect(page.locator('[data-layro="legions-developer/recharts-bar-chart"]')).to_be_visible()
                     expect(page.locator('[data-layro="legions-developer/recharts-pie-chart"] svg')).to_be_visible()
                     record(page)
                     capture(page, f'performance-{width}.png')
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                    if width==1440:
+                        manager.rows[:] = [row for row in manager.rows if not str(row.get('session_id','')).startswith('perf-')]
+                        app.state.runtimes.invalidate(a.address.lower())
+                        page.wait_for_timeout(300)
                     page.get_by_role('link',name='Sessions',exact=False).click()
                     card.get_by_role('button',name='Arrêter',exact=True).click()
                     record(page)
