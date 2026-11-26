@@ -93,26 +93,19 @@ class OutcomeRotation:
 
     @staticmethod
     def rotation_inventory_reason(current):
-        """Low throughput may reselect a flat worker, never liquidate inventory."""
+        """Any inventory, including unsellable dust, pauses the next market."""
         position = current.get('position_usd')
         if (current.get('position_known') is not True or isinstance(position, bool)
                 or not isinstance(position, (int, float)) or not math.isfinite(position)):
             return "Rotation: vérification de l'inventaire"
         qty = current.get('position_qty')
-        unsellable = current.get('unsellable_qty')
         known_qty = (isinstance(qty, (int, float)) and not isinstance(qty, bool)
                      and math.isfinite(qty) and qty >= 0)
         if known_qty and qty > 1e-9:
-            if (isinstance(unsellable, (int, float)) and not isinstance(unsellable, bool)
-                    and math.isfinite(unsellable) and qty - unsellable <= 1e-9):
-                return ''  # only a provably unsellable residual: rotation may proceed
             if current.get('book_price_known') is False:
                 return "Rotation: vérification du prix"
-            if abs(position) < 1e-9:
-                return "Rotation: vérification du prix"
+            return "Rotation différée: vente de l'inventaire en cours"
         if abs(position) > 1e-9:
-            if known_qty and qty > 1e-9 and abs(position) < 10.0:
-                return ''  # venue minimum: this residual cannot be sold
             return "Rotation différée: vente de l'inventaire en cours"
         return ''
 

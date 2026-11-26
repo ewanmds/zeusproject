@@ -2364,9 +2364,8 @@ class HyperliquidSpreadBot:
         with self.safety.lock:
             with self.lock:
                 blocked = any(
-                    s.reconcile_required or s.bid_oid
-                    or (s.ask_oid and self.residual_dust(s) is None)
-                    or (s.position > 1e-9 and self.residual_dust(s) is None)
+                    s.reconcile_required or s.bid_oid or s.ask_oid
+                    or s.position > 1e-9
                     for s in self.states.values())
                 if blocked:
                     return
