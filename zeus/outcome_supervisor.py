@@ -397,14 +397,20 @@ class OutcomeSupervisor:
             successor = by_id.get(meta.get("resumed_session_id"))
             if successor is not None and successor.get("cleanup_confirmed") is not True:
                 continue  # the child owns this lineage until it is archived
-            lineage_confirmed = bool(
+            successor_confirmed = bool(
                 successor is not None
                 and successor.get("cleanup_confirmed") is True
-                and not successor.get("pending_cloids")
                 and meta.get("account") and meta.get("symbols")
                 and successor.get("account") == meta.get("account")
                 and successor.get("symbols") == meta.get("symbols"))
-            if not lineage_confirmed and not terminal_intent:
+            lineage_confirmed = bool(
+                successor_confirmed
+                and not successor.get("pending_cloids")
+                and not meta.get("owned_oids")
+                and not meta.get("cloids")
+                and not meta.get("pending_cloids"))
+            require_verify = bool(successor_confirmed and not lineage_confirmed)
+            if not lineage_confirmed and not terminal_intent and not require_verify:
                 # An interrupted trader with no stop/exit intent is auto-resumed
                 # by the loop below; archiving it here would silently stop it.
                 continue

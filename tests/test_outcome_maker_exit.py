@@ -731,6 +731,26 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
             self.assertIn('Successeur', row['cleanup_note'])
             sup._resume.assert_not_called()
 
+    def test_parent_with_owned_orders_needs_a_fresh_flat_proof(self):
+        with tempfile.TemporaryDirectory() as folder:
+            parent = {'session_id': 'parent', 'symbols': ['#101'], 'account': '0xabc',
+                      'account_kind': 'outcome', 'exposure_started': True,
+                      'cleanup_confirmed': False, 'started': 1.0, 'phase': 'failed',
+                      'resumed_session_id': 'child', 'owned_oids': [7], 'config': {}}
+            child = {'session_id': 'child', 'symbols': ['#101'], 'account': '0xabc',
+                     'account_kind': 'outcome', 'exposure_started': True,
+                     'cleanup_confirmed': True, 'started': 2.0, 'phase': 'stopped',
+                     'config': {}}
+            sup = self.multi_supervisor(folder, [parent, child])
+            verify = Mock()
+            sup.manager._verify_session_flat = verify
+            sup._auto_recover()
+            # A parent that still owns order ids cannot be archived solely from
+            # its successor's proof; late fills could arrive afterwards.
+            verify.assert_called_once()
+            self.assertTrue(
+                json.loads((Path(folder)/'parent.json').read_text())['cleanup_confirmed'])
+
     def test_parent_waits_for_an_unconfirmed_successor(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -849,10 +869,10 @@ class SupervisorAutoRecoveryTests(unittest.TestCase):
                      'cleanup_confirmed': True, 'started': 2.0, 'phase': 'stopped',
                      'pending_cloids': ['0xabc'], 'config': {}}
             sup = self.multi_supervisor(folder, [parent, child])
-            verify = Mock()
+            verify = Mock(side_effect=RuntimeError('Placement still open'))
             sup.manager._verify_session_flat = verify
             sup._auto_recover()
-            verify.assert_not_called()
+            verify.assert_called_once()
             self.assertIsNot(
                 json.loads((Path(folder)/'parent.json').read_text()).get('cleanup_confirmed'), True)
 
