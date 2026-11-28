@@ -853,6 +853,9 @@ class HyperliquidSpreadBot:
             return False
         if st.bid_oid or st.ask_oid:
             self.cancel_all("rotation taker", [st.spec.symbol])
+            # A cancel can race a last fill. Confirm the balance before sizing
+            # the IOC so the sell can never exceed the settled inventory.
+            st.reconcile_required = True
             st.last_action = "rotation taker: pulling quotes before the IOC sell"
             return True
         if st.reconcile_required:
