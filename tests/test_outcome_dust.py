@@ -106,10 +106,10 @@ class DustAndPartialBidTests(unittest.TestCase):
 
 
 class RotationInventoryDustTests(unittest.TestCase):
-    def test_only_unsellable_dust_blocks_rotation(self):
+    def test_only_unsellable_dust_allows_rotation(self):
         base = dict(position_known=True, position_usd=2.0, position_qty=5,
                     unsellable_qty=5, book_price_known=True)
-        self.assertIn('vente de l', OutcomeRotation.rotation_inventory_reason(base))
+        self.assertEqual(OutcomeRotation.rotation_inventory_reason(base), '')
         sellable = dict(base, position_usd=20.0, position_qty=40, unsellable_qty=0)
         self.assertIn('différée', OutcomeRotation.rotation_inventory_reason(sellable))
 
@@ -130,7 +130,7 @@ class RotationInventoryDustTests(unittest.TestCase):
 
 
 class DustRotationCompletionTests(unittest.TestCase):
-    def test_dust_only_inventory_blocks_rotation(self):
+    def test_dust_only_inventory_can_finish_the_rotation(self):
         bot = make_bot()
         bot.rotation_requested = lambda: True
         bot.running = True
@@ -140,7 +140,8 @@ class DustRotationCompletionTests(unittest.TestCase):
         bot._cleanup_snapshot = Mock(return_value=[('#101', 0.0, [])])
         bot.request_stop = Mock()
         bot.finish_rotation_if_flat()
-        bot.request_stop.assert_not_called()
+        bot.request_stop.assert_called_once()
+        self.assertIn('dust', bot.status)
 
 
 class FlatVerificationDustTests(unittest.TestCase):

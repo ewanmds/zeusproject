@@ -37,16 +37,16 @@ class FlatRotationTests(unittest.TestCase):
         return dict(ready=True, updated_at=now,
                     candidates=[dict(market='#111', queue_proxy_sec=10)])
 
-    def test_slow_volume_with_inventory_keeps_trading_without_forced_exit(self):
+    def test_slow_volume_with_inventory_requests_exit_before_next_market(self):
         with tempfile.TemporaryDirectory() as folder:
             rotation, owner, row, now = self.fixture(folder, position_usd=73.70)
-            with patch('zeus.outcome_flow.scanner.snapshot') as scan:
+            with patch('zeus.outcome_flow.scanner.snapshot', return_value=self.scan(now)):
                 rotation.tick(now=now)
-            scan.assert_not_called()
-            self.assertFalse((Path(folder)/'drain.json').exists())
-            self.assertEqual(rotation.groups['group']['state'], 'observing')
-            self.assertFalse(rotation.groups['group']['cancelled'])
-            owner.start.assert_not_called()
+            drain = json.loads((Path(folder)/'drain.json').read_text())
+            self.assertEqual(drain['next_market'], '#111')
+            self.assertEqual(rotation.groups['group']['state'], 'draining')
+            self.assertIn('vente', rotation.groups['group']['reason'])
+            owner.start.assert_not_called()  # old worker still owns the inventory
             rotation.close()
 
     def test_unknown_or_invalid_position_never_authorizes_rotation(self):

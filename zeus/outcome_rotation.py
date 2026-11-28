@@ -93,19 +93,26 @@ class OutcomeRotation:
 
     @staticmethod
     def rotation_inventory_reason(current):
-        """Any inventory, including unsellable dust, pauses the next market."""
+        """Low throughput may reselect a flat worker, never liquidate inventory."""
         position = current.get('position_usd')
         if (current.get('position_known') is not True or isinstance(position, bool)
                 or not isinstance(position, (int, float)) or not math.isfinite(position)):
             return "Rotation: vérification de l'inventaire"
         qty = current.get('position_qty')
+        unsellable = current.get('unsellable_qty')
         known_qty = (isinstance(qty, (int, float)) and not isinstance(qty, bool)
                      and math.isfinite(qty) and qty >= 0)
         if known_qty and qty > 1e-9:
+            if (isinstance(unsellable, (int, float)) and not isinstance(unsellable, bool)
+                    and math.isfinite(unsellable) and qty - unsellable <= 1e-9):
+                return ''  # only a provably unsellable residual: rotation may proceed
             if current.get('book_price_known') is False:
                 return "Rotation: vérification du prix"
-            return "Rotation différée: vente de l'inventaire en cours"
+            if abs(position) < 1e-9:
+                return "Rotation: vérification du prix"
         if abs(position) > 1e-9:
+            if known_qty and qty > 1e-9 and abs(position) < 10.0:
+                return ''  # venue minimum: this residual cannot be sold
             return "Rotation différée: vente de l'inventaire en cours"
         return ''
 
@@ -467,11 +474,16 @@ class OutcomeRotation:
                 group["promote_check"] = promote
                 inventory_reason = self.rotation_inventory_reason(current)
                 if inventory_reason:
+                    # Request the exit first: the worker will cancel its bids
+                    # and release USDC before the next market is opened.
                     group["reason"] = self._inventory_message(group, inventory_reason, now)
-                    return
-                group["inventory_blocked_since"] = 0.0
+                    if inventory_reason.startswith("Rotation: "):
+                        return  # unknown position/price: never authorize a move
+                else:
+                    group["inventory_blocked_since"] = 0.0
 
         context = getattr(getattr(self.owner, 'manager', None), 'account_context', None)
+        position_before_scan = current.get('position_usd')
         account = context.account if context else os.getenv('WALLET_ADDRESS_OUTCOME', '').strip()
         snapshot = scanner.snapshot(config["outcome_side"], config["order_size_usd"],
                                     config.get("auto_max_spread_bps", 10),
@@ -518,8 +530,17 @@ class OutcomeRotation:
                 if inventory_reason:
                     group["last_rank_check"] = now
                     group['reason'] = self._inventory_message(group, inventory_reason, now)
+                    if inventory_reason.startswith("Rotation: "):
+                        return  # unknown position/price: never authorize a move
+                else:
+                    group["inventory_blocked_since"] = 0.0
+                latest_pos, current_pos = latest.get('position_usd'), position_before_scan
+                if (isinstance(latest_pos, (int, float)) and not isinstance(latest_pos, bool)
+                        and isinstance(current_pos, (int, float)) and not isinstance(current_pos, bool)
+                        and math.isfinite(latest_pos) and math.isfinite(current_pos)
+                        and latest_pos > current_pos + 1e-9):
+                    group['reason'] = "Rotation annulée: fill pendant le scan"
                     return
-                group["inventory_blocked_since"] = 0.0
                 # Publish what this leg sees so the card can show
                 # "#current -> #best" instead of sitting silently.
                 group["market_rank"] = (current_candidate or {}).get("rank")
@@ -560,7 +581,8 @@ class OutcomeRotation:
                 atomic_json(Path(info["stop_file"]).with_name("drain.json"), {
                     "requested_at": now, "reason": "low executed $/min",
                     "next_market": top["market"]})
-                group.update(state="draining", reason=group["reason"])
+                group.update(state="draining",
+                             reason=inventory_reason or group["reason"])
                 previous = group.setdefault('market_results', {}).get(current['market'], {})
                 failures = (previous.get('zero_fill_attempts', 0)+1
                             if float(current.get('volume_usd', 0)) <= 0 else 0)
