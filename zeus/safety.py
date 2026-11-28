@@ -186,6 +186,13 @@ def post_only_rejection(error):
         error) is not None
 
 
+def ioc_miss_rejection(error):
+    """A taker IOC can lose its touch between the book read and the send."""
+    return isinstance(error, str) and re.fullmatch(
+        r"Order could not immediately match against any resting orders\.?(?: asset=\d+)?",
+        error) is not None
+
+
 def invalid_modify_rejection(error):
     return isinstance(error, str) and re.fullmatch(
         r"Attempted to modify to invalid new order\.?(?: asset=\d+)?", error) is not None
@@ -211,6 +218,7 @@ class SafetyLatch:
         # A new runtime must observe a fresh explicit manual-stop request.
         self.manual_stop_requested = False
         self.manual_taker_close_requested = False
+        self.rotation_taker_close_requested = False
         self.phase = "connecting"
         self.error = ""
         self.cleanup_error = ""
@@ -311,6 +319,20 @@ class SafetyLatch:
         finally:
             self.local.manual_close = previous
 
+    @contextmanager
+    def rotation_close_scope(self):
+        """Narrow capability for the automatic rotation taker exit.
+
+        It only unlocks a sell IOC while the caller has set
+        rotation_taker_close_requested; it never unlocks buys or market orders.
+        """
+        previous = getattr(self.local, "rotation_close", False)
+        self.local.rotation_close = True
+        try:
+            yield
+        finally:
+            self.local.rotation_close = previous
+
     def assert_allowed_action(self, name, args=(), kwargs=None):
         """Final-send policy check, independent of the strategy's quote builder.
 
@@ -343,13 +365,16 @@ class SafetyLatch:
         else:
             return  # cancellation/leverage do not create crossing exposure
         manual = self.manual_stop_requested and getattr(self.local,"manual_close",False)
+        rotation_taker = (getattr(self.local, "rotation_close", False)
+                          and self.rotation_taker_close_requested)
         closing_only = self.stopped.is_set() or getattr(self.local,"cleanup",False)
         for order_type,reduce_only,is_buy in requests:
             if self.strict_maker_spot:
-                taker_close = (manual and getattr(self.local, 'cleanup', False)
-                    and self.manual_taker_close_requested
-                    and is_buy is False and isinstance(order_type, dict)
-                    and order_type == {'limit': {'tif': 'Ioc'}})
+                manual_close = (manual and getattr(self.local, 'cleanup', False)
+                                and self.manual_taker_close_requested)
+                taker_close = ((manual_close or rotation_taker)
+                               and is_buy is False
+                               and order_type == {'limit': {'tif': 'Ioc'}})
                 if closing_only and not taker_close:
                     raise SubmissionSkipped("Outcome hard shutdown blocks new orders; resume the maker exit explicitly")
                 if is_buy not in (True, False) or not isinstance(is_buy, bool):
@@ -405,8 +430,8 @@ class SafetyLatch:
     def owns(self, order):
         return int(order.get("oid", 0)) in self.owned or str(order.get("cloid", "")) in self.cloids
 
-    def wrap(self, exchange, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None, reconcile_modify=None, reconcile_invalid_modify=None):
-        return GuardedExchange(exchange, self, reconcile_cancel, on_error, reconcile_reduce_only, reconcile_post_only, reconcile_modify, reconcile_invalid_modify)
+    def wrap(self, exchange, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None, reconcile_modify=None, reconcile_invalid_modify=None, reconcile_ioc_miss=None):
+        return GuardedExchange(exchange, self, reconcile_cancel, on_error, reconcile_reduce_only, reconcile_post_only, reconcile_modify, reconcile_invalid_modify, reconcile_ioc_miss)
 
     def cleanup(self, snapshot, cancel, close, timeout=30, sleep=time.sleep, allow_close=True):
         """snapshot returns fresh [(symbol, position, orders)] or raises.
@@ -479,7 +504,7 @@ class SafetyLatch:
 class GuardedExchange:
     ACTIONS = {"order", "bulk_orders", "bulk_modify_orders_new", "modify_order", "bulk_cancel", "cancel", "update_leverage"}
 
-    def __init__(self, exchange, safety, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None, reconcile_modify=None, reconcile_invalid_modify=None):
+    def __init__(self, exchange, safety, reconcile_cancel=None, on_error=None, reconcile_reduce_only=None, reconcile_post_only=None, reconcile_modify=None, reconcile_invalid_modify=None, reconcile_ioc_miss=None):
         self._exchange = exchange
         self._safety = safety
         self._reconcile_cancel = reconcile_cancel
@@ -488,6 +513,7 @@ class GuardedExchange:
         self._reconcile_post_only = reconcile_post_only
         self._reconcile_modify = reconcile_modify
         self._reconcile_invalid_modify = reconcile_invalid_modify
+        self._reconcile_ioc_miss = reconcile_ioc_miss
 
     def __getattr__(self, name):
         method = getattr(self._exchange, name)
@@ -600,7 +626,11 @@ class GuardedExchange:
                                                 if name == "bulk_modify_orders_new" and self._reconcile_invalid_modify
                                                 and isinstance(status, dict) and invalid_modify_rejection(status.get("error"))
                                                 and requests[i].get("order_type", {}).get("limit", {}).get("tif") == "Alo"]
-                            recoverable = set(rejected + post_only + missing_modifies + invalid_modifies)
+                            ioc_misses = [i for i, status in enumerate(statuses)
+                                          if self._reconcile_ioc_miss and isinstance(status, dict)
+                                          and ioc_miss_rejection(status.get("error"))
+                                          and requests[i].get("order_type", {}).get("limit", {}).get("tif") == "Ioc"]
+                            recoverable = set(rejected + post_only + missing_modifies + invalid_modifies + ioc_misses)
                             if recoverable and all(i in recoverable or isinstance(status, dict)
                                                    and ("resting" in status or "filled" in status)
                                                    for i, status in enumerate(statuses)):
@@ -612,6 +642,8 @@ class GuardedExchange:
                                     self._reconcile_modify([args[0][i] for i in missing_modifies])
                                 if invalid_modifies:
                                     self._reconcile_invalid_modify([args[0][i] for i in invalid_modifies])
+                                if ioc_misses:
+                                    self._reconcile_ioc_miss([requests[i] for i in ioc_misses])
                                 resolved_rejections = recoverable
                         if len(statuses) != expected or any(i not in resolved_rejections and not (
                                 status == "success" or isinstance(status, dict) and

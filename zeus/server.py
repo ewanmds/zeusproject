@@ -117,6 +117,10 @@ class WorldcupStartRequest(BaseModel):
     # Inventory guards: cut a losing position, or a drain that cannot go flat.
     inventory_stop_bps: float = Field(default=200, ge=50, le=500, allow_inf_nan=False)
     inventory_drain_timeout_sec: float = Field(default=90, ge=15, le=600, allow_inf_nan=False)
+    # A low-fill Auto rotation may cross a tight spread after this delay.
+    rotation_taker_after_sec: float = Field(default=12, ge=3, le=120, allow_inf_nan=False)
+    rotation_taker_max_spread_bps: float = Field(default=10, ge=1, le=100, allow_inf_nan=False)
+    rotation_taker_slippage_bps: float = Field(default=5, ge=0, le=50, allow_inf_nan=False)
     selection_mode: Literal["manual", "auto"] = "manual"
     auto_max_spread_bps: float = Field(default=10, gt=0, le=100, allow_inf_nan=False)
     two_sided: bool = False

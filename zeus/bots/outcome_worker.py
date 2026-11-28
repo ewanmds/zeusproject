@@ -25,6 +25,15 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
     exec_mode = str(public.get("exec_mode") or "maker").strip().lower()
     if exec_mode != "maker":
         raise ValueError("Outcome sessions are post-only maker only")
+
+    def bounded(name, env_name, default, low, high):
+        value = public.get(name)
+        if value is None:
+            value = os.getenv(env_name)
+        if value is None or value == "":
+            return default
+        return min(high, max(low, float(value)))
+
     return BotConfig(
         base_url="https://api.hyperliquid.xyz", perp_dex="xyz", live=True,
         symbols=[market], keywords=[], max_symbols=1,
@@ -55,6 +64,9 @@ def build_config(public, safety_file, stop_file=None, funds_root=None):
         inventory_stop_bps=min(500.0, max(50.0, float(public.get("inventory_stop_bps") or 200))),
         inventory_drain_timeout_sec=min(600.0, max(15.0, float(public.get("inventory_drain_timeout_sec") or 90))),
         inventory_exit_slippage_bps=min(200.0, max(20.0, float(public.get("inventory_exit_slippage_bps") or 50))),
+        rotation_taker_after_sec=bounded("rotation_taker_after_sec", "OUTCOME_ROTATION_TAKER_AFTER_SEC", 12.0, 3.0, 120.0),
+        rotation_taker_max_spread_bps=bounded("rotation_taker_max_spread_bps", "OUTCOME_ROTATION_TAKER_MAX_SPREAD_BPS", 10.0, 1.0, 100.0),
+        rotation_taker_slippage_bps=bounded("rotation_taker_slippage_bps", "OUTCOME_ROTATION_TAKER_SLIPPAGE_BPS", 5.0, 0.0, 50.0),
         resume_exit=bool(public.get("resume_exit")),
         resume_trading=bool(public.get("resume_trading")),
         stop_file=str(stop_file) if stop_file else None,

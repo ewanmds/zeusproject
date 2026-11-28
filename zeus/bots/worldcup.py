@@ -311,12 +311,18 @@ class BotConfig:
     market_label: str = ""
     rotation_file: Optional[str] = None
     risk_pnl_carry: float = 0.0
-    # Outcome risk guards stop purchases and drain inventory with ALO only.
+    # Outcome risk guards stop purchases and drain inventory maker-first. The
+    # only automatic crossing path is the bounded low-fill rotation assist.
     resume_exit: bool = False
     resume_trading: bool = False
     inventory_stop_bps: float = 200.0
     inventory_drain_timeout_sec: float = 90.0
     inventory_exit_slippage_bps: float = 50.0
+    # A low-fill Auto rotation may cross the spread once the passive drain
+    # has had a fair chance and the book is tight. Other exits stay maker-only.
+    rotation_taker_after_sec: float = 12.0
+    rotation_taker_max_spread_bps: float = 10.0
+    rotation_taker_slippage_bps: float = 5.0
     account_reconcile_sec: float = 20.0
     max_dust_positions: int = 6
     max_dust_usd: float = 50.0
@@ -530,7 +536,8 @@ class HyperliquidSpreadBot:
             self.exchange = self.safety.wrap(
                 self.exchange, self._reconcile_missing_cancels if cfg.worldcup else None,
                 self._pause_execution if cfg.worldcup else None,
-                reconcile_post_only=self._reconcile_post_only if cfg.worldcup else None)
+                reconcile_post_only=self._reconcile_post_only if cfg.worldcup else None,
+                reconcile_ioc_miss=self._reconcile_ioc_miss if cfg.worldcup else None)
 
         self.specs = self.discover_markets()
         self.states: Dict[str, MarketState] = {spec.symbol: MarketState(spec) for spec in self.specs}
@@ -771,6 +778,155 @@ class HyperliquidSpreadBot:
             self.request_maker_exit(reason)
         return False
 
+    def _rotation_taker_intent(self) -> Dict[str, Any]:
+        """Only an automatic low-fill rotation may use the taker assist.
+
+        Manual Stops, risk exits and session targets keep the maker-only path.
+        """
+        if not self.cfg.worldcup or not self.cfg.rotation_file:
+            return {}
+        try:
+            if not os.path.exists(self.cfg.rotation_file):
+                return {}
+            intent = read_json(self.cfg.rotation_file)
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(intent, dict):
+            return {}
+        reason = str(intent.get("reason") or "").lower()
+        if intent.get("next_market") or "low executed" in reason:
+            return intent
+        return {}
+
+    @staticmethod
+    def _ioc_filled_qty(result: Any) -> float:
+        """Read the executed size from an acknowledged IOC response."""
+        try:
+            statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+            if len(statuses) == 1 and isinstance(statuses[0], dict):
+                filled = statuses[0].get("filled")
+                if isinstance(filled, dict):
+                    return max(0.0, safe_float(filled.get("totalSz")))
+        except (AttributeError, TypeError, ValueError):
+            pass
+        return 0.0
+
+    def maybe_rotation_taker_exit(self, st: MarketState, now: Optional[float] = None) -> bool:
+        """Finish a stalled low-fill rotation with one bounded IOC sell.
+
+        The passive ask keeps priority first. Once the leg has been draining
+        for ``rotation_taker_after_sec`` and the spread is at most
+        ``rotation_taker_max_spread_bps``, sell the inventory at the bid with a
+        few bps of slippage. The limit price never goes below that bound, so a
+        thin book can only fill what is actually available.
+        """
+        if (not self.cfg.worldcup or not self.cfg.live or not self.running
+                or self.safety.stopped.is_set() or self.safety.phase != "running"):
+            return False
+        if not self._rotation_taker_intent():
+            return False
+        now = time.time() if now is None else now
+        if st.position < 1.0:
+            st.drain_started_at = 0.0
+            if st.reconcile_required and now >= max(st.pending_until, getattr(self, "account_retry_at", 0.0)):
+                # The exit filled. Confirm the flat balance immediately so the
+                # rotation can stop and open the next market without waiting
+                # for the periodic reconciliation.
+                st.pending_until = now + 0.5
+                self.sync_account(force=True)
+            return False
+        receipt = st.book_received_at or st.last_book_ts
+        if (not st.has_bbo or not receipt
+                or now - receipt > max(1.0, self.cfg.stale_sec)):
+            st.last_action = "rotation taker: awaiting a fresh book"
+            return False
+        if st.drain_started_at <= 0:
+            st.drain_started_at = now
+            return False
+        if now - st.drain_started_at < self.cfg.rotation_taker_after_sec:
+            return False
+        if (not math.isfinite(st.spread_bps)
+                or st.spread_bps > self.cfg.rotation_taker_max_spread_bps):
+            st.last_action = (
+                f"rotation maker: spread {st.spread_bps:.1f}bps > "
+                f"{self.cfg.rotation_taker_max_spread_bps:.1f}bps")
+            return False
+        if st.bid_oid or st.ask_oid:
+            self.cancel_all("rotation taker", [st.spec.symbol])
+            st.last_action = "rotation taker: pulling quotes before the IOC sell"
+            return True
+        if st.reconcile_required:
+            if now >= max(st.pending_until, getattr(self, "account_retry_at", 0.0)):
+                # A fill marked the account stale. Refresh immediately instead
+                # of waiting for the next periodic reconciliation before the
+                # IOC can use the settled balance.
+                st.pending_until = now + 0.5
+                self.sync_account(force=True)
+            return True
+        if now < st.pending_until:
+            return False
+        qty = float(math.floor(st.position))
+        if qty < 1:
+            st.last_action = "rotation taker: residual below the venue minimum"
+            return False
+        slip = max(0.0, self.cfg.rotation_taker_slippage_bps) / 10_000.0
+        px = round_outcome_sell_px(st.bid * (1.0 - slip))
+        if qty * px < EXCHANGE_MIN_ORDER_USD:
+            # At the venue minimum, give up the extra slippage rather than
+            # leave a just-sellable lot behind.
+            px = round_outcome_sell_px(st.bid)
+        if not 0 < px <= st.bid or qty * px < EXCHANGE_MIN_ORDER_USD:
+            st.last_action = "rotation taker: residual below the venue minimum"
+            return False
+        before = st.position
+        self.safety.rotation_taker_close_requested = True
+        st.pending_until = now + 1.0
+        st.last_action = (f"rotation taker: selling {qty:g} @ {px:g} "
+                          f"(spread {st.spread_bps:.1f}bps)")
+        try:
+            with self.safety.rotation_close_scope():
+                result = self._submit_order(
+                    name=st.spec.symbol, is_buy=False, sz=qty, limit_px=px,
+                    order_type={"limit": {"tif": "Ioc"}}, reduce_only=False)
+            self.stats.orders_sent += 1
+        except SubmissionSkipped as exc:
+            st.last_action = safe_error(exc)
+            return True
+        except Exception as exc:
+            st.reconcile_required = True
+            st.last_error = safe_error(exc)
+            st.pending_until = now + 2.0
+            return True
+        filled = self._ioc_filled_qty(result)
+        if filled > 0:
+            # WS fills normally land first and are authoritative. Only apply
+            # the response locally when no concurrent update moved the state.
+            with self.lock:
+                if abs(st.position - before) < 1e-9:
+                    st.position = round_size(max(0.0, before - filled),
+                                             st.spec.sz_decimals)
+            if st.position < 1.0:
+                st.drain_started_at = 0.0
+        synced = self.sync_account(force=True)
+        with self.lock:
+            expected = max(0.0, before - filled)
+            if synced and filled > 0 and st.position > expected + 1e-9:
+                # The account read can lag the fill by a moment. Never send
+                # the same inventory twice while the balance is settling.
+                st.pending_until = max(st.pending_until, time.time() + 2.0)
+                st.last_action = "rotation taker: fill settling; waiting"
+        return True
+
+    def _reconcile_ioc_miss(self, requests) -> None:
+        """An IOC that lost its touch is a no-fill, not a session failure."""
+        with self.lock:
+            for request in requests:
+                st = self.states.get(request.get("coin"))
+                if st is not None:
+                    st.reconcile_required = True
+                    st.last_action = "rotation taker: no immediate match; refresh book"
+        self.wake.set()
+
     def _halt(self):
         self.running = False
         self.wake.set()
@@ -956,7 +1112,7 @@ class HyperliquidSpreadBot:
             return self._submit_order(name=symbol, is_buy=False, sz=quantity, limit_px=px,
                                       order_type={'limit': {'tif': 'Ioc'}}, reduce_only=False)
         if self.rotation_requested() and not (self.cfg.stop_file and os.path.exists(self.cfg.stop_file)):
-            raise RuntimeError("Rotation requires flat inventory; automatic taker liquidation is disabled")
+            raise RuntimeError("Rotation cleanup requires flat inventory; the bounded taker assist runs before Stop")
         bid, ask = self.fetch_rest_bbo(symbol)
         if bid <= 0 or ask < bid:
             raise RuntimeError("Cannot close: no fresh book")
@@ -2777,6 +2933,8 @@ class HyperliquidSpreadBot:
                         if not self.running:
                             break
                         if self.enforce_inventory_stop(st):
+                            continue
+                        if self.maybe_rotation_taker_exit(st):
                             continue
                         self.place_or_requote(st)
                     self.finish_rotation_if_flat()

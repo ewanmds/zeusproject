@@ -73,11 +73,14 @@ both engines; an uncertain submission is never automatically sent again.
 
 For Auto Outcome, optional duration or executed-volume targets are enforced
 both by the worker and its rotation controller. The target stops new purchases
-and begins the existing maker drain; the session is complete only after its
-orders and inventory are independently confirmed flat. The final exit can take
-longer and add executed volume. The target and previous volume survive market
-rotations. A realized-loss threshold uses the engine's existing cumulative
-realized PnL guard; it is not a guarantee on unrealized inventory losses.
+and begins the existing maker drain; a low-fill rotation that remains blocked
+after a short delay may finish with one bounded IOC sell when the spread is
+tight, while every other exit stays maker-only. The session is complete only
+after its orders and inventory are independently confirmed flat. The final exit
+can take longer and add executed volume. The target and previous volume survive
+market rotations. A realized-loss threshold uses the engine's existing
+cumulative realized PnL guard; it is not a guarantee on unrealized inventory
+losses.
 
 Manual Pause is not exposed: the existing risk/network recovery state is not a
 substitute for a separately specified manual pause contract. Stop uses the
